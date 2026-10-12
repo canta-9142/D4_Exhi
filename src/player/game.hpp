@@ -51,7 +51,7 @@ void draw_info() {
   static bool drawn = false;
   static int previousScore = 0;
   static int previousRemaining = 0;
-  
+
   if (drawn && score == previousScore && remaining == previousRemaining) return;
 
   lcd.setFont(&fonts::Font0);
@@ -101,6 +101,13 @@ void setup() {
   lcd.drawLine(120, 240, 120, 319, TFT_WHITE);
   lcd.drawLine(240, 240, 240, 319, TFT_WHITE);
   lcd.drawLine(360, 240, 360, 319, TFT_WHITE);
+
+  lcd.setTextColor(TFT_WHITE, TFT_BLACK);
+  lcd.setTextSize(3);
+  lcd.drawChar('3', 31,  28);
+  lcd.drawChar('2', 31, 108);
+  lcd.drawChar('1', 31, 188);
+
   draw_button(360, 0, selfId);
   draw_neighbor_buttons();
   draw_info();
