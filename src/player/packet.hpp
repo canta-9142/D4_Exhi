@@ -24,6 +24,14 @@ public:
     return true;
   }
 
+  bool pop() {
+    if (count_ == 0) return false;
+
+    head_ = (head_ + 1) % Capacity;
+    --count_;
+    return true;
+  }
+
   const Packet* at(size_t index) const {
     if (index >= count_) return nullptr;
     return &buffer_[(head_ + index) % Capacity];
