@@ -80,7 +80,8 @@ void startup_animation() {
   delay(500);  // 100%の表示を0.5秒保持する。
 
   // 次の画面に起動表示を残さない。
-  lcd.fillRect(startupX, startupY, animation.width(), animation.height(), TFT_BLACK);
+  lcd.fillRect(0, 0, lcd.width(), lcd.height(), TFT_BLACK);
+  animation.fillSprite(TFT_BLACK);
 }
 
 void lcd_init() {

@@ -88,6 +88,22 @@ void draw_info() {
   lcd.endWrite();
 }
 
+// coordinates are relative to the animation sprite
+void draw_packet_card(int y, NodeId destination, int packet_id) {
+  constexpr int h = 60;
+  const auto& visual = nodeVisuals[static_cast<int>(destination)];
+
+  animation.fillRect(0, y, ANIMATION_WIDTH, h, TFT_LIGHTGRAY);
+  animation.fillRect(0, y, 40, h, visual.color);
+  animation.drawRect(0, y, ANIMATION_WIDTH, h, TFT_WHITE);
+  animation.setTextColor(TFT_BLACK, TFT_LIGHTGRAY);
+  animation.setTextSize(4);
+  animation.drawChar(visual.name, 80, y + 14);
+  animation.setTextSize(2);
+  animation.setCursor(ANIMATION_WIDTH - 52, y + h - 18);
+  animation.printf("#%3d", packet_id);
+}
+
 void setup() {
   lcd_init();
   io_init();
@@ -104,13 +120,17 @@ void setup() {
 
   lcd.setTextColor(TFT_WHITE, TFT_BLACK);
   lcd.setTextSize(3);
-  lcd.drawChar('3', 31,  28);
-  lcd.drawChar('2', 31, 108);
-  lcd.drawChar('1', 31, 188);
+  lcd.drawChar('3', 51,  28);
+  lcd.drawChar('2', 51, 108);
+  lcd.drawChar('1', 51, 188);
+
+  lcd.drawRect(120, 0, 200, 240, TFT_WHITE);
 
   draw_button(360, 0, selfId);
   draw_neighbor_buttons();
   draw_info();
+  draw_packet_card(170, NodeId::P1, 1);
+  animation.pushSprite(ANIMATION_X, ANIMATION_Y);
 }
 
 void loop(){
