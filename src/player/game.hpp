@@ -107,7 +107,7 @@ void draw_packet_card(int y, NodeId destination, int packet_id) {
 
 void setup() {
   lcd_init();
-  io_init();
+  psw_init();
   startup_animation();
 
   assign_self_id(3); // TODO: 外部からのID取得へ変更する。
