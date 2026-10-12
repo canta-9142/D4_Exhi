@@ -1,0 +1,264 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Packet Relay Lab | 科展示ゲームシミュレーター</title>
+<style>
+:root{color-scheme:dark;--bg:#090e19;--surface:#111b2b;--surface2:#172438;--border:#27364c;--text:#ebf3ff;--muted:#95a8c1;--accent:#68e1d4;--yellow:#f8c86d;--red:#fd7888;--blue:#83a8ff}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:14px/1.5 system-ui,"Noto Sans JP",sans-serif}
+button,input,select{font:inherit}button{cursor:pointer}button:disabled{cursor:not-allowed;opacity:.36}
+.app{max-width:1750px;margin:auto;padding:24px 24px 36px}.header{display:flex;align-items:flex-end;justify-content:space-between;gap:18px;margin-bottom:20px;flex-wrap:wrap}
+.eyebrow{font:700 11px/1.5 ui-monospace,monospace;letter-spacing:.16em;color:var(--accent)}h1{font-size:clamp(25px,3vw,35px);letter-spacing:-.035em;margin:4px 0}h1 span{font-weight:400;color:#89a3c4}p{margin:5px 0;color:var(--muted)}
+.header-tag{border:1px solid var(--border);border-radius:100px;padding:8px 12px;color:var(--muted);white-space:nowrap}
+.main{display:grid;grid-template-columns:minmax(0,1.65fr) minmax(330px,.82fr);gap:18px;align-items:start}
+.workspace,.panel{background:var(--surface);border:1px solid var(--border);border-radius:18px;overflow:hidden}
+.toolbar{display:flex;align-items:center;gap:10px;justify-content:space-between;padding:15px 17px;border-bottom:1px solid var(--border);flex-wrap:wrap}
+.controls,.speed-group{display:flex;align-items:center;gap:7px}.primary,.secondary,.speed-group button,.route-btn{border-radius:9px;padding:9px 14px;border:1px solid var(--border);background:var(--surface2);color:var(--text);font-weight:650}
+.primary{border-color:#277b75;background:#226861;color:#f7fffe}.primary:hover{background:#2f857c}.secondary:hover,.speed-group button:hover,.route-btn:hover{border-color:#6098b6}
+.speed-group{color:var(--muted);gap:3px}.speed-group button{padding:7px 10px}.speed-group button.active{color:var(--bg);background:var(--accent);border-color:var(--accent)}
+.timer{font:700 20px/1 ui-monospace,monospace;letter-spacing:-.02em;font-variant-numeric:tabular-nums}.timer small{font-size:12px;color:var(--muted);font-weight:500}
+.progress{height:3px;background:#203047}.progress>div{height:100%;background:var(--accent);width:0}
+.map{position:relative;background:radial-gradient(ellipse 90% 68% at 50% 50%,#152b41 0%,#0d1729 61%,#0c1321 100%);min-height:360px}
+svg{display:block;width:100%;aspect-ratio:900/745}.svg-label{font-weight:700;fill:var(--text);font-size:15px;text-anchor:middle;dominant-baseline:central;pointer-events:none}.svg-sub{font:11px ui-monospace,monospace;fill:var(--muted);text-anchor:middle;pointer-events:none}
+.node-click{cursor:pointer}.node-click:hover .node-core{stroke:#fff;stroke-width:3}.edge{stroke:#34506a;stroke-width:5;stroke-linecap:round}.edge.active{stroke:#416d91;stroke-width:7}.edge-shell{stroke:#07111f;stroke-width:11;stroke-linecap:round}
+.bottomrow{border-top:1px solid var(--border);display:flex;gap:10px 20px;flex-wrap:wrap;align-items:center;justify-content:space-between;padding:13px 17px}
+.legend{display:flex;gap:17px;flex-wrap:wrap;color:var(--muted);font-size:12px}.legend span:before{content:"";width:9px;height:9px;border-radius:50%;display:inline-block;margin-right:7px}.legend .l-player:before{background:var(--blue)}.legend .l-bot:before{background:var(--yellow)}.legend .l-packet:before{background:var(--accent)}
+.note{font-size:11px;color:var(--muted)}.side{display:grid;gap:16px}.panel{padding:17px}.panel h2{margin:0 0 12px;font-size:15px;letter-spacing:.01em}.subtitle{font-size:12px;color:var(--muted);margin:0 0 12px}
+.kpis{display:grid;grid-template-columns:repeat(2,1fr);gap:8px}.kpi{background:var(--surface2);padding:12px;border-radius:10px}.kpi .val{font-size:25px;font-weight:760;font-variant-numeric:tabular-nums}.kpi .name{font-size:11px;color:var(--muted)}
+.controlrow{display:flex;justify-content:space-between;align-items:center;gap:14px;margin:12px 0 9px}.controlrow label{color:#d6e4f5;font-weight:540}.controlrow output{font-variant-numeric:tabular-nums;color:var(--accent);font-weight:700}
+input[type=range]{width:100%;accent-color:var(--accent)}select,input[type=number]{color:var(--text);background:#0a1423;border:1px solid var(--border);border-radius:8px;padding:7px 9px;min-width:0}
+.small-select{width:148px}.bot-rates{border:1px solid var(--border);border-radius:11px;padding:3px 11px 9px;margin-top:13px;background:#0d1929}.bot-rates-title{font-weight:700;margin-top:8px;color:#cdddf3}.bot-rate-row{padding:5px 0 8px}.bot-rate-row + .bot-rate-row{border-top:1px solid #27364c}.bot-rate-row .controlrow{margin:5px 0 4px}.rate-control{display:flex;gap:9px;align-items:center}.rate-control input[type=range]{min-width:0;flex:1}.rate-number{width:76px;text-align:right;font-variant-numeric:tabular-nums}.switch{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:10px 0 14px;border-bottom:1px solid var(--border)}input[type=checkbox]{accent-color:var(--accent);width:17px;height:17px}
+.status{padding:11px 12px;background:#0c1d2a;border:1px solid #244154;border-radius:10px;margin:12px 0;color:#c4dee5;font-size:12px}
+.packet{display:flex;align-items:center;justify-content:space-between;gap:9px;border:1px solid #385c79;background:#172c3e;border-radius:11px;padding:11px;margin-bottom:11px}
+.packet strong{font-size:16px}.packet .timerem{font:700 24px ui-monospace,monospace;color:var(--yellow)}.packet .timerem.danger{color:var(--red)}
+.routes{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.route-btn{display:flex;justify-content:space-between;align-items:center;padding:12px 10px;min-height:47px}.route-btn span{font-size:10px;font-weight:400;color:var(--muted)}.route-btn:disabled{opacity:.3}
+.score-table{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums;font-size:12px}.score-table th{font-weight:500;color:var(--muted);font-size:10px;text-align:right;padding:6px 2px;border-bottom:1px solid var(--border)}.score-table td{text-align:right;padding:7px 2px;border-bottom:1px solid #1e2c3d}.score-table th:first-child,.score-table td:first-child{text-align:left}.score-table tr.mine{color:var(--accent);font-weight:700}
+.logs{list-style:none;padding:0;margin:0;display:grid;gap:8px;max-height:192px;overflow-y:auto}.logs li{font-size:11px;color:var(--muted);padding-bottom:7px;border-bottom:1px solid #1d2b3b}.logs li strong{color:#bcd8ee;font-weight:650}.logs li.warn{color:#ffb3bc}.logtime{font:11px ui-monospace,monospace;color:#66839e;margin-right:7px}
+.info-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;font-size:12px;color:var(--muted)}.info-grid b{color:var(--text)}.footer{color:#829bb7;font-size:12px;margin-top:15px;line-height:1.8}
+@media (max-width:1050px){.main{grid-template-columns:1fr}.side{grid-template-columns:repeat(2,minmax(0,1fr))}.side>.panel:first-child{grid-column:span 2}}
+@media (max-width:650px){.app{padding:12px}.header{margin-bottom:14px}.side{grid-template-columns:1fr}.side>.panel:first-child{grid-column:span 1}.toolbar{gap:12px}.timer{order:-1;width:100%}.map{min-height:0}.panel{padding:14px}}
+</style>
+</head>
+<body>
+<div class="app">
+<header class="header"><div><div class="eyebrow">26年度 科展示 / PROTOTYPE 01</div><h1>Packet Relay <span>Lab</span></h1><p>実際の配線を作る前に、経路選択と輻輳を実験する。</p></div><div class="header-tag">8 PLAYERS &nbsp;·&nbsp; 3 BOTS &nbsp;·&nbsp; 24 LINKS &nbsp;·&nbsp; Ø 2.0 m</div></header>
+<div class="main">
+<section class="workspace" aria-label="ネットワーク表示">
+ <div class="toolbar"><div class="controls"><button class="primary" id="toggle">▶ 開始</button><button class="secondary" id="reset">↻ リセット</button></div><div class="speed-group" aria-label="再生速度">速度 <button data-speed="1" class="active">1×</button><button data-speed="2">2×</button><button data-speed="4">4×</button></div><div class="timer" id="timer">00:00 <small>/ 02:00</small></div></div>
+ <div class="progress"><div id="progress"></div></div>
+ <div class="map"><svg id="network" viewBox="0 0 900 745" role="img" aria-label="プレイヤー8台、ボット3台、24本の経路を表す直径2メートルのネットワーク図"></svg></div>
+ <div class="bottomrow"><div class="legend"><span class="l-player">プレイヤー</span><span class="l-bot">ボット</span><span class="l-packet">移動中パケット</span></div><div class="note" id="geometry">ケーブル直線距離を計算中…</div></div>
+</section>
+<aside class="side">
+ <section class="panel"><h2>シミュレーション結果</h2><div class="kpis"><div class="kpi"><div class="val" id="generated">0</div><div class="name">生成パケット</div></div><div class="kpi"><div class="val" id="delivered">0</div><div class="name">配送成功</div></div><div class="kpi"><div class="val" id="dropped">0</div><div class="name">パケットロス</div></div><div class="kpi"><div class="val" id="ratio">--</div><div class="name">成功率（終了分のみ）</div></div></div><div class="status" id="insight">開始前。AIのみで挙動を観察するか、手動モードで1ノードを操作できます。</div></section>
+ <section class="panel"><h2>プレイヤー操作</h2><div class="switch"><label for="manual">選択ノードを手動操作</label><input type="checkbox" id="manual"></div><div class="controlrow"><label for="selected">操作するノード</label><select id="selected" class="small-select"></select></div><div class="subtitle" id="manual-explainer">自動運転中。ノードをクリックすると選択できます。</div><div id="current-packet"></div><div class="routes" id="routes"></div></section>
+ <section class="panel"><h2>ゲームパラメータ</h2><div class="controlrow"><label for="interval">各プレイヤーの生成間隔</label><output id="interval-val">1.0 秒</output></div><input type="range" id="interval" min="0.8" max="6" step="0.1" value="1.0">
+ <div class="controlrow"><label for="reaction">AI操作の平均待ち時間</label><output id="reaction-val">1.00 秒</output></div><input type="range" id="reaction" min="0.2" max="1.8" step="0.05" value="1.0">
+ <div class="bot-rates" aria-label="ボットごとの処理能力">
+  <div class="bot-rates-title">ボット処理能力 <span class="note">各0.50〜2.00 pkt/s・0.05刻み</span></div>
+  <div class="bot-rate-row"><div class="controlrow"><label for="bot-rate-B1">B1</label><output id="bot-rate-B1-val">1.00 pkt/s · 1.00秒/pkt</output></div><div class="rate-control"><input type="range" id="bot-rate-B1" min="0.5" max="2" step="0.05" value="1"><input type="number" class="rate-number" id="bot-rate-B1-number" min="0.5" max="2" step="0.05" value="1.00" aria-label="B1 処理能力 pkt/s"></div></div>
+  <div class="bot-rate-row"><div class="controlrow"><label for="bot-rate-B2">B2</label><output id="bot-rate-B2-val">1.00 pkt/s · 1.00秒/pkt</output></div><div class="rate-control"><input type="range" id="bot-rate-B2" min="0.5" max="2" step="0.05" value="1"><input type="number" class="rate-number" id="bot-rate-B2-number" min="0.5" max="2" step="0.05" value="1.00" aria-label="B2 処理能力 pkt/s"></div></div>
+  <div class="bot-rate-row"><div class="controlrow"><label for="bot-rate-B3">B3</label><output id="bot-rate-B3-val">1.00 pkt/s · 1.00秒/pkt</output></div><div class="rate-control"><input type="range" id="bot-rate-B3" min="0.5" max="2" step="0.05" value="1"><input type="number" class="rate-number" id="bot-rate-B3-number" min="0.5" max="2" step="0.05" value="1.00" aria-label="B3 処理能力 pkt/s"></div></div>
+ </div>
+ <div class="controlrow"><label for="buffer">ボットの最大保持数</label><select id="buffer" class="small-select"><option value="3">3 pkt</option><option value="4" selected>4 pkt</option></select></div>
+ <div class="controlrow"><label for="policy">AIの経路選択</label><select id="policy" class="small-select"><option value="shortest">最短ホップ</option><option value="adaptive" selected>混雑を考慮</option><option value="random">ランダム</option></select></div>
+ <div class="controlrow"><label for="seed">乱数シード</label><input type="number" id="seed" value="2026" min="1" max="99999999" style="width:108px"></div>
+ <div class="note">各ノードから個別に生成。ボット速度はB1〜B3で独立して変更可能。処理中のパケットには旧速度を適用し、次の処理から新速度を反映。</div></section>
+ <section class="panel"><h2>プレイヤー別スコア <span style="font-size:10px;font-weight:400;color:var(--muted)">仮ルール</span></h2><table class="score-table"><thead><tr><th>ノード</th><th>Score</th><th>配送</th><th>中継</th><th>自ノード失点</th></tr></thead><tbody id="scores"></tbody></table><div class="note" style="margin-top:9px">配送成功 +10（発信者）、最短経路ボーナス +3、中継 +2、タイムアウト −5、満杯ボットへの転送 −4、余分なホップ −2。</div></section>
+ <section class="panel"><h2>イベントログ</h2><ul class="logs" id="logs"></ul></section>
+</aside></div>
+<div class="footer">モデル上の通信はROCK 3Bによる中央管理を想定。USBやLEDの実際の転送処理はまだ再現せず、リンク遅延・ボット待ち行列・プレイヤー判断に注目した初期プロトタイプ。ボットの「3/4枠」は処理中の1件も含む。</div>
+</div>
+<script>
+(()=>{'use strict';
+const $=id=>document.getElementById(id);
+const N=8,B=3,TOTAL=120,STEP=.025,SVGNS='http://www.w3.org/2000/svg';
+const PLAYER_COLORS=['#68e1d4','#81aaff','#dc91f8','#ffbc85','#92e4a6','#ef97ab','#a3cefa','#e6bf80'];
+let nodes=[],edges=[],adj={},distances={},packets=new Map(),transits=[],events=[],now=0,running=false,speed=1,acc=0,lastFrame=0,nextId=1,rand=()=>.5;
+let stats={},finished=false,selected='P1',manualMode=false,lastUi=0,lastDraw=0,lastRouteKey='';
+const opts=()=>({interval:+$('interval').value,reaction:+$('reaction').value,botRates:{B1:+$('bot-rate-B1').value,B2:+$('bot-rate-B2').value,B3:+$('bot-rate-B3').value},cap:+$('buffer').value,policy:$('policy').value});
+const R=(a,b)=>Math.hypot(a.x-b.x,a.y-b.y);
+const fmtTime=n=>String(Math.floor(n/60)).padStart(2,'0')+':'+String(Math.floor(n%60)).padStart(2,'0');
+const escapeHTML=s=>String(s).replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+function rng(seed){let t=seed>>>0;return ()=>{t+=0x6D2B79F5;let z=t;z=Math.imul(z^(z>>>15),z|1);z^=z+Math.imul(z^(z>>>7),z|61);return((z^(z>>>14))>>>0)/4294967296;};}
+function node(id){return nodes.find(n=>n.id===id)}
+function makeGraph(){
+ nodes=[];edges=[];adj={};distances={};let cx=450,cy=365;
+ for(let i=0;i<N;i++){let a=-Math.PI/2-Math.PI/8+i*2*Math.PI/N;nodes.push({id:'P'+(i+1),type:'player',x:cx+288*Math.cos(a),y:cy+288*Math.sin(a),queue:[],nextSpawn:0,score:0,delivered:0,forwarded:0,personalDrops:0});}
+ for(let i=0;i<B;i++){let a=-Math.PI/2+i*2*Math.PI/B;nodes.push({id:'B'+(i+1),type:'bot',x:cx+117*Math.cos(a),y:cy+117*Math.sin(a),queue:[],busyUntil:0,processed:0});}
+ for(const n of nodes)adj[n.id]=[];
+ function connect(a,b){let x=node(a),y=node(b);edges.push({a,b,len:R(x,y),meters:R(x,y)/288*1.0});adj[a].push(b);adj[b].push(a);}
+ for(let i=0;i<N;i++)connect('P'+(i+1),'P'+((i+1)%N+1));
+ // プレイヤーごとのボット接続（各2本）。
+ const playerBots={
+  P1:['B1','B3'], P2:['B1','B2'], P3:['B2','B3'],
+  P4:['B1','B2'], P5:['B1','B3'], P6:['B1','B2'],
+  P7:['B1','B3'], P8:['B2','B3']
+ };
+ for(const [player,bots] of Object.entries(playerBots)){
+  for(const bot of bots)connect(player,bot);
+ }
+ for(const target of nodes){const d={};d[target.id]=0;const q=[target.id];while(q.length){let curr=q.shift();for(const next of adj[curr])if(d[next]===undefined){d[next]=d[curr]+1;q.push(next)}}distances[target.id]=d;}
+ const meters=edges.reduce((s,e)=>s+e.meters,0), count=meters*30;
+ $('geometry').textContent=`直径 2.0 m / 配線直線距離 約${meters.toFixed(1)} m / LED 約${Math.ceil(count)}個（余長なし）`;
+}
+function log(message,kind='normal') {events.unshift({time:now,message,kind});if(events.length>50)events.pop();}
+function startNew(){
+ rand=rng(Math.max(1,(+$('seed').value|0)));makeGraph();now=0;running=false;acc=0;nextId=1;packets=new Map();transits=[];events=[];finished=false;stats={generated:0,delivered:0,lost:0,timeout:0,overflow:0};
+ for(const n of nodes)if(n.type==='player')n.nextSpawn=rand()*opts().interval;
+ log('初期化完了。開始するとパケットを生成します。');$('toggle').textContent='▶ 開始';lastRouteKey='';renderUi(true);draw();
+}
+function edgeOf(a,b){return edges.find(e=>e.a===a&&e.b===b||e.a===b&&e.b===a)}
+function dropPacket(p,reason,at,penaltyNode){
+ packets.delete(p.id);stats.lost++;if(reason==='timeout'){stats.timeout++;let pn=node(at);pn.personalDrops++;pn.score-=5;log(`${at} : #${p.id} を時間切れでロス（-${5}点）`,'warn');}
+ else if(reason==='overflow'){stats.overflow++;if(penaltyNode&&node(penaltyNode).type==='player')node(penaltyNode).score-=4;log(`${at} : ボットバッファ満杯で #${p.id} ロス`,'warn');}
+}
+function delivered(p){
+ packets.delete(p.id);stats.delivered++;let owner=node(p.origin),extra=Math.max(0,p.hops-p.shortest);owner.delivered++;owner.score+=10+(extra===0?3:-2*extra);
+ if(stats.delivered<=6||stats.delivered%15===0)log(`#${p.id} ${p.origin} → ${p.dest} 到着（${p.hops}ホップ）`);
+}
+function arrive(p,to,from){
+ p.current=to;p.visited.push(to);let n=node(to);
+ if(to===p.dest){delivered(p);return;}
+ if(n.type==='player'){
+   p.deadline=now+2;p.ready=now+opts().reaction*(.65+.7*rand());n.queue.push(p);
+ } else {
+   if(n.queue.length>=opts().cap){dropPacket(p,'overflow',to,from);return;}
+   n.queue.push(p);
+ }
+}
+function dispatch(p,from,to){
+ let n=node(from),idx=n.queue.indexOf(p);if(idx<0)return false;
+ n.queue.splice(idx,1);p.hops++;p.previous=from;
+ if(n.type==='player'){n.forwarded++;n.score+=2;}
+ let e=edgeOf(from,to),duration=.32+e.meters*.31;
+ transits.push({p,from,to,start:now,end:now+duration});p.current=null;
+ return true;
+}
+function choose(p,from,policy){
+ const neighbors=adj[from];let valid=neighbors.filter(n=>n!==p.previous);
+ if(valid.length===0)valid=neighbors;
+ if(policy==='random'){
+  const unvisited=valid.filter(n=>!p.visited.includes(n));return(unvisited.length?unvisited:valid)[Math.floor(rand()*(unvisited.length?unvisited.length:valid.length))];
+ }
+ let best=null,min=Infinity;
+ for(const next of neighbors){
+  const n=node(next);let cost=distances[p.dest][next];
+  if(policy==='adaptive'){
+   if(n.type==='bot')cost+=.65*(n.queue.length/opts().cap)+.13*n.queue.length;
+   else cost+=.15*Math.min(n.queue.length,4);
+  }
+  if(next===p.previous)cost+=1.3;
+  const visited=p.visited.filter(v=>v===next).length;cost+=visited*1.15;
+  cost+=rand()*.045;
+  if(cost<min){min=cost;best=next;}
+ }
+ return best;
+}
+function generate(n){
+ const dests=nodes.filter(p=>p.type==='player'&&p.id!==n.id);
+ const dest=dests[Math.floor(rand()*dests.length)].id;
+ let p={id:nextId++,origin:n.id,dest,hops:0,shortest:distances[dest][n.id],created:now,visited:[],current:null,previous:null};packets.set(p.id,p);stats.generated++;arrive(p,n.id,null);
+}
+function step(){
+ now+=STEP;
+ const currentOpts=opts();
+ for(const t of [...transits])if(t.end<=now){transits.splice(transits.indexOf(t),1);if(packets.has(t.p.id))arrive(t.p,t.to,t.from);}
+ for(const n of nodes)if(n.type==='player'){
+  if(n.nextSpawn<=now){generate(n);n.nextSpawn=now+currentOpts.interval*(.88+.24*rand());}
+  for(const p of [...n.queue])if(now>=p.deadline)dropAndRemove(n,p);
+  if(n.queue.length&&(n.id!==selected||!manualMode)){
+   const p=n.queue[0];if(now>=p.ready){let dest=choose(p,n.id,currentOpts.policy);if(dest)dispatch(p,n.id,dest);}
+  }
+ }
+ for(const n of nodes)if(n.type==='bot'&&n.queue.length){
+  if(!n.busyUntil)n.busyUntil=now+1/currentOpts.botRates[n.id];
+  if(now>=n.busyUntil){let p=n.queue[0],next=choose(p,n.id,'shortest');n.busyUntil=0;n.processed++;if(next)dispatch(p,n.id,next);}
+ }
+ if(now>=TOTAL){now=TOTAL;running=false;finished=true;$('toggle').textContent='終了';log('シミュレーション終了');}
+}
+function dropAndRemove(n,p){let idx=n.queue.indexOf(p);if(idx>=0)n.queue.splice(idx,1);dropPacket(p,'timeout',n.id,null);}
+function manualSend(to){
+ if(!manualMode||!adj[selected].includes(to)||!running)return;
+ const current=node(selected),p=current.queue[0];if(!p)return;
+ dispatch(p,selected,to);renderUi(true);draw();
+}
+function draw(){
+ const svg=$('network');let s='';
+ // Background geometry guides
+ s+='<circle cx="450" cy="365" r="288" fill="none" stroke="#234158" stroke-width="1" stroke-dasharray="4 9" opacity=".6"/>';
+ s+='<circle cx="450" cy="365" r="117" fill="none" stroke="#234158" stroke-width="1" stroke-dasharray="3 9" opacity=".6"/>';
+ s+='<text x="450" y="27" text-anchor="middle" font-size="12" fill="#516f87">NETWORK TOPOLOGY • REALTIME PACKETS</text>';
+ for(const e of edges){
+  const a=node(e.a),b=node(e.b);let active=transits.some(t=>t.from===e.a&&t.to===e.b||t.from===e.b&&t.to===e.a);
+  s+=`<line class="edge-shell" x1="${a.x}" y1="${a.y}" x2="${b.x}" y2="${b.y}"/><line class="edge ${active?'active':''}" x1="${a.x}" y1="${a.y}" x2="${b.x}" y2="${b.y}"/>`;
+  let dots=Math.max(5,Math.round(e.meters*30/3));
+  for(let k=1;k<dots;k++){let f=k/dots;let near=transits.find(t=>(t.from===e.a&&t.to===e.b||t.from===e.b&&t.to===e.a)&&Math.abs((t.from===e.a?1:-1)*((now-t.start)/(t.end-t.start))-(t.from===e.a?f:f-1))<.07);
+   s+=`<circle cx="${(a.x+(b.x-a.x)*f).toFixed(2)}" cy="${(a.y+(b.y-a.y)*f).toFixed(2)}" r="${near?3:1.6}" fill="${near?'#9bfff0':'#4a6b85'}" opacity="${near?.9:.54}"/>`;
+  }
+ }
+ for(const t of transits){
+  let a=node(t.from),b=node(t.to),f=Math.min(1,Math.max(0,(now-t.start)/(t.end-t.start))),x=a.x+(b.x-a.x)*f,y=a.y+(b.y-a.y)*f,col=PLAYER_COLORS[+t.p.origin.slice(1)-1];
+  s+=`<circle cx="${x}" cy="${y}" r="13" fill="${col}" opacity=".14"/><circle cx="${x}" cy="${y}" r="6.3" fill="${col}" stroke="#efffff" stroke-width="1"/>`;
+ }
+ for(const n of nodes){let player=n.type==='player',isSelected=n.id===selected,base=player?'#7198d6':'#d3a453',size=player?34:29;
+  let occupancy=player?n.queue.length:n.queue.length,fill=player?Math.min(1,n.queue.length/3):Math.min(1,n.queue.length/opts().cap),danger=player?n.queue.some(p=>p.deadline-now<.5):n.queue.length>=opts().cap;
+  let ring=danger?'#fd7888':(fill>.6?'#f8c86d':'#68e1d4');
+  s+=`<g class="node-click" data-node="${n.id}"><circle cx="${n.x}" cy="${n.y}" r="${size+12}" fill="${isSelected?'#254a5b':'#0a1525'}" stroke="${isSelected?'#68e1d4':'#284054'}" stroke-width="${isSelected?3:1.5}"/><circle cx="${n.x}" cy="${n.y}" r="${size+6}" fill="none" stroke="${ring}" stroke-width="4" stroke-dasharray="${(2*Math.PI*(size+6)*fill).toFixed(2)} ${(2*Math.PI*(size+6)).toFixed(2)}" transform="rotate(-90 ${n.x} ${n.y})" stroke-linecap="round"/><circle class="node-core" cx="${n.x}" cy="${n.y}" r="${size}" fill="${player?'#1b3554':'#4b3827'}" stroke="${base}" stroke-width="2"/><text class="svg-label" x="${n.x}" y="${n.y+(player?-3:-10)}">${n.id}</text><text class="svg-sub" x="${n.x}" y="${n.y+(player?16:10)}">${player?'Q:'+occupancy:'BUF '+occupancy+'/'+opts().cap}</text>${player?'':`<text class="svg-sub" x="${n.x}" y="${n.y+25}">${opts().botRates[n.id].toFixed(2)}/s</text>`}<circle cx="${n.x+size-5}" cy="${n.y-size+7}" r="5" fill="${danger?'#fd7888':player?'#7eb1ed':'#f8c86d'}"/></g>`;
+ }
+ svg.innerHTML=s;
+}
+function renderUi(force=false){
+ if(!force&&now-lastUi<.17)return;lastUi=now;
+ $('timer').innerHTML=fmtTime(now)+' <small>/ 02:00</small>';
+ $('progress').style.width=(100*now/TOTAL).toFixed(2)+'%';
+ $('generated').textContent=stats.generated;$('delivered').textContent=stats.delivered;$('dropped').textContent=stats.lost;
+ const complete=stats.delivered+stats.lost;
+ $('ratio').textContent=complete?(100*stats.delivered/complete).toFixed(1)+'%':'--';
+ const liveBots=nodes.filter(n=>n.type==='bot'),bottleneck=liveBots.sort((a,b)=>b.queue.length-a.queue.length)[0];
+ $('insight').textContent=finished?`終了：${stats.delivered}配送 / ${stats.lost}ロス。条件を変更してリセットすると比較できます。`:
+  !running&&now===0?'開始前。AIのみで挙動を観察するか、手動モードで1ノードを操作できます。':
+  `未完了 ${packets.size} pkt / 移動中 ${transits.length} pkt / 最多混雑 ${bottleneck.id} (${bottleneck.queue.length}/${opts().cap})。ロス内訳：タイムアウト ${stats.timeout}、ボット満杯 ${stats.overflow}。`;
+ const n=node(selected),pkt=n.queue[0],hand=manualMode;
+ $('manual-explainer').textContent=hand?`${selected} の未処理 ${n.queue.length} 件。先頭パケットの宛先を見て、接続先を押して転送。`:'全ノードをAIが操作しています。チェックすると選択ノードだけ手動になります。';
+ if(pkt){let remain=Math.max(0,pkt.deadline-now);$('current-packet').innerHTML=`<div class="packet"><div><strong>#${pkt.id} → ${pkt.dest}</strong><div class="note">発信 ${pkt.origin} · ${pkt.hops}ホップ経由</div></div><div class="timerem ${remain<.6?'danger':''}">${remain.toFixed(2)}s</div></div>`;}
+ else $('current-packet').innerHTML=`<div class="status">${selected} に転送待ちパケットはありません。</div>`;
+ const routeKey=[selected,hand,running,pkt?.id||0].join(':');
+ if(routeKey!==lastRouteKey){lastRouteKey=routeKey;$('routes').innerHTML=adj[selected].map(target=>`<button class="route-btn" data-target="${target}" ${hand&&pkt&&running?'':'disabled'}>${target}<span>${node(target).type==='bot'?'BOT':'PLAYER'}</span></button>`).join('');}
+ $('scores').innerHTML=nodes.filter(n=>n.type==='player').map(n=>`<tr class="${selected===n.id?'mine':''}"><td>${n.id}${selected===n.id?' ◂':''}</td><td>${n.score}</td><td>${n.delivered}</td><td>${n.forwarded}</td><td>${n.personalDrops}</td></tr>`).join('');
+ $('logs').innerHTML=events.slice(0,7).map(e=>`<li class="${e.kind==='warn'?'warn':''}"><span class="logtime">${fmtTime(e.time)}</span>${escapeHTML(e.message)}</li>`).join('');
+}
+function frame(ts){
+ if(!lastFrame)lastFrame=ts;let elapsed=Math.min(.15,(ts-lastFrame)/1000);lastFrame=ts;
+ if(running){acc+=elapsed*speed;let limit=0;while(acc>=STEP&&limit++<40&&running){step();acc-=STEP;}if(!running&&finished){$('toggle').disabled=true;renderUi(true);}}
+ if(ts-lastDraw>30){draw();lastDraw=ts;}renderUi();requestAnimationFrame(frame);
+}
+$('toggle').addEventListener('click',()=>{if(finished)return;running=!running;$('toggle').textContent=running?'Ⅱ 一時停止':'▶ 再開';renderUi(true);});
+$('reset').addEventListener('click',()=>{$('toggle').disabled=false;startNew()});
+for(const btn of document.querySelectorAll('[data-speed]'))btn.addEventListener('click',()=>{speed=+btn.dataset.speed;document.querySelectorAll('[data-speed]').forEach(b=>b.classList.toggle('active',b===btn));});
+$('manual').addEventListener('change',e=>{manualMode=e.target.checked;renderUi(true)});
+$('selected').addEventListener('change',e=>{selected=e.target.value;renderUi(true);draw()});
+$('network').addEventListener('pointerdown',e=>{const g=e.target.closest('[data-node]');if(g&&g.dataset.node[0]==='P'){selected=g.dataset.node;$('selected').value=selected;renderUi(true);draw();}});
+$('routes').addEventListener('click',e=>{const b=e.target.closest('[data-target]');if(b)manualSend(b.dataset.target)});
+for(const key of ['interval','reaction'])$(key).addEventListener('input',()=>{$(key+'-val').textContent=(+$(key).value).toFixed(key==='reaction'?2:1)+' 秒'});
+for(const id of ['B1','B2','B3']){
+ const slider=$('bot-rate-'+id), number=$('bot-rate-'+id+'-number'), output=$('bot-rate-'+id+'-val');
+ function applyRate(v){
+  if(!Number.isFinite(v))return;
+  // 0.05 pkt/s increments, with bounds identical to the slider.
+  const rate=Math.min(2,Math.max(.5,Math.round(v*20)/20));
+  slider.value=rate;number.value=rate.toFixed(2);
+  output.textContent=`${rate.toFixed(2)} pkt/s · ${(1/rate).toFixed(2)}秒/pkt`;
+  draw();
+ }
+ slider.addEventListener('input',()=>applyRate(+slider.value));
+ number.addEventListener('change',()=>applyRate(+number.value));
+}
+for(const key of ['buffer','policy'])$(key).addEventListener('change',()=>renderUi(true));
+for(let i=1;i<=N;i++)$('selected').add(new Option('プレイヤー P'+i,'P'+i));
+startNew();requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
