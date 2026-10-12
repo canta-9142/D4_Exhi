@@ -13,6 +13,15 @@ int remaining = 0;
 NodeId selfId = NodeId::None;
 const NodeLayout* layout = nullptr;
 
+bool assign_self_id(uint8_t raw_id) {
+  if (raw_id < 1 || raw_id > 8) return false;
+
+  selfId = static_cast<NodeId>(raw_id);
+  layout = &nodeLayouts[raw_id];
+
+  return true;
+}
+
 void draw_button(int x, int y, NodeId id, bool pressed = false) {
   constexpr int w = 120 - 1;
   constexpr int h = 80 - 1;
@@ -38,13 +47,45 @@ void draw_neighbor_buttons() {
   }
 }
 
-bool assign_self_id(uint8_t raw_id) {
-  if (raw_id < 1 || raw_id > 8) return false;
+void draw_info() {
+  static bool drawn = false;
+  static int previousScore = 0;
+  static int previousRemaining = 0;
+  
+  if (drawn && score == previousScore && remaining == previousRemaining) return;
 
-  selfId = static_cast<NodeId>(raw_id);
-  layout = &nodeLayouts[raw_id];
+  lcd.setFont(&fonts::Font0);
+  lcd.setTextSize(3);
+  lcd.setTextColor(TFT_WHITE, TFT_BLACK);
+  lcd.setTextDatum(lgfx::textdatum_t::top_left);
+  lcd.setTextPadding(0);
 
-  return true;
+  lcd.startWrite();
+
+  if (!drawn) {
+    lcd.drawString("pt", 438, 121);
+    lcd.drawString("s", 438, 174);
+    drawn = true;
+  }
+
+  char number[5];
+  if (!drawn || score != previousScore) {
+    if (snprintf(number, sizeof(number), "%4d", score) > 4) {
+      strcpy(number, "####");
+    }
+    lcd.drawString(number, 366, 121);
+    previousScore = score;
+  }
+
+  if (!drawn || remaining != previousRemaining) {
+    if (snprintf(number, sizeof(number), "%4d", remaining) > 4) {
+      strcpy(number, "####");
+    }
+    lcd.drawString(number, 366, 174);
+    previousRemaining = remaining;
+  }
+
+  lcd.endWrite();
 }
 
 void setup() {
@@ -62,10 +103,11 @@ void setup() {
   lcd.drawLine(360, 240, 360, 319, TFT_WHITE);
   draw_button(360, 0, selfId);
   draw_neighbor_buttons();
+  draw_info();
 }
 
 void loop(){
-
+  
 }
 
 #endif // GAME_HPP_
