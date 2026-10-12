@@ -27,6 +27,7 @@
               export GOPATH="/home/jinji/Projects/D4_Exhi/.go"
               export PATH="$GOPATH/bin:$PATH"
               echo "GOPATH: $GOPATH"
+              arduino-cli version
               go version
             '';
           };
