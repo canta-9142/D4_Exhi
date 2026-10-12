@@ -5,6 +5,7 @@
 #include <LovyanGFX.hpp>
 #include "psw.hpp"
 #include "node_config.hpp"
+#include "packet.hpp"
 #include "display.hpp"
 
 int score = 0;
