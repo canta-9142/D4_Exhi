@@ -20,7 +20,7 @@ public:
     busCfg.spi_mode   = 0;
     busCfg.freq_write = 40000000;  // SPI 40MHz
     busCfg.spi_3wire  = false;     // MISOを使用
-    busCfg.pin_miso   = 8;
+    busCfg.pin_miso   = 14;
     busCfg.pin_sclk   = 9;
     busCfg.pin_mosi   = 10;
     busCfg.pin_dc     = 11;
