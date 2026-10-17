@@ -9,8 +9,6 @@ constexpr int ANIMATION_Y = 0;
 constexpr int ANIMATION_WIDTH = 200;
 constexpr int ANIMATION_HEIGHT = 240;
 
-constexpr int COLUMN_BLOCK_WIDTH = 16;
-
 class ColumnPanel : public lgfx::Panel_ST7796 {
 public:
   // MADCTLのパラメータMV(Row/Column Exchange)を切り替え、MV=1ならcolumn優先

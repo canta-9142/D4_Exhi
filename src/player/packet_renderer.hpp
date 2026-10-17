@@ -28,6 +28,7 @@ public:
 
     timing_.sample_scan();
     compose_packet_frame(snapshot);
+    prepare_packet_frame(damage, estimate.mergeRows);
     transfer_packet_frame(damage, estimate);
     drawn_ = true;
   }
@@ -129,30 +130,52 @@ private:
     return damage;
   }
 
-  void send_packet_band(int x, int width, int top, int height) {
-    sprite_.readRect(x, top, width, height, rowPixels_.data());
-
+  void prepare_packet_band(int x, int width, int top, int height, size_t offset) {
     for (int y = 0; y < height; ++y) {
+      sprite_.readRect(x, top + y, width, 1, rowPixels_.data());
       for (int col = 0; col < width; ++col) {
-        columnPixels_[col * height + y] = rowPixels_[y * width + col];
+        columnPixels_[offset + col * height + y] = rowPixels_[col];
       }
     }
+  }
 
-    display_.pushColumnBlockDMA(ANIMATION_X + x, ANIMATION_Y + top, width, height, columnPixels_.data());
+  void send_packet_band(int x, int width, int top, int height, size_t offset) {
+    display_.pushColumnBlockDMA(ANIMATION_X + x, ANIMATION_Y + top, width, height,
+                                columnPixels_.data() + offset);
     display_.waitDMA();
   }
 
-  void send_packet_block(int x, int width, const PacketDamage& damage, bool mergeRows) {
+  template <typename F>
+  void for_packet_bands(const PacketDamage& damage, bool mergeRows, F process) {
     if (mergeRows) {
-      send_packet_band(x, width, damage.top, damage.bottom - damage.top);
+      process(damage.top, damage.bottom - damage.top);
       return;
     }
     for (int row = 0; row < ANIMATION_HEIGHT;) {
       if (!damage.rows[row]) { ++row; continue; }
       const int top = row;
       while (row < ANIMATION_HEIGHT && damage.rows[row]) ++row;
-      send_packet_band(x, width, top, row - top);
+      process(top, row - top);
     }
+  }
+
+  void prepare_packet_frame(const PacketDamage& damage, bool mergeRows) {
+    size_t offset = 0;
+    for_packet_bands(damage, mergeRows, [&](int top, int height) {
+      prepare_packet_band(0, ANIMATION_WIDTH, top, height, offset);
+      offset += ANIMATION_WIDTH * height;
+    });
+  }
+
+  uint32_t measure_packet_block(int x, int width, const PacketDamage& damage, bool mergeRows) {
+    uint32_t durationUs = 0;
+    for_packet_bands(damage, mergeRows, [&](int top, int height) {
+      prepare_packet_band(x, width, top, height, 0);
+      const uint32_t startedUs = micros();
+      send_packet_band(x, width, top, height, 0);
+      durationUs += std::max<uint32_t>(1, micros() - startedUs);
+    });
+    return durationUs;
   }
 
   struct PacketTransferEstimate {
@@ -166,12 +189,9 @@ private:
 
     uint32_t splitUs = 1, mergedUs = 1;
     for (int probe = 0; probe < 4; ++probe) {
-      const uint32_t started = micros();
       const bool mergeRows = damage.spanCount > 1 && probe >= 2;
-
-      send_packet_block(probe * COLUMN_BLOCK_WIDTH, COLUMN_BLOCK_WIDTH, damage, mergeRows);
-      
-      const uint32_t duration = std::max<uint32_t>(1, micros() - started);
+      const uint32_t duration = measure_packet_block(probe * TRANSFER_PROBE_WIDTH,
+          TRANSFER_PROBE_WIDTH, damage, mergeRows);
       
       if (probe == 1) splitUs = duration;
       if (probe == 3) mergedUs = duration;
@@ -179,7 +199,7 @@ private:
     display_.endColumnWrite();
     
     const bool mergeRows = damage.spanCount > 1 && mergedUs < splitUs;
-    return {mergeRows, float(mergeRows ? mergedUs : splitUs) / COLUMN_BLOCK_WIDTH};
+    return {mergeRows, float(mergeRows ? mergedUs : splitUs) / TRANSFER_PROBE_WIDTH};
   }
 
   void compose_packet_frame(const PacketAnimation::Snapshot& snapshot) {
@@ -198,10 +218,11 @@ private:
     timing_.wait_for_transfer_start(estimate.columnTimeUs, rowCount, spanCount);
     display_.beginColumnWrite();
     
-    for (int x = 0; x < ANIMATION_WIDTH; x += COLUMN_BLOCK_WIDTH) {
-      const int width = std::min(COLUMN_BLOCK_WIDTH, ANIMATION_WIDTH - x);
-      send_packet_block(x, width, damage, estimate.mergeRows);
-    }
+    size_t offset = 0;
+    for_packet_bands(damage, estimate.mergeRows, [&](int top, int height) {
+      send_packet_band(0, ANIMATION_WIDTH, top, height, offset);
+      offset += ANIMATION_WIDTH * height;
+    });
     
     timing_.finish_transfer();
     display_.endColumnWrite();
@@ -213,10 +234,11 @@ private:
   PacketTransferTiming timing_;
   PacketAnimation::Snapshot previous_{};
   bool drawn_ = false;
+  static constexpr int TRANSFER_PROBE_WIDTH = 16;
   std::array<lgfx::rgb565_t, ANIMATION_WIDTH * PACKET_CARD_HEIGHT> background_{};
   std::array<lgfx::argb8888_t, ANIMATION_WIDTH> blendRow_{};
-  alignas(4) std::array<lgfx::swap565_t, COLUMN_BLOCK_WIDTH * ANIMATION_HEIGHT> rowPixels_{};
-  alignas(4) std::array<lgfx::swap565_t, COLUMN_BLOCK_WIDTH * ANIMATION_HEIGHT> columnPixels_{};
+  alignas(4) std::array<lgfx::swap565_t, ANIMATION_WIDTH> rowPixels_{};
+  alignas(4) std::array<lgfx::swap565_t, ANIMATION_WIDTH * ANIMATION_HEIGHT> columnPixels_{};
 };
 
 #endif // PACKET_RENDERER_HPP_

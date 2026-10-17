@@ -20,8 +20,9 @@ inline void wait_microseconds(uint32_t durationUs) {
     const uint32_t remainingUs = durationUs - elapsedUs;
     if (remainingUs >= 1000) {
       vTaskDelay(1);
+    } else {
+      delayMicroseconds(remainingUs);
     }
-    delayMicroseconds(remainingUs);
   }
 }
 

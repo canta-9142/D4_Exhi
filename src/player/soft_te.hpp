@@ -5,7 +5,7 @@
 #include "scan_timing.hpp"
 
 // 実機による補正パラメータ、今回のアニメーションデモでの調整により決定した値であるため、他のアニメーションには流用できないであろうと思われる
-constexpr uint32_t PACKET_PHASE_CORRECTION_US = 3900;
+constexpr uint32_t PACKET_PHASE_CORRECTION_US = 4500;
 constexpr float TRANSFER_COLUMN_MARGIN_US = 2;
 
 class PacketTransferTiming {
@@ -34,7 +34,7 @@ public:
 
   void wait_for_transfer_start(float measuredColumnUs, unsigned rows, unsigned spans) {
     const float columnUs = estimate_column_time(measuredColumnUs, rows, spans);
-    auto plan = plan_transfer(scanTiming_, ANIMATION_X, ANIMATION_WIDTH, columnUs, COLUMN_BLOCK_WIDTH);
+    auto plan = plan_transfer(scanTiming_, ANIMATION_X, ANIMATION_WIDTH, columnUs, ANIMATION_WIDTH);
     plan.firstScanPhaseUs = wrap_phase(plan.firstScanPhaseUs + PACKET_PHASE_CORRECTION_US, plan.periodUs);
     
     wait_for_start_phase(plan);
