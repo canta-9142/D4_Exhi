@@ -15,7 +15,6 @@
           default = pkgs.mkShell {
             packages = with pkgs; [
               arduino-cli
-              arduino-ide
 
               go_latest
               gopls
