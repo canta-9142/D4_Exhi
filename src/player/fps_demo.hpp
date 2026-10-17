@@ -2,6 +2,7 @@
 #define FPS_DEMO_HPP_
 
 #include "display.hpp"
+#include "startup_animation.hpp"
 
 uint32_t reportStartedUs = 0;
 uint32_t previousFrameStartedUs = 0;
@@ -18,7 +19,7 @@ void setup() {
   lcd.setTextColor(TFT_WHITE, TFT_BLACK);
   lcd.setTextSize(2);
   lcd.drawString("PLAYER", 8, 16);
-  lcd.drawString("SPI 40 MHz", 328, 16);
+  lcd.drawString("SPI 80 MHz", 328, 16);
   lcd.drawString("Full:", 328, 38);
   lcd.drawString("   480x320", 328, 60);
   lcd.drawString("Sprite:", 328, 82);
@@ -31,7 +32,7 @@ void setup() {
 }
 
 void loop() {
-  if (!animation.getBuffer()) {
+  if (!sprite.getBuffer()) {
     delay(1000);
     return;
   }
@@ -45,20 +46,20 @@ void loop() {
 
   // 経過時間で動かすので、FPSが変わっても移動速度は一定。
   const uint32_t elapsedMs = millis();
-  animation.fillSprite(TFT_BLACK);
-  animation.drawRect(0, 0, ANIMATION_WIDTH, ANIMATION_HEIGHT, TFT_WHITE);
+  sprite.fillSprite(TFT_BLACK);
+  sprite.drawRect(0, 0, ANIMATION_WIDTH, ANIMATION_HEIGHT, TFT_WHITE);
   for (int lane = 0; lane < 3; ++lane) {
     const uint32_t phase = (elapsedMs + lane * 600) % 2400;
     const uint32_t travel = phase < 1200 ? phase : 2400 - phase;
     const int x = 4 + travel * (ANIMATION_WIDTH - 72) / 1200;
     const int y = 24 + lane * 72;
-    animation.drawRect(x, y, 64, 32, TFT_WHITE);
-    animation.setCursor(x + 20, y + 8);
-    animation.printf("P%d", lane + 1);
+    sprite.drawRect(x, y, 64, 32, TFT_WHITE);
+    sprite.setCursor(x + 20, y + 8);
+    sprite.printf("P%d", lane + 1);
   }
   const uint32_t drawFinishedUs = micros();
 
-  animation.pushSprite(ANIMATION_X, ANIMATION_Y);
+  sprite.pushSprite(ANIMATION_X, ANIMATION_Y);
   lcd.waitDMA();  // 転送完了までを計測に含める
   const uint32_t transferFinishedUs = micros();
 

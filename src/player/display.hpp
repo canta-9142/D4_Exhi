@@ -9,18 +9,56 @@ constexpr int ANIMATION_Y = 0;
 constexpr int ANIMATION_WIDTH = 200;
 constexpr int ANIMATION_HEIGHT = 240;
 
+constexpr int COLUMN_BLOCK_WIDTH = 16;
+
+class ColumnPanel : public lgfx::Panel_ST7796 {
+public:
+  // MADCTLのパラメータMV(Row/Column Exchange)を切り替え、MV=1ならcolumn優先
+  void setColumnOrder(bool enabled) {
+    uint8_t mode = getMadCtl(_internal_rotation);
+    if (enabled) mode &= ~MAD_MV;
+    write_command(CMD_MADCTL);
+    writeData(mode | (_cfg.rgb_order ? MAD_RGB : MAD_BGR), 1);
+    _xs = _xe = _ys = _ye = INT16_MAX;
+  }
+
+  // 列優先のDMA転送
+  void pushColumnBlockDMA(int x, int y, int width, int height, const lgfx::swap565_t* data) {
+    // MV=0ではYをcolumn、Xをrowとして指定。各列のYが先に進む。
+    setWindow(y, x, y + height - 1, x + width - 1);
+    _bus->writeBytes(reinterpret_cast<const uint8_t*>(data),
+                     width * height * sizeof(*data), true, true);
+  }
+};
+
 class Display : public lgfx::LGFX_Device {
   lgfx::Bus_SPI bus;
-  lgfx::Panel_ST7796 panel;
+  ColumnPanel panel;
 
 public:
+  void beginColumnWrite() {
+    startWrite();
+    panel.setColumnOrder(true);
+  }
+
+  void endColumnWrite() {
+    waitDMA();
+    panel.setColumnOrder(false);
+    endWrite();
+  }
+
+  void pushColumnBlockDMA(int x, int y, int width, int height,
+                         const lgfx::swap565_t* data) {
+    panel.pushColumnBlockDMA(x, y, width, height, data);
+  }
+
   Display() {
     auto busCfg = bus.config();
     busCfg.spi_host   = SPI2_HOST;
     busCfg.spi_mode   = 0;
-    busCfg.freq_write = 40000000;  // SPI 40MHz
+    busCfg.freq_write = 80000000;  // SPI 80MHz
     busCfg.spi_3wire  = false;     // MISOを使用
-    busCfg.pin_miso   = 14;
+    busCfg.pin_miso   = 8;
     busCfg.pin_sclk   = 9;
     busCfg.pin_mosi   = 10;
     busCfg.pin_dc     = 11;
@@ -32,7 +70,7 @@ public:
     panelCfg.pin_cs       = 13;
     panelCfg.panel_width  = 320;  // 回転前の寸法
     panelCfg.panel_height = 480;
-    panelCfg.readable     = false; // 今回は書き込みのみ
+    panelCfg.readable     = false; // 画像の読み戻しは使わない（GSCANは直接読む）
     panelCfg.invert       = false;
     panelCfg.rgb_order    = false;
     panel.config(panelCfg);
@@ -42,47 +80,7 @@ public:
 };
 
 Display lcd;
-lgfx::LGFX_Sprite animation(&lcd);
-
-void startup_animation() {
-  if (!animation.getBuffer()) return;
-
-  constexpr uint32_t durationMs = 1000;
-  constexpr int barLength = 10;
-  const int startupX = (lcd.width() - animation.width()) / 2;
-  const int startupY = (lcd.height() - animation.height()) / 2;
-  animation.setFont(&fonts::Font0);
-  animation.setTextSize(2);
-  animation.setTextColor(TFT_WHITE, TFT_BLACK);
-  const uint32_t startedMs = millis();
-
-  while (true) {
-    const uint32_t elapsedMs = millis() - startedMs;
-    const uint32_t progressMs = elapsedMs < durationMs ? elapsedMs : durationMs;
-    const int filled = progressMs * barLength / durationMs;
-    char bar[] = "[..........]";
-    for (int i = 0; i < barLength; ++i) {
-      bar[i + 1] = i < filled ? '#' : '.';
-    }
-
-    animation.fillSprite(TFT_BLACK);
-    animation.drawString("STARTING", (ANIMATION_WIDTH - animation.textWidth("STARTING")) / 2, 80);
-    animation.drawString(bar, (ANIMATION_WIDTH - animation.textWidth(bar)) / 2, 112);
-    animation.setCursor((ANIMATION_WIDTH - animation.textWidth("100%")) / 2, 144);
-    animation.printf("%3lu%%", (unsigned long)(progressMs * 100 / durationMs));
-    animation.pushSprite(startupX, startupY);
-    lcd.waitDMA();
-
-    if (progressMs == durationMs) break;
-    delay(1);
-  }
-
-  delay(500);  // 100%の表示を0.5秒保持する。
-
-  // 次の画面に起動表示を残さない。
-  lcd.fillRect(0, 0, lcd.width(), lcd.height(), TFT_BLACK);
-  animation.fillSprite(TFT_BLACK);
-}
+lgfx::LGFX_Sprite sprite(&lcd);
 
 void lcd_init() {
   lcd.init();
@@ -90,15 +88,15 @@ void lcd_init() {
   lcd.setColorDepth(16);
   lcd.fillScreen(TFT_BLACK);
 
-  animation.setColorDepth(16);
-  animation.setPsram(false);  // 96,000バイトのスプライトを内蔵RAMに確保
-  if (!animation.createSprite(ANIMATION_WIDTH, ANIMATION_HEIGHT)) {
+  sprite.setColorDepth(16);
+  sprite.setPsram(false);  // 96,000バイトのスプライトを内蔵RAMに確保
+  if (!sprite.createSprite(ANIMATION_WIDTH, ANIMATION_HEIGHT)) {
     lcd.fillRect(0, 240, 480, 80, TFT_BLACK);
     lcd.drawString("Sprite allocation failed", 8, 244);
     return;
   }
-  animation.setTextColor(TFT_WHITE, TFT_BLACK);
-  animation.setTextSize(2);
+  sprite.setTextColor(TFT_WHITE, TFT_BLACK);
+  sprite.setTextSize(2);
 }
 
 #endif // DISPLAY_HPP_
