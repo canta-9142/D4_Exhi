@@ -17,6 +17,7 @@ struct DisplaySnapshot {
   int score;
   int remaining;
   NodeId selfId;
+  uint8_t pressedMask;
 };
 
 static_assert(std::is_trivially_copyable<DisplaySnapshot>::value, "FreeRTOS queues copy snapshots as bytes");
@@ -80,14 +81,14 @@ void draw_button(int x, int y, NodeId id, bool pressed = false) {
   lcd.drawChar(visual.name, x + 42, y + 16);
 }
 
-// TODO: PSWの実装後、ボタンの押下状態(または処理中の`send`リクエストの送信先など)によってdraw_buttonのpressedを切り替える実装を行う
-void draw_neighbor_buttons(NodeId id) {
+void draw_neighbor_buttons(NodeId id, uint8_t pressedMask, uint8_t changedMask = 0x0f) {
   const auto& layout = nodeLayouts[static_cast<int>(id)];
 
   for (int i = 0; i < 4; ++i) {
+    if (!(changedMask & (1u << i))) continue;
     const NodeId neighbor = layout.neighbors[i];
     if (neighbor == NodeId::None) continue;
-    draw_button(i * 120, 240, neighbor);
+    draw_button(i * 120, 240, neighbor, pressedMask & (1u << i));
   }
 }
 
@@ -155,14 +156,19 @@ void display_task(void* argument) {
   xTaskNotifyGive(context.readyTask);
 
   NodeId previousSelfId = NodeId::None;
+  uint8_t previousPressedMask = 0;
   for (;;) {
     DisplaySnapshot snapshot;
     if (xQueueReceive(context.snapshots, &snapshot, portMAX_DELAY) != pdTRUE) continue;
     if (snapshot.selfId != previousSelfId) {
       draw_button(360, 0, snapshot.selfId);
-      draw_neighbor_buttons(snapshot.selfId);
+      draw_neighbor_buttons(snapshot.selfId, snapshot.pressedMask);
       previousSelfId = snapshot.selfId;
+    } else if (snapshot.pressedMask != previousPressedMask) {
+      draw_neighbor_buttons(snapshot.selfId, snapshot.pressedMask,
+                            snapshot.pressedMask ^ previousPressedMask);
     }
+    previousPressedMask = snapshot.pressedMask;
     draw_info(snapshot.score, snapshot.remaining);
     packetRenderer.draw(snapshot.cards);
     vTaskDelay(1);

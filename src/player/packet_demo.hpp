@@ -16,30 +16,19 @@ public:
   void update(PacketQueue& queue, NodeId selfId, uint32_t nowMs, bool displayReady) {
     if (!started_) {
       if (!displayReady) return;
-      lastPopMs_ = lastPushMs_ = nowMs;
+      lastPushMs_ = nowMs;
       started_ = true;
     }
 
-    // 遅れたイベントも時刻順に処理する。同時刻ならpopしてからpushする。
-    for (;;) {
-      const uint32_t popElapsed = nowMs - lastPopMs_;
-      const uint32_t pushElapsed = nowMs - lastPushMs_;
-      if (popElapsed >= 500 &&
-          (pushElapsed < 1000 || popElapsed - 500 >= pushElapsed - 1000)) {
-        queue.pop();
-        lastPopMs_ += 500;
-      } else if (pushElapsed >= 1000) {
-        if (!push_packet(queue, selfId)) log_e("Demo packet queue full");
-        lastPushMs_ += 1000;
-      } else {
-        break;
-      }
+    // 削除はスイッチ押下で行い、ここでは1秒ごとの補充だけ行う。
+    while (nowMs - lastPushMs_ >= 1000) {
+      if (!push_packet(queue, selfId)) log_e("Demo packet queue full");
+      lastPushMs_ += 1000;
     }
   }
 
 private:
   uint16_t nextId_ = 1;
-  uint32_t lastPopMs_ = 0;
   uint32_t lastPushMs_ = 0;
   bool started_ = false;
 
