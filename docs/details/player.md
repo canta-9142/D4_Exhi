@@ -17,7 +17,7 @@ ESP32-S3のデュアルコアとArduino環境のFreeRTOSを利用し、[game.hpp
 
 したがって、更新側は描画処理に対して待ち合わせをしないが、LCD側の処理にはDMA完了待ちと位相待ちがある。16msは更新の目標間隔であって、実表示の62.5FPSを保証する値ではない。アニメーションは実経過時間で進めるので、表示フレームが省略されても時間軸は維持する。
 
-描画タスクは起動表示、固定レイアウト、GSCANの初期推定を済ませてから、ゲーム側へタスク通知を送る。パケットデモの補充タイマーと押下によるパケット操作はこの通知を受けて開始する。
+描画タスクは起動表示、固定レイアウト、GSCANの初期推定、最初のスナップショットの描画を済ませてから、ゲーム側へタスク通知を送る。パケットデモの補充タイマー、USBの`hello`送信、押下によるパケット操作はこの通知を受けて開始する。スプライト確保に失敗した場合は通知せず、通信の疎通テストも失敗する。
 
 ## プッシュスイッチ
 
@@ -27,9 +27,9 @@ ESP32-S3のデュアルコアとArduino環境のFreeRTOSを利用し、[game.hpp
 
 ゲーム側の`psw_update()`は、最後の入力変化から`PSW_DEBOUNCE_MS`（初期値20ms）が経過したビットだけを押下状態へ反映し、新規押下を返す。解放も同じ方法で確定するので、長押しでは再送しない。押下状態は既存の描画スナップショットで渡し、描画側は前回と変わったボタンだけを再描画する。自ノードIDが変わった場合は4個とも描き直す。
 
-現在の`PLAYER_PACKET_DEMO`では、起動時に5件を用意し、以後1秒ごとに1件補充する。押した位置を`nodeLayouts`の送信先へ対応させ、先頭を1件削除する。同時押しは左側を優先して1件だけ扱い、空キューでは何もしない。本番の`send`通信と成功応答後の削除は未実装。
+オフライン用の`PLAYER_PACKET_DEMO`では、起動時に5件を用意し、以後1秒ごとに1件補充する。押した位置を`nodeLayouts`の送信先へ対応させ、先頭を1件削除する。通常ビルドでは同じ送信先で`send`を送り、成功応答後に削除する。同時押しは左側を優先して1件だけ扱い、空キューでは何もしない。
 
-入力処理とデモ補充のホスト検証は`nix develop -c bash tests/psw.sh`で実行できる。
+通信処理とキュー操作のホスト検証手順は、後述の「サーバーとの通信」を参照。
 
 ## MCUでの描画用パケット管理
 
@@ -37,7 +37,7 @@ ESP32-S3のデュアルコアとArduino環境のFreeRTOSを利用し、[game.hpp
 
 `PacketQueue`は容量1024件固定のFIFOリングバッファとして扱う。
 
-キューを変更するのはゲーム側のタスクだけとし、描画側にはコピーしたスナップショットを渡す。`PacketQueue`自体には現時点では複数タスク向けのロックを持たせていない、今後追加する通信タスクとの兼ね合いとなるだろう。
+キューを変更するのはゲーム側のタスクだけとし、通信受信も同じ`loop()`で処理する。描画側にはコピーしたスナップショットを渡すため、`PacketQueue`に複数タスク向けのロックは不要。
 
 ## LCD
 
@@ -110,12 +110,14 @@ ease(t) = 1 - (1 - t)^3
 
 | バッファ | 用途 | 容量 |
 | --- | --- | ---: |
-| 200×240のRGB565スプライト | フレーム合成 | 96,000B |
+| 200×240のRGB565スプライト（PSRAM） | フレーム合成 | 96,000B |
 | 200×60のRGB565背景 | フェード対象の背景保存 | 24,000B |
 | 200画素のARGB行 | フェード合成 | 800B |
 | 200画素のRGB565行 | 行順の取り出し | 400B |
 | 200×240のRGB565バッファ | 列順に整形した転送データ | 96,000B |
 | 合計 | 上記の画素バッファのみ | 217,200B（約212KiB） |
+
+合成スプライトの96,000Bは実機の2MB QSPI PSRAMに確保する。それ以外の画素バッファ、とくに列順DMA転送バッファは内部RAMに置く。USB受信キューとJSON行バッファも内部RAMを使うため、スプライトまで内部RAMに置くと連続領域を確保できず、`Sprite allocation failed`となる。
 
 ### ソフトウェアTE
 
@@ -197,7 +199,49 @@ flowchart TD
 
 ## サーバーとの通信
 
-実装後追記する
+[server_link.hpp](../../src/player/server_link.hpp)でUSB CDC上のJSON Linesを処理する。通常ビルドではデモの自動補充を無効にし、`config`で自ノードIDを設定し、`reset`と`push`で表示キューを更新する。オフラインデモは`player.ino`の`PLAYER_PACKET_DEMO`を定義すると利用できる。
+
+通信処理はゲーム側の`loop()`で1回につき最大4096バイトを読み、改行までバッファへ蓄積する。Hardware CDCの受信キューにも最大1行分を確保し、一括更新中の取りこぼしを防ぐ。JSONの分割受信と複数行の連続受信に対応し、行の途中で1秒間受信が止まると再同期を要求する。起動時は`hello`を送り、設定・同期が完了するまで1秒間隔で`hello`または`resync`を再送する。`reset`は全件検証後に適用し、アニメーションも初期化する。
+
+ボタン押下時は先頭パケットの`send`要求を送る。応答待ち中は追加押下を無視し、`result.ok`が真の場合だけ先頭を削除する。3秒の応答タイムアウトと不正な入力は再同期へ移行する。上限値と応答順序の前提は[通信仕様](../spec.md)を参照。
+
+Hardware CDCの接続判定が短時間だけ偽になる場合があるため、100ms連続で未接続となった場合に設定・同期状態を破棄する。
+
+### ビルド
+
+LovyanGFXに加えてArduinoJson 7を使用する。ESP32-S3のHardware CDC、CDC On Boot、QSPI PSRAM（`PSRAM=enabled`）を有効にし、プロトコルへデバッグログを混ぜないようにする。設定は[EspressifのUSB CDC資料](https://docs.espressif.com/projects/arduino-esp32/en/latest/tutorials/cdc_dfu_flash.html)と[PSRAM設定](https://docs.espressif.com/projects/arduino-esp32/en/latest/guides/tools_menu.html#psram)も参照。
+
+```sh
+nix develop -c arduino-cli lib install ArduinoJson@7.4.3
+nix develop -c arduino-cli compile \
+  --fqbn esp32:esp32:esp32s3:USBMode=hwcdc,CDCOnBoot=cdc,DebugLevel=none,PSRAM=enabled \
+  --build-path /tmp/d4-player-cdc-build src/player
+```
+
+### テスト
+
+[server_link.cpp](../../tests/server_link.cpp)は実際の通信処理をホスト上で動かす。ArduinoJsonのインストール先が異なる場合はインクルードパスを変更する。
+
+```sh
+nix shell nixpkgs#gcc -c bash -c '
+  c++ -std=c++17 -Wall -Wextra -Werror -fsanitize=address,undefined \
+    -I "$HOME/Arduino/libraries/ArduinoJson/src" \
+    tests/server_link.cpp -o /tmp/d4-server-link-test &&
+  /tmp/d4-server-link-test
+'
+```
+
+[player_cdc.py](../../tests/player_cdc.py)はLinuxから実機へJSONを送る、ゲームサーバーの代わりのテストプログラム。Python標準ライブラリだけを使用する。シリアルモニターを閉じ、デバイスへの読み書き権限を持つユーザーで実行する。
+
+```sh
+scp tests/player_cdc.py rock3b.home.arpa:/tmp/player_cdc.py
+ssh rock3b.home.arpa \
+  'nix shell nixpkgs#python3 -c python3 -u /tmp/player_cdc.py --port /dev/ttyACM0 --idle-seconds 30'
+```
+
+`--buttons`を追加すると、通常の自動テストの後、左端のボタンを1秒以上間隔を空けて4回押すことで、失敗応答での保持・成功応答での削除・応答タイムアウトを検証する。自動テストだけの場合は物理スイッチからの`send`を検証しない。終了時はノードAに3件を表示した状態となる。
+
+2026-10-21、`rock3b.home.arpa`の`/dev/ttyACM0`に接続したESP32-S3で自動テストを実施し、スプライト確保と初回描画の完了後に通信を開始すること、1024件の一括更新、異常入力からの再同期、30秒待機後のキャッシュ保持を確認した。`send`と成功・失敗応答の処理はホストテストで確認済み。物理ボタンを使う実機テストは未実施。
 
 ## 参考文献
 

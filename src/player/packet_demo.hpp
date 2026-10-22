@@ -13,9 +13,8 @@ public:
     return true;
   }
 
-  void update(PacketQueue& queue, NodeId selfId, uint32_t nowMs, bool displayReady) {
+  void update(PacketQueue& queue, NodeId selfId, uint32_t nowMs) {
     if (!started_) {
-      if (!displayReady) return;
       lastPushMs_ = nowMs;
       started_ = true;
     }

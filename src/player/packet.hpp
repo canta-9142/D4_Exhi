@@ -20,6 +20,13 @@ private:
   uint64_t pushCount_ = 0;
 
 public:
+  static constexpr size_t capacity() { return capacity_; }
+
+  void clear() {
+    head_ = 0;
+    count_ = 0;
+  }
+
   bool push(const Packet& packet) {
     if (count_ == capacity_) return false;
 

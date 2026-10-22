@@ -13,7 +13,7 @@ uint64_t drawTotalUs = 0;
 uint64_t transferTotalUs = 0;
 
 void setup() {
-  lcd_init();
+  if (!lcd_init()) return;
   startup_animation();
 
   lcd.setTextColor(TFT_WHITE, TFT_BLACK);

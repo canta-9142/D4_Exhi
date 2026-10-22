@@ -80,21 +80,23 @@ public:
 Display lcd;
 lgfx::LGFX_Sprite sprite(&lcd);
 
-void lcd_init() {
+bool lcd_init() {
   lcd.init();
   lcd.setRotation(1);  // 横向き480×320
   lcd.setColorDepth(16);
   lcd.fillScreen(TFT_BLACK);
 
   sprite.setColorDepth(16);
-  sprite.setPsram(false);  // 96,000バイトのスプライトを内蔵RAMに確保
+  // 合成用の96KBはPSRAMに置き、内部RAMはDMA転送・USB受信へ残す。
+  sprite.setPsram(true);
   if (!sprite.createSprite(ANIMATION_WIDTH, ANIMATION_HEIGHT)) {
     lcd.fillRect(0, 240, 480, 80, TFT_BLACK);
     lcd.drawString("Sprite allocation failed", 8, 244);
-    return;
+    return false;
   }
   sprite.setTextColor(TFT_WHITE, TFT_BLACK);
   sprite.setTextSize(2);
+  return true;
 }
 
 #endif // DISPLAY_HPP_

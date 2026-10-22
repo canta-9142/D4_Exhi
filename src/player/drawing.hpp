@@ -136,7 +136,10 @@ void draw_info(int score, int remaining) {
 
 void display_task(void* argument) {
   const auto& context = *static_cast<const DrawingTaskContext*>(argument);
-  lcd_init();
+  if (!lcd_init()) {
+    vTaskDelete(nullptr);
+    return;
+  }
   startup_animation();
 
   lcd.drawLine(360,   0, 360, 240, TFT_WHITE);
@@ -153,8 +156,8 @@ void display_task(void* argument) {
   lcd.drawChar('1', 51, 188);
 
   packetRenderer.begin();
-  xTaskNotifyGive(context.readyTask);
 
+  bool readyNotified = false;
   NodeId previousSelfId = NodeId::None;
   uint8_t previousPressedMask = 0;
   for (;;) {
@@ -171,6 +174,10 @@ void display_task(void* argument) {
     previousPressedMask = snapshot.pressedMask;
     draw_info(snapshot.score, snapshot.remaining);
     packetRenderer.draw(snapshot.cards);
+    if (!readyNotified) {
+      xTaskNotifyGive(context.readyTask);
+      readyNotified = true;
+    }
     vTaskDelay(1);
   }
 }
