@@ -23,7 +23,7 @@
             ];
             
             shellHook = ''
-              export GOPATH="/home/jinji/Projects/D4_Exhi/.go"
+              export GOPATH="$(git rev-parse --show-toplevel 2>/dev/null || pwd)/.go"
               export PATH="$GOPATH/bin:$PATH"
               echo "GOPATH: $GOPATH"
               arduino-cli version
