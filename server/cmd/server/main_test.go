@@ -1,0 +1,33 @@
+package main
+
+import (
+	"bytes"
+	"context"
+	"strings"
+	"testing"
+)
+
+func TestRun(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		args      []string
+		wantError bool
+	}{
+		{"default", nil, false}, {"debug", []string{"-log-level", "debug"}, false},
+		{"help", []string{"-h"}, false}, {"invalid level", []string{"-log-level", "invalid"}, true},
+		{"unknown option", []string{"-unknown"}, true}, {"positional argument", []string{"extra"}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+			var output bytes.Buffer
+			err := run(ctx, tc.args, &output)
+			if (err != nil) != tc.wantError {
+				t.Fatalf("run returned %v", err)
+			}
+			if tc.name == "default" && (!strings.Contains(output.String(), "server starting") || !strings.Contains(output.String(), "server stopped")) {
+				t.Fatal("lifecycle logs missing")
+			}
+		})
+	}
+}
