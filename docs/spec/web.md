@@ -102,7 +102,7 @@ JSONはUTF-8とし、APIが生成する応答のContent-Typeは`application/json
 | nodeId | プレイヤーノードID |
 | mode | `manual`または`auto` |
 | ready | サーバーが受理済みの準備完了状態。autoでは常にfalse |
-| fifoLength | 正本FIFOの件数を表す非負整数。確認表示用ダミーは含めない |
+| fifoLength | 正本FIFOの件数を表す非負整数。確認表示中も正本の件数を返す |
 | score | 現在スコアの整数。0〜2147483647 |
 | rankingEligible | Preparingでは未確定を表すnull。Playing・Finishedでは当該ゲームのランキング資格を表す真偽値 |
 
