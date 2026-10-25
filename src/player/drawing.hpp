@@ -6,18 +6,24 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/queue.h>
 #include <freertos/task.h>
+#include <cstring>
 #include <type_traits>
 #include "node_config.hpp"
 #include "packet_animation.hpp"
 #include "display.hpp"
 #include "packet_renderer.hpp"
+#include "game_phase.hpp"
+#include "player_status.hpp"
 
 struct DisplaySnapshot {
   PacketAnimation::Snapshot cards;
-  int score;
-  int remaining;
+  PlayerStatus status;
   NodeId selfId;
   uint8_t pressedMask;
+  GamePhase phase;
+  ControlMode mode;
+  bool synced;
+  bool awaitingStatus;
 };
 
 static_assert(std::is_trivially_copyable<DisplaySnapshot>::value, "FreeRTOS queues copy snapshots as bytes");
@@ -73,7 +79,7 @@ void draw_button(int x, int y, NodeId id, bool pressed = false) {
   const auto& visual = nodeVisuals[static_cast<int>(id)];
 
   uint16_t back_color = pressed ? TFT_BLACK : visual.color;
-  uint16_t fore_color = pressed ? visual.color : TFT_BLACK;
+  uint16_t fore_color = id == NodeId::None ? TFT_WHITE : pressed ? visual.color : TFT_BLACK;
 
   lcd.fillRect(x + 1, y + 1, w, h, back_color);
   lcd.setTextColor(fore_color, back_color);
@@ -87,25 +93,71 @@ void draw_neighbor_buttons(NodeId id, uint8_t pressedMask, uint8_t changedMask =
   for (int i = 0; i < 4; ++i) {
     if (!(changedMask & (1u << i))) continue;
     const NodeId neighbor = layout.neighbors[i];
-    if (neighbor == NodeId::None) continue;
-    draw_button(i * 120, 240, neighbor, pressedMask & (1u << i));
+    if (neighbor == NodeId::None) {
+      lcd.fillRect(i * 120 + 1, 241, 119, 79, TFT_BLACK);
+    } else {
+      draw_button(i * 120, 240, neighbor, pressedMask & (1u << i));
+    }
   }
 }
 
-void draw_info_number(int value, int y) {
-  char number[5];
-  if (snprintf(number, sizeof(number), "%4d", value) > 4) {
-    strcpy(number, "####");
+const char* phase_label(GamePhase phase) {
+  switch (phase) {
+    case GamePhase::Preparing: return "PREPARING";
+    case GamePhase::Playing: return "PLAYING";
+    case GamePhase::Finished: return "FINISHED";
+    case GamePhase::Unknown: return "WAITING";
   }
-  lcd.drawString(number, 366, y);
+  return "WAITING";
 }
 
-void draw_info(int score, int remaining) {
+const char* connection_label(const DisplaySnapshot& snapshot) {
+  if (snapshot.selfId == NodeId::None) return "CONNECTING";
+  if (!snapshot.synced) return "SYNCING";
+  if (snapshot.phase == GamePhase::Unknown) return "WAIT PHASE";
+  if (snapshot.awaitingStatus) return "WAIT STATUS";
+  return snapshot.mode == ControlMode::Manual ? "MANUAL" : "AUTO";
+}
+
+void draw_game_status(const DisplaySnapshot& snapshot) {
+  static const char* previousLabel = nullptr;
+  static const char* previousStatus = nullptr;
+  const char* label = phase_label(snapshot.phase);
+  const char* status = connection_label(snapshot);
+  if (previousLabel && previousStatus && std::strcmp(label, previousLabel) == 0 &&
+      std::strcmp(status, previousStatus) == 0) return;
+
+  lcd.startWrite();
+  lcd.fillRect(361, 81, 118, 36, TFT_BLACK);
+  lcd.setFont(&fonts::Font0);
+  lcd.setTextColor(TFT_WHITE, TFT_BLACK);
+  lcd.setTextDatum(lgfx::textdatum_t::top_left);
+  lcd.setTextPadding(0);
+  lcd.setTextSize(2);
+  lcd.drawString(label, 366, 84);
+  lcd.setTextSize(1);
+  lcd.drawString(status, 366, 105);
+  lcd.endWrite();
+  previousLabel = label;
+  previousStatus = status;
+}
+
+void draw_info_number(int32_t value, bool known, int y) {
+  char number[12] = "----";
+  if (known) snprintf(number, sizeof(number), "%ld", static_cast<long>(value));
+  lcd.fillRect(366, y, 72, 24, TFT_BLACK);
+  int size = 3;
+  lcd.setTextSize(size);
+  while (size > 1 && lcd.textWidth(number) > 72) lcd.setTextSize(--size);
+  lcd.drawString(number, 438 - lcd.textWidth(number), y + (24 - 8 * size) / 2);
+}
+
+void draw_info(const PlayerStatus& status) {
   static bool drawn = false;
-  static int previousScore = 0;
-  static int previousRemaining = 0;
+  static PlayerStatus previous{};
 
-  if (drawn && score == previousScore && remaining == previousRemaining) return;
+  if (drawn && status.score == previous.score && status.remaining == previous.remaining &&
+      status.ready == previous.ready && status.known == previous.known) return;
 
   lcd.setFont(&fonts::Font0);
   lcd.setTextSize(3);
@@ -120,17 +172,23 @@ void draw_info(int score, int remaining) {
     lcd.drawString("s", 438, 174);
   }
 
-  if (!drawn || score != previousScore) {
-    draw_info_number(score, 121);
-    previousScore = score;
+  if (!drawn || status.score != previous.score || status.known != previous.known) {
+    draw_info_number(status.score, status.known, 121);
   }
 
-  if (!drawn || remaining != previousRemaining) {
-    draw_info_number(remaining, 174);
-    previousRemaining = remaining;
+  if (!drawn || status.remaining != previous.remaining || status.known != previous.known) {
+    draw_info_number(status.remaining, status.known, 174);
+  }
+  if (!drawn || status.ready != previous.ready || status.known != previous.known) {
+    const char* label = "READY: --";
+    if (status.known) label = status.ready ? "READY" : "NOT READY";
+    lcd.fillRect(366, 151, 108, 12, TFT_BLACK);
+    lcd.setTextSize(1);
+    lcd.drawString(label, 366, 151);
   }
 
   lcd.endWrite();
+  previous = status;
   drawn = true;
 }
 
@@ -158,21 +216,24 @@ void display_task(void* argument) {
   packetRenderer.begin();
 
   bool readyNotified = false;
+  bool buttonsDrawn = false;
   NodeId previousSelfId = NodeId::None;
   uint8_t previousPressedMask = 0;
   for (;;) {
     DisplaySnapshot snapshot;
     if (xQueueReceive(context.snapshots, &snapshot, portMAX_DELAY) != pdTRUE) continue;
-    if (snapshot.selfId != previousSelfId) {
+    if (!buttonsDrawn || snapshot.selfId != previousSelfId) {
       draw_button(360, 0, snapshot.selfId);
       draw_neighbor_buttons(snapshot.selfId, snapshot.pressedMask);
       previousSelfId = snapshot.selfId;
+      buttonsDrawn = true;
     } else if (snapshot.pressedMask != previousPressedMask) {
       draw_neighbor_buttons(snapshot.selfId, snapshot.pressedMask,
                             snapshot.pressedMask ^ previousPressedMask);
     }
     previousPressedMask = snapshot.pressedMask;
-    draw_info(snapshot.score, snapshot.remaining);
+    draw_game_status(snapshot);
+    draw_info(snapshot.status);
     packetRenderer.draw(snapshot.cards);
     if (!readyNotified) {
       xTaskNotifyGive(context.readyTask);

@@ -19,9 +19,6 @@
 #include "packet_animation.hpp"
 #include "drawing.hpp"
 
-int score = 0;
-int remaining = 0;
-
 PacketQueue packetQueue;
 PacketAnimation packetAnimation;
 #ifdef PLAYER_PACKET_DEMO
@@ -41,7 +38,21 @@ constexpr uint32_t DISPLAY_FRAME_MS = 16;
 constexpr BaseType_t DISPLAY_CORE = 1 - ARDUINO_RUNNING_CORE;
 
 void publish_display_snapshot() {
-  const DisplaySnapshot snapshot{packetAnimation.snapshot(), score, remaining, selfId, pswPressedMask};
+#ifdef PLAYER_PACKET_DEMO
+  const GamePhase phase = GamePhase::Playing;
+  const bool synced = true;
+  const ControlMode mode = ControlMode::Manual;
+  const PlayerStatus status{0, 0, false, true};
+  const bool awaitingStatus = false;
+#else
+  const GamePhase phase = serverLink.phase();
+  const bool synced = serverLink.fifo_synced();
+  const ControlMode mode = serverLink.mode();
+  const PlayerStatus status = serverLink.status();
+  const bool awaitingStatus = serverLink.awaiting_status();
+#endif
+  const DisplaySnapshot snapshot{packetAnimation.snapshot(), status, selfId,
+                                 pswPressedMask, phase, mode, synced, awaitingStatus};
   xQueueOverwrite(displayQueue, &snapshot);
 }
 

@@ -6,6 +6,8 @@
 #include <cstdio>
 #include <cstring>
 #include "packet.hpp"
+#include "game_phase.hpp"
+#include "player_status.hpp"
 
 // PacketQueueと同じくゲーム側のloopだけから呼び出す。
 class ServerLink {
@@ -13,10 +15,11 @@ public:
   static constexpr size_t MAX_LINE_BYTES = 32768;
   static constexpr uint32_t RETRY_MS = 1000;
   static constexpr uint32_t SEND_TIMEOUT_MS = 3000;
+  static constexpr uint32_t STATUS_TIMEOUT_MS = 3000;
   static constexpr uint32_t RECEIVE_TIMEOUT_MS = 1000;
   static constexpr uint32_t DISCONNECT_GRACE_MS = 100;
 
-  // 戻り値はRESETの適用有無。描画アニメーションも同時に初期化する。
+  // FIFOの置換・設定の無効化でtrueを返し、描画アニメーションも初期化する。
   template<class Port>
   bool poll(Port& port, const char* uid, PacketQueue& queue, NodeId& selfId, uint32_t nowMs) {
     if (!port) {
@@ -26,92 +29,174 @@ public:
       }
       // Hardware CDCの接続判定は短時間falseになることがある。
       if (nowMs - disconnectedMs_ >= DISCONNECT_GRACE_MS) {
-        state_ = State::AwaitConfig;
-        pending_ = false;
-        resyncNeeded_ = true;
+        const bool changed = state_ != State::AwaitConfig || queue.size() != 0;
+        forget_config(queue, selfId);
         length_ = 0;
         dropping_ = false;
+        txLength_ = 0;
+        return changed;
       }
       return false;
     }
     disconnectSeen_ = false;
+    flush_tx(port);
 
     bool reset = false;
+    // 上限超過による破棄は、受信停止があってもLFまたは切断まで継続する。
+    if (length_ && nowMs - receivedMs_ >= RECEIVE_TIMEOUT_MS) {
+      length_ = 0;
+      reset = forget_config(queue, selfId);
+    }
     // 大きなRESETを受信中もボタンと描画スナップショットの更新へ戻る。
     for (size_t budget = 4096; budget && port.available(); --budget) {
       const int value = port.read();
       if (value < 0) break;
       receivedMs_ = nowMs;
       if (value == '\n') {
-        if (dropping_) {
-          request_resync();
-        } else if (length_) {
+        if (length_ && line_[length_ - 1] == '\r') --length_;
+        if (!dropping_ && length_) {
           reset |= receive(queue, selfId);
         }
         length_ = 0;
         dropping_ = false;
+        if (state_ == State::AwaitConfig && resyncNeeded_) handshake(port, uid, nowMs);
       } else if (!dropping_) {
-        if (length_ == MAX_LINE_BYTES) {
+        // 上限ちょうどの行に続くCRも受け付ける（終端は上限に含めない）。
+        if (length_ == sizeof(line_) || (length_ == MAX_LINE_BYTES && value != '\r')) {
           dropping_ = true;
+          length_ = 0;
+          reset |= forget_config(queue, selfId);
         } else {
           line_[length_++] = static_cast<char>(value);
         }
       }
     }
 
-    if ((length_ || dropping_) && nowMs - receivedMs_ >= RECEIVE_TIMEOUT_MS) {
-      length_ = 0;
-      dropping_ = false;
-      request_resync();
+    if (fifo_synced() && phase_ != GamePhase::Unknown && statusSync_ == StatusSync::AwaitStatus) {
+      if (!statusTimerStarted_) {
+        statusTimerStarted_ = true;
+        statusStartedMs_ = nowMs;
+      } else if (nowMs - statusStartedMs_ >= STATUS_TIMEOUT_MS) {
+        request_resync();
+      }
     }
     if (pending_ && nowMs - sentMs_ >= SEND_TIMEOUT_MS) request_resync();
-    if (!ready() && (resyncNeeded_ || nowMs - handshakeMs_ >= RETRY_MS)) {
-      char message[96];
-      if (state_ == State::AwaitConfig) {
-        std::snprintf(message, sizeof(message), "{\"type\":\"hello\",\"data\":{\"uid\":\"%s\"}}\n", uid);
-      } else {
-        std::snprintf(message, sizeof(message), "{\"type\":\"resync\",\"data\":{}}\n");
-      }
-      if (write_line(port, message)) {
-        handshakeMs_ = nowMs;
-        resyncNeeded_ = false;
-      }
+    if ((!fifo_synced() || phase_ == GamePhase::Unknown) &&
+        (resyncNeeded_ || nowMs - handshakeMs_ >= RETRY_MS)) {
+      handshake(port, uid, nowMs);
     }
     return reset;
   }
 
   template<class Port>
   bool send(Port& port, const PacketQueue& queue, NodeId to, uint32_t nowMs) {
-    if (!ready() || pending_ || !queue.size()) return false;
+    if (!port || !fifo_synced() || mode_ != ControlMode::Manual ||
+        phase_ != GamePhase::Playing || pending_ || txLength_ || !queue.size() ||
+        nextRid_ > UINT32_MAX) return false;
     const unsigned target = static_cast<unsigned>(to);
     if (target < 1 || target > static_cast<unsigned>(NodeId::B3)) return false;
-    char message[96];
-    std::snprintf(message, sizeof(message), "{\"type\":\"send\",\"data\":{\"pid\":%u,\"to\":%u}}\n",
-                  static_cast<unsigned>(queue.at(0)->id), target);
+    char message[160];
+    const uint32_t rid = static_cast<uint32_t>(nextRid_);
+    std::snprintf(message, sizeof(message),
+                  "{\"type\":\"send\",\"data\":{\"sync\":\"%s\",\"rid\":%lu,\"pid\":%u,\"to\":%u}}\n",
+                  sync_, static_cast<unsigned long>(rid), static_cast<unsigned>(queue.at(0)->id), target);
+    // 書込失敗時も番号を再利用しない。欠番はプロトコルで許可されている。
+    ++nextRid_;
     if (!write_line(port, message)) return false;
     pending_ = true;
+    pendingRid_ = rid;
     pendingPid_ = queue.at(0)->id;
     sentMs_ = nowMs;
     return true;
   }
 
-  bool ready() const { return state_ == State::Ready; }
+  bool fifo_synced() const { return state_ == State::Synced; }
   bool pending() const { return pending_; }
+  GamePhase phase() const { return phase_; }
+  ControlMode mode() const { return mode_; }
+  const PlayerStatus& status() const { return status_; }
+  bool awaiting_status() const { return statusSync_ != StatusSync::Complete; }
 
 private:
-  enum class State : uint8_t { AwaitConfig, AwaitReset, Ready };
+  enum class State : uint8_t { AwaitConfig, AwaitReset, Synced };
+  enum class StatusSync : uint8_t { AwaitReset, AwaitStatus, Complete };
 
   template<class Port>
-  static bool write_line(Port& port, const char* message) {
+  void flush_tx(Port& port) {
+    if (!txLength_) return;
+    const int available = port.availableForWrite();
+    if (available <= 0) return;
+    const size_t count = std::min(txLength_, static_cast<size_t>(available));
+    const size_t written = port.write(reinterpret_cast<const uint8_t*>(txRemaining_), count);
+    txLength_ -= written;
+    std::memmove(txRemaining_, txRemaining_ + written, txLength_);
+  }
+
+  template<class Port>
+  bool write_line(Port& port, const char* message) {
     const size_t size = std::strlen(message);
-    if (port.availableForWrite() < static_cast<int>(size)) return false;
-    return port.write(reinterpret_cast<const uint8_t*>(message), size) == size;
+    if (txLength_ || size > sizeof(txRemaining_) ||
+        port.availableForWrite() < static_cast<int>(size)) return false;
+    const size_t written = port.write(reinterpret_cast<const uint8_t*>(message), size);
+    if (!written) return false;
+    // 途中まで送れた行は、設定変更や再同期があっても次の行より先に完送する。
+    txLength_ = size - written;
+    std::memcpy(txRemaining_, message + written, txLength_);
+    return true;
+  }
+
+  template<class Port>
+  void handshake(Port& port, const char* uid, uint32_t nowMs) {
+    char message[96];
+    const bool hello = state_ == State::AwaitConfig;
+    if (hello) {
+      std::snprintf(message, sizeof(message), "{\"type\":\"hello\",\"data\":{\"uid\":\"%s\"}}\n", uid);
+    } else {
+      std::snprintf(message, sizeof(message), "{\"type\":\"resync\",\"data\":{}}\n");
+    }
+    if (write_line(port, message)) {
+      if (!hello) request_resync();
+      handshakeMs_ = nowMs;
+      resyncNeeded_ = false;
+    }
   }
 
   void request_resync() {
     if (state_ != State::AwaitConfig) state_ = State::AwaitReset;
     pending_ = false;
     resyncNeeded_ = true;
+    statusSync_ = StatusSync::AwaitReset;
+    statusTimerStarted_ = false;
+  }
+
+  bool forget_config(PacketQueue& queue, NodeId& selfId) {
+    queue.clear();
+    selfId = NodeId::None;
+    state_ = State::AwaitConfig;
+    phase_ = GamePhase::Unknown;
+    mode_ = ControlMode::Auto;
+    status_ = {};
+    sync_[0] = '\0';
+    request_resync();
+    return true;
+  }
+
+  static bool valid_sync(JsonVariantConst value) {
+    if (!value.is<const char*>() || value.as<JsonString>().size() != 32) return false;
+    const char* sync = value.as<const char*>();
+    for (size_t i = 0; i < 32; ++i) {
+      if (!((sync[i] >= '0' && sync[i] <= '9') || (sync[i] >= 'A' && sync[i] <= 'F'))) return false;
+    }
+    return true;
+  }
+
+  static GamePhase parse_phase(JsonVariantConst value) {
+    if (!value.is<const char*>()) return GamePhase::Unknown;
+    const JsonString phase = value.as<JsonString>();
+    if (phase == "Preparing") return GamePhase::Preparing;
+    if (phase == "Playing") return GamePhase::Playing;
+    if (phase == "Finished") return GamePhase::Finished;
+    return GamePhase::Unknown;
   }
 
   static bool valid_packet(JsonVariantConst value) {
@@ -142,39 +227,219 @@ private:
     return true;
   }
 
+  // ArduinoJsonはオブジェクト終端で解析を止めるため、残りが空白だけかも確認する。
+  struct LineReader {
+    const char* data;
+    size_t size;
+    size_t position = 0;
+    int read() { return position < size ? static_cast<unsigned char>(data[position++]) : -1; }
+    size_t readBytes(char* buffer, size_t count) {
+      count = std::min(count, size - position);
+      std::memcpy(buffer, data + position, count);
+      position += count;
+      return count;
+    }
+    bool finished() {
+      for (int ch; (ch = read()) >= 0;) {
+        if (ch != ' ' && ch != '\t' && ch != '\r' && ch != '\n') return false;
+      }
+      return true;
+    }
+  };
+
+  static bool valid_utf8(const char* data, size_t size) {
+    for (size_t i = 0; i < size;) {
+      const uint8_t lead = static_cast<uint8_t>(data[i++]);
+      if (lead < 0x80) continue;
+      size_t remaining;
+      uint32_t codepoint;
+      uint32_t minimum;
+      if (lead >= 0xC2 && lead <= 0xDF) {
+        remaining = 1;
+        codepoint = lead & 0x1F;
+        minimum = 0x80;
+      } else if (lead >= 0xE0 && lead <= 0xEF) {
+        remaining = 2;
+        codepoint = lead & 0x0F;
+        minimum = 0x800;
+      } else if (lead >= 0xF0 && lead <= 0xF4) {
+        remaining = 3;
+        codepoint = lead & 0x07;
+        minimum = 0x10000;
+      } else {
+        return false;
+      }
+      if (size - i < remaining) return false;
+      for (size_t n = 0; n < remaining; ++n) {
+        const uint8_t next = static_cast<uint8_t>(data[i++]);
+        if ((next & 0xC0) != 0x80) return false;
+        codepoint = (codepoint << 6) | (next & 0x3F);
+      }
+      if (codepoint < minimum || codepoint > 0x10FFFF ||
+          (codepoint >= 0xD800 && codepoint <= 0xDFFF)) return false;
+    }
+    return true;
+  }
+
+  // ArduinoJsonが許す引用符なしのキー・単引用符・拡張数値などを除く。
+  // オブジェクトや配列の構造検証と値の復号はArduinoJsonに任せる。
+  static bool valid_json_tokens(const char* data, size_t size) {
+    const auto digit = [](char ch) { return ch >= '0' && ch <= '9'; };
+    bool quoted = false;
+    for (size_t i = 0; i < size;) {
+      const char ch = data[i++];
+      if (ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n') continue;
+      if (ch == ':') {
+        if (!quoted) return false;
+        quoted = false;
+        continue;
+      }
+      quoted = false;
+      if (ch == '{' || ch == '}' || ch == '[' || ch == ']' || ch == ',') continue;
+      if (ch == '"') {
+        bool closed = false;
+        bool pendingHighSurrogate = false;
+        while (i < size) {
+          const unsigned char value = data[i++];
+          // 上位サロゲートの直後には下位サロゲートの\uXXXXだけを許可する。
+          if (pendingHighSurrogate && (value != '\\' || i == size || data[i] != 'u')) return false;
+          if (value == '"') { closed = true; break; }
+          if (value < 0x20) return false;
+          if (value != '\\') continue;
+          if (i == size) return false;
+          const char escape = data[i++];
+          if (escape == 'u') {
+            uint16_t codeunit = 0;
+            for (int n = 0; n < 4; ++n) {
+              if (i == size) return false;
+              const char hex = data[i++];
+              unsigned digitValue;
+              if (digit(hex)) digitValue = hex - '0';
+              else if (hex >= 'a' && hex <= 'f') digitValue = hex - 'a' + 10;
+              else if (hex >= 'A' && hex <= 'F') digitValue = hex - 'A' + 10;
+              else return false;
+              codeunit = static_cast<uint16_t>((codeunit << 4) | digitValue);
+            }
+            if (pendingHighSurrogate) {
+              if (codeunit < 0xDC00 || codeunit > 0xDFFF) return false;
+              pendingHighSurrogate = false;
+            } else if (codeunit >= 0xD800 && codeunit <= 0xDBFF) {
+              pendingHighSurrogate = true;
+            } else if (codeunit >= 0xDC00 && codeunit <= 0xDFFF) {
+              return false;
+            }
+          } else if (!std::strchr("\"\\/bfnrt", escape) || !escape) {
+            return false;
+          }
+        }
+        if (!closed) return false;
+        quoted = true;
+        continue;
+      }
+      if (ch == '-' || digit(ch)) {
+        --i;
+        if (data[i] == '-') ++i;
+        if (i == size || !digit(data[i])) return false;
+        if (data[i++] != '0') while (i < size && digit(data[i])) ++i;
+        if (i < size && data[i] == '.') {
+          ++i;
+          if (i == size || !digit(data[i])) return false;
+          while (i < size && digit(data[i])) ++i;
+        }
+        if (i < size && (data[i] == 'e' || data[i] == 'E')) {
+          ++i;
+          if (i < size && (data[i] == '+' || data[i] == '-')) ++i;
+          if (i == size || !digit(data[i])) return false;
+          while (i < size && digit(data[i])) ++i;
+        }
+      } else {
+        const char* literal = ch == 't' ? "true" : ch == 'f' ? "false" : ch == 'n' ? "null" : nullptr;
+        if (!literal) return false;
+        --i;
+        const size_t count = std::strlen(literal);
+        if (size - i < count || std::memcmp(data + i, literal, count)) return false;
+        i += count;
+      }
+      // 隣接するトークン（01、1.e2、truexなど）を数値やキーとして解釈させない。
+      if (i < size && !std::strchr(" \t\r\n,]}:", data[i])) return false;
+      if (i < size && data[i] == '\0') return false;
+    }
+    return true;
+  }
+
   bool receive(PacketQueue& queue, NodeId& selfId) {
+    if (!valid_utf8(line_, length_) || !valid_json_tokens(line_, length_)) {
+      return forget_config(queue, selfId);
+    }
     JsonDocument message;
-    const auto error = deserializeJson(message, line_, length_, DeserializationOption::NestingLimit(4));
-    if (error || !message.is<JsonObject>() || !message["type"].is<const char*>() ||
+    LineReader reader{line_, length_};
+    const auto error = deserializeJson(message, reader, DeserializationOption::NestingLimit(4));
+    if (error || !reader.finished()) return forget_config(queue, selfId);
+    const bool isConfig = message["type"].is<const char*>() && message["type"].as<JsonString>() == "config";
+    if (!message.is<JsonObject>() || !message["type"].is<const char*>() ||
         !message["data"].is<JsonObject>()) {
+      if (isConfig) return forget_config(queue, selfId);
       request_resync();
       return false;
     }
     const char* type = message["type"];
+    if (message["type"].as<JsonString>().size() != std::strlen(type)) {
+      request_resync();
+      return false;
+    }
     const JsonObjectConst data = message["data"];
 
-    if (std::strcmp(type, "config") == 0) {
+    if (std::strcmp(type, "identify") == 0) {
+      return forget_config(queue, selfId);
+    } else if (std::strcmp(type, "config") == 0) {
       if (!data["node"].is<uint8_t>() || data["node"].as<unsigned>() < 1 ||
-          data["node"].as<unsigned>() > 8) {
-        request_resync();
-        return false;
+          data["node"].as<unsigned>() > 8 || !data["mode"].is<const char*>()) {
+        return forget_config(queue, selfId);
       }
+      const JsonString mode = data["mode"].as<JsonString>();
+      if (mode != "manual" && mode != "auto") return forget_config(queue, selfId);
+      forget_config(queue, selfId);
       selfId = static_cast<NodeId>(data["node"].as<uint8_t>());
+      mode_ = mode == "manual" ? ControlMode::Manual : ControlMode::Auto;
       state_ = State::AwaitReset;
-      request_resync();
-    } else if (std::strcmp(type, "reset") == 0 && state_ != State::AwaitConfig) {
-      if (!apply_reset(data["packets"].as<JsonArrayConst>(), queue)) {
+      return true;
+    } else if (std::strcmp(type, "phase") == 0) {
+      const GamePhase phase = parse_phase(data["phase"]);
+      if (phase == GamePhase::Unknown) {
+        request_resync();
+      } else if (state_ != State::AwaitConfig) {
+        phase_ = phase;
+      }
+    } else if (std::strcmp(type, "status") == 0) {
+      if (!data["score"].is<int32_t>() || data["score"].as<int32_t>() < 0 ||
+          !data["remaining"].is<uint8_t>() || data["remaining"].as<unsigned>() > 120 ||
+          !data["ready"].is<bool>()) {
+        request_resync();
+      } else if (state_ != State::AwaitConfig) {
+        status_ = {data["score"].as<int32_t>(), data["remaining"].as<uint8_t>(),
+                   data["ready"].as<bool>(), true};
+        if (statusSync_ == StatusSync::AwaitStatus) {
+          statusSync_ = StatusSync::Complete;
+          statusTimerStarted_ = false;
+        }
+      }
+    } else if (std::strcmp(type, "reset") == 0) {
+      if (state_ == State::AwaitConfig) return false;
+      if (!valid_sync(data["sync"]) || !apply_reset(data["packets"].as<JsonArrayConst>(), queue)) {
         request_resync();
         return false;
       }
-      state_ = State::Ready;
+      std::memcpy(sync_, data["sync"].as<const char*>(), sizeof(sync_));
+      if (statusSync_ == StatusSync::AwaitReset) statusSync_ = StatusSync::AwaitStatus;
+      state_ = State::Synced;
       pending_ = resyncNeeded_ = false;
       return true;
-    } else if (std::strcmp(type, "push") == 0 && ready()) {
+    } else if (std::strcmp(type, "push") == 0) {
       if (!valid_packet(data)) {
         request_resync();
         return false;
       }
+      if (!fifo_synced()) return false;
       const Packet packet = packet_from(data);
       for (size_t i = 0; i < queue.size(); ++i) {
         if (queue.at(i)->id == packet.id) {
@@ -183,31 +448,45 @@ private:
         }
       }
       if (!queue.push(packet)) request_resync();
-    } else if (std::strcmp(type, "result") == 0 && ready()) {
-      if (!data["ok"].is<bool>()) {
+    } else if (std::strcmp(type, "result") == 0) {
+      if (!valid_sync(data["sync"]) || !data["rid"].is<uint32_t>() || !data["ok"].is<bool>()) {
         request_resync();
-      } else if (pending_) {
-        if (!queue.size() || queue.at(0)->id != pendingPid_) {
-          request_resync();
-        } else {
-          if (data["ok"].as<bool>()) queue.pop();
-          pending_ = false;
-        }
+        return false;
       }
+      if (!fifo_synced() || !pending_ || std::strcmp(sync_, data["sync"].as<const char*>()) != 0 ||
+          data["rid"].as<uint32_t>() != pendingRid_) return false;
+      if (!queue.size() || queue.at(0)->id != pendingPid_) {
+        request_resync();
+        return false;
+      }
+      if (data["ok"].as<bool>()) queue.pop();
+      pending_ = false;
     } else {
       request_resync();
     }
     return false;
   }
 
-  char line_[MAX_LINE_BYTES]{};
+  char line_[MAX_LINE_BYTES + 1]{};
+  char txRemaining_[160]{};
+  size_t txLength_ = 0;
   size_t length_ = 0;
   bool dropping_ = false;
   State state_ = State::AwaitConfig;
+  GamePhase phase_ = GamePhase::Unknown;
+  ControlMode mode_ = ControlMode::Auto;
+  PlayerStatus status_{};
+  StatusSync statusSync_ = StatusSync::AwaitReset;
+  bool statusTimerStarted_ = false;
+  uint32_t statusStartedMs_ = 0;
+  char sync_[33]{};
   bool pending_ = false;
   bool resyncNeeded_ = true;
   bool disconnectSeen_ = false;
   uint16_t pendingPid_ = 0;
+  uint32_t pendingRid_ = 0;
+  // 32bit上限の次を保持して送信を停止する。再識別・再同期でも巻き戻さない。
+  uint64_t nextRid_ = 0;
   uint32_t sentMs_ = 0;
   uint32_t handshakeMs_ = 0;
   uint32_t receivedMs_ = 0;
