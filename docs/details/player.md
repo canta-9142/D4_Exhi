@@ -245,10 +245,16 @@ nix shell nixpkgs#python3 -c python3 tests/preparing_cdc.py --port /dev/ttyACM0
 
 `--ack reject`はfalseを返す拒否応答、`--ack ignore`は応答欠落を再現する。標準入力の`reset`・`auto`・`manual`で解除や操作モードの切替を確認できる。終了時は`identify`で接続待ちへ戻す。
 
-`tests/finished_cdc.py`は通常ファームウェアで、確定結果の最大値・順位対象外・形式検証、同期世代の照合、取得期限と再同期、確認表示の設定・解除を自動検証する。`--visual`では確認画面を維持し、標準入力の`animate`・`unranked`・`preview`・`result`・`reset`・`duplicate`・`resync`で表示を切り替える。`stop`で終了し、接続待ちへ戻す。
+`tests/finished_cdc.py`は通常ファームウェアで、確定結果の最大値・順位対象外・形式検証、同期世代の照合、取得期限と再同期、確認表示の設定・解除を自動検証する。`--visual`では確認画面を維持し、標準入力の`animate`・`unranked`・`preview`・`result`・`reset`・`duplicate`・`resync`で表示を切り替える。`stop`で終了し、接続待ちへ戻す。確認表示中の`resync`コマンドとMCUからの再同期要求では、autoを維持して`config(preview=false)`を再通知し、新しい同期世代と確定結果で通常表示へ戻す。
 
 ```sh
 nix shell nixpkgs#python3 -c python3 tests/finished_cdc.py --port /dev/ttyACM0 --visual
+```
+
+`tests/finished_visual.py`は、この操作ツールの確認表示解除を実機なしで検証する。コマンドとMCU要求の両経路について、操作モードの維持、再設定・同期・結果の通知順序と世代の一致を確認する。
+
+```sh
+nix shell nixpkgs#python3 -c python3 tests/finished_visual.py
 ```
 
 実機のUSB CDC自動テストで不正な結果通知の復旧と取得期限、旧世代の無視、確認表示の解除を検証し、目視で最大スコア、終了演出、順位対象外、ノード名の点滅に欠けや重なりがないことを確認した。
