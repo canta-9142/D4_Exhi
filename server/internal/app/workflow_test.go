@@ -373,7 +373,7 @@ func TestLEDPreviewTimingRecoveryAndReset(t *testing.T) {
 	h.clear()
 	h.execute(Command{Operation: Reset})
 	if got := h.lines("led"); !reflect.DeepEqual(got, []string{"CONFIG B1 false", "BUFFER 0"}) {
-		t.Fatalf("Reset duplicated restore or resent CONFIG: %v", got)
+		t.Fatalf("Reset did not stop preview exactly once: %v", got)
 	}
 	h.clear()
 	h.tick(5 * time.Second)
@@ -553,6 +553,82 @@ func TestLEDPreviewUsesExplicitConfig(t *testing.T) {
 			h.execute(Command{Operation: SetDevicePreview, DeviceID: "A00000000001"})
 			if got := h.lines("led"); !reflect.DeepEqual(got, []string{"CONFIG " + node.wireName() + " true"}) {
 				t.Fatalf("unexpected preview command: %v", got)
+			}
+		})
+	}
+}
+
+func TestLEDResetKeepsAssignmentsAndStopsPreview(t *testing.T) {
+	for _, node := range []NodeID{1, 9} {
+		for _, preview := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/preview=%t", node.wireName(), preview), func(t *testing.T) {
+				h := newHarness(t)
+				h.connectLED("led", "A00000000001", node)
+				if preview {
+					h.execute(Command{Operation: SetDevicePreview, DeviceID: "A00000000001"})
+				}
+				h.clear()
+				h.execute(Command{Operation: Reset})
+				want := []string{"CLEAR"}
+				if preview {
+					want = []string{"CONFIG " + node.wireName() + " false"}
+				}
+				if node.bot() {
+					want = append(want, "BUFFER 0")
+				}
+				if got := h.lines("led"); !reflect.DeepEqual(got, want) {
+					t.Fatalf("Reset output: %v, want %v", got, want)
+				}
+				if d := h.device("A00000000001"); d.Node != node || !d.Connected || h.state().Preview != nil {
+					t.Fatal("Reset changed assignment or left preview active")
+				}
+			})
+		}
+	}
+}
+
+func TestUnassignedLEDPreviewTermination(t *testing.T) {
+	for _, event := range []string{"stop", "reset", "start", "hello", "disconnect"} {
+		t.Run(event, func(t *testing.T) {
+			h := newHarness(t)
+			h.connectLED("owner", "A00000000001", 1)
+			h.connectLED("spare", "A00000000002", 3)
+			h.execute(Command{Operation: SetDeviceAssignment, Kind: LEDDevice, DeviceID: "A00000000002"})
+			h.message("spare", IncomingMessage{Type: "hello", Kind: LEDDevice, UID: "A00000000002"})
+			h.clear()
+			h.execute(Command{Operation: SetDevicePreview, DeviceID: "A00000000002"})
+			if got := h.lines("spare"); !reflect.DeepEqual(got, []string{"CONFIG P1 true"}) {
+				t.Fatal(got)
+			}
+			h.clear()
+			switch event {
+			case "stop":
+				h.execute(Command{Operation: SetDevicePreview})
+			case "reset":
+				h.execute(Command{Operation: Reset})
+			case "start":
+				h.execute(Command{Operation: Start})
+			case "hello":
+				h.message("spare", IncomingMessage{Type: "hello", Kind: LEDDevice, UID: "A00000000002"})
+			case "disconnect":
+				h.must(h.a.Disconnected(h.ctx, "spare"))
+			}
+			want := []string{`{"type":"identify","data":{}}`}
+			if event == "disconnect" {
+				want = nil
+			}
+			if got := h.lines("spare"); !reflect.DeepEqual(got, want) {
+				t.Fatalf("preview termination: %v, want %v", got, want)
+			}
+			if event != "disconnect" {
+				h.clear()
+				h.message("spare", IncomingMessage{Type: "hello", Kind: LEDDevice, UID: "A00000000002"})
+				if len(h.lines("spare")) != 0 {
+					t.Fatal("HELLO restarted preview or re-identification")
+				}
+			}
+			if h.state().Preview != nil || h.device("A00000000002").Node != 0 || h.device("A00000000001").Node != 1 {
+				t.Fatal("temporary preview changed assignments or remained active")
 			}
 		})
 	}
