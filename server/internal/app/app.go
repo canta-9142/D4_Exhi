@@ -159,8 +159,8 @@ func (a *App) Execute(ctx context.Context, command Command) error {
 	return a.submit(ctx, true, func(now time.Time) error {
 		switch command.Operation {
 		case Start:
-			if reasons := a.game.startBlockReasons(); len(reasons) > 0 {
-				return errors.New(strings.Join(reasons, "; "))
+			if blockers := a.game.startBlockers(); len(blockers) > 0 {
+				return blockers[0].reject()
 			}
 			a.restorePreview()
 			return a.game.start(now)
@@ -175,14 +175,14 @@ func (a *App) Execute(ctx context.Context, command Command) error {
 			}
 		case SetNodeEnabled:
 			if a.game.phase == Playing {
-				return errors.New("operation mode cannot change while Playing")
+				return reject(CodePhaseConflict, "operation mode cannot change while Playing")
 			}
 			if !command.Node.player() {
-				return errors.New("SetNodeEnabled requires a player node")
+				return reject(CodeInvalid, "SetNodeEnabled requires a player node")
 			}
 			id := a.nodeSession(PlayerDevice, command.Node)
 			if command.Enabled && id == "" {
-				return errors.New("player MCU is not connected and identified")
+				return reject(CodeDeviceDisconnected, "player MCU is not connected and identified")
 			}
 			if a.game.nodes[command.Node].manual != command.Enabled {
 				if command.Enabled && a.preview != nil && a.preview.uid == a.sessions[id].uid {
@@ -195,7 +195,7 @@ func (a *App) Execute(ctx context.Context, command Command) error {
 			}
 		case SetBotRate:
 			if !command.Node.bot() || command.Rate <= 0 || math.IsNaN(command.Rate) || math.IsInf(command.Rate, 0) {
-				return errors.New("SetBotRate requires a bot node and a finite positive rate")
+				return reject(CodeInvalid, "SetBotRate requires a bot node and a finite positive rate")
 			}
 			if a.game.nodes[command.Node].rate != command.Rate {
 				a.game.nodes[command.Node].rate = command.Rate
@@ -206,7 +206,7 @@ func (a *App) Execute(ctx context.Context, command Command) error {
 		case SetDevicePreview:
 			return a.setPreview(command.DeviceID, now)
 		default:
-			return fmt.Errorf("unknown operation %q", command.Operation)
+			return reject(CodeInvalid, fmt.Sprintf("unknown operation %q", command.Operation))
 		}
 		return nil
 	})
@@ -216,10 +216,10 @@ func (a *App) State(ctx context.Context) (Snapshot, error) {
 	var snapshot Snapshot
 	err := a.submit(ctx, false, func(time.Time) error {
 		g := &a.game
-		reasons := g.startBlockReasons()
+		blockers := g.startBlockers()
 		snapshot = Snapshot{
-			Phase: g.phase, Elapsed: g.elapsed, Remaining: GameDuration - g.elapsed,
-			CanStart: len(reasons) == 0, StartBlockReasons: reasons,
+			Phase: g.phase, Elapsed: g.elapsed, Remaining: GameDuration - g.elapsed, RemainingSeconds: a.remainingSeconds(),
+			CanStart: len(blockers) == 0, StartBlockers: blockers,
 			Nodes: make([]NodeSnapshot, 0, NodeCount), Devices: make([]DeviceSnapshot, 0, len(a.devices)),
 		}
 		for id := NodeID(1); id <= NodeCount; id++ {

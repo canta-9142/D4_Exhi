@@ -1,9 +1,6 @@
 package app
 
-import (
-	"errors"
-	"time"
-)
+import "time"
 
 type preview struct {
 	uid     string
@@ -18,18 +15,21 @@ func (a *App) setPreview(uid string, now time.Time) error {
 		return nil
 	}
 	if a.game.phase == Playing {
-		return errors.New("preview cannot start while Playing")
+		return reject(CodePhaseConflict, "preview cannot start while Playing")
 	}
 	d := a.devices[uid]
-	if d == nil || d.session == "" {
-		return errors.New("preview requires a connected, identified device")
+	if d == nil {
+		return reject(CodeNotFound, "device has not been identified")
+	}
+	if d.session == "" {
+		return reject(CodeDeviceDisconnected, "preview requires a connected device")
 	}
 	s := a.sessions[d.session]
 	if s == nil || s.failed || s.waitingHello {
-		return errors.New("device is waiting for identification")
+		return reject(CodeDeviceDisconnected, "device is waiting for identification")
 	}
 	if d.kind == PlayerDevice && d.node != 0 && a.game.nodes[d.node].manual {
-		return errors.New("player preview requires automatic operation")
+		return reject(CodeManualModeConflict, "player preview requires automatic operation")
 	}
 	if a.preview != nil && a.preview.uid == uid {
 		return nil
