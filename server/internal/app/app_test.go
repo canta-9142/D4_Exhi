@@ -354,7 +354,7 @@ func TestDisconnectDuplicateUIDAndReassignment(t *testing.T) {
 	if s := h.state(); s.Nodes[0].Enabled || s.Nodes[1].Enabled || s.Devices[0].Node != 2 {
 		t.Fatal("wrong reassignment state")
 	}
-	if got := messageTypes(h.messages()); !reflect.DeepEqual(got, []string{"config", "reset", "phase", "status"}) {
+	if got := messageTypes(h.messages()); !reflect.DeepEqual(got, []string{"config", "reset", "phase", "status", "summary"}) {
 		t.Fatal(got)
 	}
 	h.clear()

@@ -21,9 +21,42 @@ func (a *App) status(node NodeID) StatusData {
 	return data
 }
 
-func (a *App) flushStatus() {
+func (a *App) flushPlayerUpdates() {
 	for id := range a.sessions {
-		a.sendStatus(id)
+		a.flushPlayerSession(id)
+	}
+}
+
+func (a *App) flushPlayerSession(id SessionID) {
+	s := a.sessions[id]
+	if s == nil {
+		return
+	}
+	if s.phasePending && !a.phase(id) {
+		return
+	}
+	a.sendStatus(id)
+	a.sendSummary(id)
+}
+
+func (a *App) sendSummary(id SessionID) {
+	s := a.sessions[id]
+	if s == nil || s.failed || s.waitingHello || !s.summaryPending {
+		return
+	}
+	node := a.sessionNode(id)
+	if a.game.phase != Finished || node == 0 || s.sync == "" || a.previewing(id) {
+		s.summaryPending = false
+		return
+	}
+	n := &a.game.nodes[node]
+	var rank *int
+	if n.eligible {
+		value := n.rank
+		rank = &value
+	}
+	if a.send(id, Message{Type: "summary", Data: SummaryData{Sync: s.sync, Score: n.score, Rank: rank, Eligible: n.eligible}}) {
+		s.summaryPending = false
 	}
 }
 
@@ -60,15 +93,16 @@ func (a *App) sendReset(id SessionID, packets []PacketView) bool {
 		return false
 	}
 	s.sync = strings.ToUpper(hex.EncodeToString(token[:]))
-	return a.send(id, Message{Type: "reset", Data: ResetData{s.sync, packets}})
+	if !a.send(id, Message{Type: "reset", Data: ResetData{s.sync, packets}}) {
+		return false
+	}
+	s.phasePending = a.game.phase == Finished && a.sessionNode(id) != 0 && !a.previewing(id)
+	return true
 }
 
 func (a *App) resetFIFO(id SessionID, node NodeID) bool {
 	packets := make([]PacketView, 0)
-	// The preview copy never enters the game's FIFO or PID allocator.
-	if a.preview != nil && a.sessions[id] != nil && a.preview.uid == a.sessions[id].uid {
-		packets = append(packets, PacketView{PID: 9999, Destination: a.preview.node})
-	} else if node != 0 {
+	if node != 0 {
 		for _, p := range a.game.nodes[node].fifo {
 			packets = append(packets, p.PacketView)
 		}
@@ -81,6 +115,8 @@ func (a *App) phase(id SessionID) bool {
 		return false
 	}
 	a.sessions[id].forceStatus = true
+	a.sessions[id].phasePending = false
+	a.sessions[id].summaryPending = a.game.phase == Finished && a.sessionNode(id) != 0 && !a.previewing(id)
 	return true
 }
 
@@ -94,7 +130,7 @@ func (a *App) syncDevice(id SessionID, config bool) {
 		return
 	}
 	if d.kind == LEDDevice {
-		if a.send(id, Message{Type: "CONFIG", Data: LEDConfigData{d.node}}) && d.node.bot() {
+		if a.send(id, Message{Type: "CONFIG", Data: LEDConfigData{Node: d.node, Preview: false}}) && d.node.bot() {
 			a.send(id, Message{Type: "BUFFER", Data: BufferData{len(a.game.nodes[d.node].fifo)}})
 		}
 		return
@@ -116,33 +152,20 @@ func (a *App) restoreUnassigned(uid string) {
 	if d == nil || d.session == "" {
 		return
 	}
-	if d.kind == PlayerDevice {
-		a.identify(d.session, a.eventNow)
-	} else {
-		a.send(d.session, Message{Type: "CLEAR", Data: struct{}{}})
-	}
+	a.identify(d.session, a.eventNow)
 }
 
 func (a *App) notify(c change) {
 	switch c.kind {
-	case "phase", "reset":
+	case "phase":
 		for node := NodeID(1); node <= PlayerCount; node++ {
 			if id := a.nodeSession(PlayerDevice, node); id != "" {
-				if a.phase(id) && c.kind == "reset" {
-					a.resetFIFO(id, node)
-				}
-			}
-		}
-		if c.kind == "reset" {
-			for _, node := range ledNodes {
-				if id := a.nodeSession(LEDDevice, node); id != "" {
-					if a.send(id, Message{Type: "CLEAR", Data: struct{}{}}) && node.bot() {
-						a.send(id, Message{Type: "BUFFER", Data: BufferData{0}})
-					}
-				}
+				a.phase(id)
 			}
 		}
 		a.autoAssignPending()
+	case "reset":
+		a.notifyReset()
 	case "push", "fifo":
 		if c.node.bot() {
 			if c.kind == "push" {
@@ -165,6 +188,41 @@ func (a *App) notify(c change) {
 	case "link":
 		a.light(c.node, c.to, c.packet.Destination)
 	}
+}
+
+func (a *App) notifyReset() {
+	p := a.clearPreview()
+	for node := NodeID(1); node <= PlayerCount; node++ {
+		id := a.nodeSession(PlayerDevice, node)
+		if id == "" {
+			continue
+		}
+		if p != nil && p.uid == a.sessions[id].uid {
+			if !a.send(id, Message{Type: "config", Data: ConfigData{Node: node, Mode: "auto", Preview: false}}) {
+				continue
+			}
+		}
+		if a.phase(id) {
+			a.resetFIFO(id, node)
+		}
+	}
+	for _, node := range ledNodes {
+		id := a.nodeSession(LEDDevice, node)
+		if id == "" {
+			continue
+		}
+		if p != nil && p.uid == a.sessions[id].uid {
+			a.syncDevice(id, true)
+			continue
+		}
+		if a.send(id, Message{Type: "CLEAR", Data: struct{}{}}) && node.bot() {
+			a.send(id, Message{Type: "BUFFER", Data: BufferData{0}})
+		}
+	}
+	if p != nil && a.devices[p.uid].node == 0 {
+		a.restoreUnassigned(p.uid)
+	}
+	a.autoAssignPending()
 }
 
 func (a *App) buffer(node NodeID) {
