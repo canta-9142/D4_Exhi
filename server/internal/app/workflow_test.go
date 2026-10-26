@@ -8,6 +8,8 @@ import (
 	"time"
 )
 
+func ledUID(node NodeID) string { return fmt.Sprintf("%012X", uint64(0xA00000000000)+uint64(node)) }
+
 func (h *harness) device(uid string) DeviceSnapshot {
 	h.t.Helper()
 	for _, d := range h.state().Devices {
@@ -57,7 +59,7 @@ func TestReadyAndStartConditions(t *testing.T) {
 		t.Fatal("all-auto game cannot start")
 	}
 	h.execute(Command{Operation: SetNodeEnabled, Node: 1, Enabled: true})
-	if s := h.state(); s.CanStart || len(s.StartBlockReasons) != 1 || !strings.Contains(s.StartBlockReasons[0], "P1") {
+	if s := h.state(); s.CanStart || len(s.StartBlockers) != 1 || s.StartBlockers[0].Code != CodePlayersNotReady || !reflect.DeepEqual(s.StartBlockers[0].Nodes, []NodeID{1}) {
 		t.Fatalf("missing unready reason: %+v", s)
 	}
 	if err := h.a.Execute(h.ctx, Command{Operation: Start}); err == nil {
@@ -173,8 +175,8 @@ func TestAutomaticAssignmentReservationsAndRetry(t *testing.T) {
 	if h.device("000000000001").Node != 0 {
 		t.Fatal("Reset lost automatic-assignment exclusion")
 	}
-	h.connectLED("led", "LED-1", 1)
-	if h.device("LED-1").Node != 1 {
+	h.connectLED("led", "A00000000001", 1)
+	if h.device("A00000000001").Node != 1 {
 		t.Fatal("player and LED namespaces conflict")
 	}
 	if err := h.a.Execute(h.ctx, Command{Operation: SetDeviceAssignment, Kind: LEDDevice, DeviceID: "000000000009", Node: 3}); err == nil {
@@ -195,7 +197,7 @@ func TestFirstConnectionDuringPlayingWaitsForFinish(t *testing.T) {
 	if h.device(testUID).Node != 1 {
 		t.Fatal("pending assignment not retried at Finish")
 	}
-	if got := messageTypes(h.messages()); !reflect.DeepEqual(got, []string{"config", "reset", "phase", "status"}) {
+	if got := messageTypes(h.messages()); !reflect.DeepEqual(got, []string{"config", "reset", "phase", "status", "summary"}) {
 		t.Fatal(got)
 	}
 }
@@ -209,8 +211,8 @@ func TestSwapAndReplacementKeepNodeResults(t *testing.T) {
 	h.execute(Command{Operation: SetNodeEnabled, Node: 2, Enabled: true})
 	h.start()
 	h.tick(time.Second)
-	h.execute(Command{Operation: Finish})
 	h.must(h.a.submit(h.ctx, false, func(time.Time) error { h.a.game.nodes[1].score = 15; h.a.game.nodes[2].score = 8; return nil }))
+	h.execute(Command{Operation: Finish})
 	before := h.state()
 	h.execute(Command{Operation: SwapDeviceAssignments, DeviceID: testUID, OtherDeviceID: uid2})
 	if h.device(testUID).Node != 2 || h.device(uid2).Node != 1 {
@@ -253,9 +255,9 @@ func TestPlayerPreviewRestoresBeforeStart(t *testing.T) {
 	if got := messageTypes(h.messages()); !reflect.DeepEqual(got, []string{"config", "reset", "phase", "status"}) {
 		t.Fatal(got)
 	}
-	dummy := h.reset("p1")
-	if len(dummy.Packets) != 1 || dummy.Packets[0] != (PacketView{9999, 1}) {
-		t.Fatalf("bad preview FIFO: %+v", dummy)
+	previewReset := h.reset("p1")
+	if len(previewReset.Packets) != 0 || !h.messages()[0].message.Data.(ConfigData).Preview {
+		t.Fatalf("preview must use real FIFO and explicit configuration: %+v", previewReset)
 	}
 	if got := h.state(); got.Nodes[0] != before.Nodes[0] || got.Preview == nil || got.Preview.Node != 1 {
 		t.Fatal("preview modified game state")
@@ -276,7 +278,7 @@ func TestPlayerPreviewRestoresBeforeStart(t *testing.T) {
 			types = append(types, m.message.Type)
 		}
 	}
-	if !reflect.DeepEqual(types, []string{"reset", "phase", "status", "phase", "status"}) {
+	if !reflect.DeepEqual(types, []string{"config", "reset", "phase", "status", "phase", "status"}) {
 		t.Fatalf("restore must precede Playing: %v", types)
 	}
 	var phases []Phase
@@ -288,13 +290,13 @@ func TestPlayerPreviewRestoresBeforeStart(t *testing.T) {
 	if !reflect.DeepEqual(phases, []Phase{Preparing, Playing}) {
 		t.Fatalf("wrong recovery phases: %v", phases)
 	}
-	if h.state().Preview != nil || len(h.reset("p1").Packets) != 0 || h.reset("p1").Sync == dummy.Sync {
+	if h.state().Preview != nil || len(h.reset("p1").Packets) != 0 || h.reset("p1").Sync == previewReset.Sync {
 		t.Fatal("preview not restored with a new generation")
 	}
 	h.tick(time.Second)
 	h.must(h.a.submit(h.ctx, false, func(time.Time) error {
 		if h.a.game.nextPID != 8 {
-			return fmt.Errorf("dummy consumed a PID: %d", h.a.game.nextPID)
+			return fmt.Errorf("preview consumed a PID: %d", h.a.game.nextPID)
 		}
 		return nil
 	}))
@@ -319,7 +321,7 @@ func TestUnassignedPreviewCannotOperateAnotherPlayersNode(t *testing.T) {
 	h.mu.Lock()
 	generation := h.generation["spare"]
 	h.mu.Unlock()
-	h.message("spare", IncomingMessage{Type: "send", Sync: generation, RID: 0, PID: 9999, To: 2})
+	h.message("spare", IncomingMessage{Type: "send", Sync: generation, RID: 0, PID: 0, To: 2})
 	if got := messageTypes(h.messages()); !reflect.DeepEqual(got, []string{"result"}) || h.messages()[0].message.Data.(ResultData).OK {
 		t.Fatal("preview was allowed to operate P1")
 	}
@@ -337,13 +339,13 @@ func TestUnassignedPreviewCannotOperateAnotherPlayersNode(t *testing.T) {
 func TestLEDPreviewTimingRecoveryAndReset(t *testing.T) {
 	h := newHarness(t)
 	// Move the first LED to B1; its former P1 becomes free.
-	h.connectLED("led", "LED-1", 9)
+	h.connectLED("led", "A00000000001", 9)
 	h.must(h.a.submit(h.ctx, false, func(time.Time) error {
 		h.a.game.nodes[9].fifo = []*packet{{PacketView: PacketView{0, 2}}, {PacketView: PacketView{1, 3}}}
 		return nil
 	}))
 	h.clear()
-	h.execute(Command{Operation: SetDevicePreview, DeviceID: "LED-1"})
+	h.execute(Command{Operation: SetDevicePreview, DeviceID: "A00000000001"})
 	if got := h.lines("led"); !reflect.DeepEqual(got, []string{"CONFIG B1 true"}) {
 		t.Fatal(got)
 	}
@@ -367,7 +369,7 @@ func TestLEDPreviewTimingRecoveryAndReset(t *testing.T) {
 	if got := h.lines("led"); !reflect.DeepEqual(got, []string{"CONFIG B1 false", "BUFFER 2"}) {
 		t.Fatal(got)
 	}
-	h.execute(Command{Operation: SetDevicePreview, DeviceID: "LED-1"})
+	h.execute(Command{Operation: SetDevicePreview, DeviceID: "A00000000001"})
 	h.clear()
 	h.execute(Command{Operation: Reset})
 	if got := h.lines("led"); !reflect.DeepEqual(got, []string{"CONFIG B1 false", "BUFFER 0"}) {
@@ -378,9 +380,9 @@ func TestLEDPreviewTimingRecoveryAndReset(t *testing.T) {
 	if len(h.messages()) != 0 || h.state().Preview != nil {
 		t.Fatal("preview continued after Reset")
 	}
-	h.execute(Command{Operation: SetDevicePreview, DeviceID: "LED-1"})
+	h.execute(Command{Operation: SetDevicePreview, DeviceID: "A00000000001"})
 	h.clear()
-	h.execute(Command{Operation: SetDeviceAssignment, Kind: LEDDevice, DeviceID: "LED-1", Node: 10})
+	h.execute(Command{Operation: SetDeviceAssignment, Kind: LEDDevice, DeviceID: "A00000000001", Node: 10})
 	if got := h.lines("led"); !reflect.DeepEqual(got, []string{"CONFIG B2 false", "BUFFER 0"}) {
 		t.Fatalf("reassignment restored the old role: %v", got)
 	}
@@ -407,9 +409,6 @@ func TestPreviewEndOnResyncHelloAndDisconnect(t *testing.T) {
 				t.Fatal("preview remained active")
 			}
 			want := []string{"config", "reset", "phase", "status"}
-			if event == "resync" {
-				want = []string{"reset", "phase", "status"}
-			}
 			if event == "disconnect" {
 				want = nil
 			}
@@ -423,7 +422,7 @@ func TestPreviewEndOnResyncHelloAndDisconnect(t *testing.T) {
 func TestLEDLinkMappingAndProtocol(t *testing.T) {
 	h := newHarness(t)
 	for _, node := range ledNodes {
-		h.connectLED(SessionID(node.wireName()), "LED-"+node.wireName(), node)
+		h.connectLED(SessionID(node.wireName()), ledUID(node), node)
 	}
 	h.clear()
 	count := 0
@@ -463,7 +462,7 @@ func TestLEDLinkMappingAndProtocol(t *testing.T) {
 func TestLEDCommandsFollowGameTransfers(t *testing.T) {
 	h := newHarness(t)
 	h.connect("p1", testUID, 1)
-	h.connectLED("led", "LED-1", 9)
+	h.connectLED("led", "A00000000001", 9)
 	h.execute(Command{Operation: SetNodeEnabled, Node: 1, Enabled: true})
 	h.start()
 	h.must(h.a.submit(h.ctx, false, func(time.Time) error {
@@ -545,15 +544,15 @@ func TestInvalidPreviewSwitchKeepsCurrentTarget(t *testing.T) {
 	}
 }
 
-func TestLEDPreviewConfigForEveryNode(t *testing.T) {
+func TestLEDPreviewUsesExplicitConfig(t *testing.T) {
 	for _, node := range ledNodes {
 		t.Run(node.wireName(), func(t *testing.T) {
 			h := newHarness(t)
-			h.connectLED("led", "LED-1", node)
+			h.connectLED("led", "A00000000001", node)
 			h.clear()
-			h.execute(Command{Operation: SetDevicePreview, DeviceID: "LED-1"})
+			h.execute(Command{Operation: SetDevicePreview, DeviceID: "A00000000001"})
 			if got := h.lines("led"); !reflect.DeepEqual(got, []string{"CONFIG " + node.wireName() + " true"}) {
-				t.Fatal(got)
+				t.Fatalf("unexpected preview command: %v", got)
 			}
 		})
 	}
@@ -564,9 +563,9 @@ func TestLEDResetKeepsAssignmentsAndStopsPreview(t *testing.T) {
 		for _, preview := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/preview=%t", node.wireName(), preview), func(t *testing.T) {
 				h := newHarness(t)
-				h.connectLED("led", "LED-1", node)
+				h.connectLED("led", "A00000000001", node)
 				if preview {
-					h.execute(Command{Operation: SetDevicePreview, DeviceID: "LED-1"})
+					h.execute(Command{Operation: SetDevicePreview, DeviceID: "A00000000001"})
 				}
 				h.clear()
 				h.execute(Command{Operation: Reset})
@@ -580,7 +579,7 @@ func TestLEDResetKeepsAssignmentsAndStopsPreview(t *testing.T) {
 				if got := h.lines("led"); !reflect.DeepEqual(got, want) {
 					t.Fatalf("Reset output: %v, want %v", got, want)
 				}
-				if d := h.device("LED-1"); d.Node != node || !d.Connected || h.state().Preview != nil {
+				if d := h.device("A00000000001"); d.Node != node || !d.Connected || h.state().Preview != nil {
 					t.Fatal("Reset changed assignment or left preview active")
 				}
 			})
@@ -592,12 +591,12 @@ func TestUnassignedLEDPreviewTermination(t *testing.T) {
 	for _, event := range []string{"stop", "reset", "start", "hello", "disconnect"} {
 		t.Run(event, func(t *testing.T) {
 			h := newHarness(t)
-			h.connectLED("owner", "LED-1", 1)
-			h.connectLED("spare", "LED-2", 3)
-			h.execute(Command{Operation: SetDeviceAssignment, Kind: LEDDevice, DeviceID: "LED-2"})
-			h.message("spare", IncomingMessage{Type: "hello", Kind: LEDDevice, UID: "LED-2"})
+			h.connectLED("owner", "A00000000001", 1)
+			h.connectLED("spare", "A00000000002", 3)
+			h.execute(Command{Operation: SetDeviceAssignment, Kind: LEDDevice, DeviceID: "A00000000002"})
+			h.message("spare", IncomingMessage{Type: "hello", Kind: LEDDevice, UID: "A00000000002"})
 			h.clear()
-			h.execute(Command{Operation: SetDevicePreview, DeviceID: "LED-2"})
+			h.execute(Command{Operation: SetDevicePreview, DeviceID: "A00000000002"})
 			if got := h.lines("spare"); !reflect.DeepEqual(got, []string{"CONFIG P1 true"}) {
 				t.Fatal(got)
 			}
@@ -610,7 +609,7 @@ func TestUnassignedLEDPreviewTermination(t *testing.T) {
 			case "start":
 				h.execute(Command{Operation: Start})
 			case "hello":
-				h.message("spare", IncomingMessage{Type: "hello", Kind: LEDDevice, UID: "LED-2"})
+				h.message("spare", IncomingMessage{Type: "hello", Kind: LEDDevice, UID: "A00000000002"})
 			case "disconnect":
 				h.must(h.a.Disconnected(h.ctx, "spare"))
 			}
@@ -623,12 +622,12 @@ func TestUnassignedLEDPreviewTermination(t *testing.T) {
 			}
 			if event != "disconnect" {
 				h.clear()
-				h.message("spare", IncomingMessage{Type: "hello", Kind: LEDDevice, UID: "LED-2"})
+				h.message("spare", IncomingMessage{Type: "hello", Kind: LEDDevice, UID: "A00000000002"})
 				if len(h.lines("spare")) != 0 {
 					t.Fatal("HELLO restarted preview or re-identification")
 				}
 			}
-			if h.state().Preview != nil || h.device("LED-2").Node != 0 || h.device("LED-1").Node != 1 {
+			if h.state().Preview != nil || h.device("A00000000002").Node != 0 || h.device("A00000000001").Node != 1 {
 				t.Fatal("temporary preview changed assignments or remained active")
 			}
 		})
@@ -710,12 +709,12 @@ func TestPreviewSwitchCompletesOldRecoveryFirst(t *testing.T) {
 	h.clear()
 	h.execute(Command{Operation: SetDevicePreview, DeviceID: "112233AABBCC"})
 	messages := h.messages()
-	if len(messages) != 7 || !reflect.DeepEqual(messageTypes(messages), []string{"reset", "phase", "status", "config", "reset", "phase", "status"}) {
+	if len(messages) != 8 || !reflect.DeepEqual(messageTypes(messages), []string{"config", "reset", "phase", "status", "config", "reset", "phase", "status"}) {
 		t.Fatalf("incomplete recovery before preview switch: %v", messageTypes(messages))
 	}
 	for i, m := range messages {
 		want := SessionID("p1")
-		if i >= 3 {
+		if i >= 4 {
 			want = "p2"
 		}
 		if m.session != want {

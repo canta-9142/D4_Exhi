@@ -386,6 +386,6 @@ sequenceDiagram
     end
 ```
 
-図中の`a`・`b`は異なる32桁の同期世代を表す。要求ID・同期世代付きのメッセージ、`config.mode`、`identify`・`phase`・`status`・`ready`、長押し判定および準備完了表示は、現行の[MCU通信実装](../../src/player/server_link.hpp)および通信テストへの追加対応が必要である。
+図中の`a`・`b`は異なる32桁の同期世代を表す。同期世代・要求ID、`config.mode`、`identify`・`phase`・`status`・`ready`、長押し判定およびPreparing画面は`player`ブランチで実装を進めている。`config.preview`・`summary`、確認専用画面・Finished結果表示への対応と、mainへの実装取り込みは別途必要である。
 
-フェーズ別画面、`summary`、および`config.preview`による確認表示は仕様を先行して定義したものであり、MCU・サーバー・通信テストに追加実装が必要である。従来のダミーパケットによる確認表示は新仕様では使用しない。Finished演出の具体的な構成や描画バッファ・DMA方式は、実装時に検討する。
+Finishedの結果画面、`summary`、および`config.preview`による確認表示は仕様を先行して定義したものであり、MCU・サーバー・通信テストに追加実装が必要である。従来のダミーパケットによる確認表示は新仕様では使用しない。Finished演出の具体的な構成や描画バッファ・DMA方式は、実装時に検討する。

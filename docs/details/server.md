@@ -10,16 +10,22 @@
 ```sh
 nix develop -c go -C server run ./cmd/server
 nix develop -c go -C server run ./cmd/server -log-level debug
+nix develop -c go -C server run ./cmd/server -http-addr 127.0.0.1:8080
 nix develop -c go -C server test -race ./...
 nix develop -c go -C server vet ./...
 ```
 
 `main`はログ設定を読み込み、標準出力へのログと`app`を初期化する。
-SIGINT・SIGTERMで`app`を終了する。`app`は終了時に有効なセッションを閉じる。
+`-http-addr`（既定値`:8080`）で管理画面のHTTPを待ち受け、`app`と並行して実行する。
+既定値は全インターフェースで待ち受け、管理用ノートPCからLAN経由で接続できるようにする。
+ポート使用中などで待ち受けられない場合は起動エラーとし、起動ログに待受アドレスを出す。
+SIGINT・SIGTERMではHTTPを最大5秒待って停止してから`app`を終了する。
+`app`とHTTPのどちらかが異常終了した場合は、もう一方も止めてエラーを返す。
+`app`は終了時に有効なセッションを閉じる。
 
-現時点では`serial`・`web`が未実装のため、起動後はPreparingで待機する。
-USB接続やHTTPリクエストはまだ受け付けない。通信設定と各パッケージの起動処理は、
-それぞれの実装時に`main`へ追加する。
+現時点では`serial`が未実装のため、USB接続は受け付けない。`web`はルーティング、
+エラー応答の形式、埋め込みの仮の管理画面だけを実装している。
+`/api/state`・`/api/commands`は`503 unavailable`を返し、`app`をまだ呼び出さない。
 
 ## appの呼び出し
 
@@ -46,9 +52,21 @@ USB接続やHTTPリクエストはまだ受け付けない。通信設定と各�
 
 呼び出し元はcontextで待機を中断できる。受理後のキャンセルは、操作の取り消しを保証しない。
 終了済みの`app`への要求は`ErrStopped`を返す。
-Snapshotの時間は`time.Duration`であり、HTTPでの時間表現は`web`側で決める。
-Snapshotにはノードごとの`Ready`、`CanStart`・`StartBlockReasons`、機器種別付きの対応表、
+Snapshotの経過時間・残り時間は`time.Duration`であり、`RemainingSeconds`は
+MCUの`status.remaining`と同じ切り上げ済み残り秒数を返す。HTTPでの時間表現への変換は`web`が行う。
+Snapshotにはノードごとの`Ready`・確定順位`Rank`、`CanStart`・`StartBlockers`、機器種別付きの対応表、
 現在確認表示中の機器と確認用ノードIDも含む。開始条件の判定はStartとStateで共通化する。
+
+管理操作の拒否は`*app.Rejection`で返し、`errors.As`で`Code`・`Nodes`を取得できる。
+開始不可理由は`StartBlocker`の配列で、`not_preparing`、`pid_exhausted`、
+`players_not_ready`の順に列挙する。未準備のNodesは番号順でまとめる。
+Startの拒否では先頭の理由を使用し、`not_preparing`は`phase_conflict`へ対応付ける。
+無効な引数はmainと同じ`CodeInvalid`（`invalid`）で返し、Web側で`invalid_request`へ変換する。
+終了済みの`app`は`errors.Is(err, app.ErrStopped)`で判定し、Web側で`503 unavailable`へ対応付ける。
+
+`web`はこの内部Snapshotを[Web管理API](../spec/web.md)の公開JSONへ変換する。
+ノードIDの文字列表記、時間単位、Preparingの`rankingEligible:null`、エラーのHTTPステータスと
+`details.nodeIds`への変換は`web`が担当する。
 
 ## serialとの接続口
 
@@ -56,6 +74,7 @@ Snapshotにはノードごとの`Ready`、`CanStart`・`StartBlockReasons`、機
 `Message.MarshalLine()`で通信行へ変換し、LF終端は`serial`が付与する。
 プレイヤー向けと共通の`identify`はJSON、LEDの`CONFIG`・`LIGHT`・`BUFFER`・`CLEAR`は
 スペース区切りとなる。LEDのノードIDは通信時に`P1`・`B1`等へ変換する。
+プレイヤーの`config.preview`とLEDの`CONFIG NODE PREVIEW`は通常false、確認中だけtrueを明記する。
 `Options.Close`には物理セッションを閉じる関数を渡す。
 
 コールバックから`app`のメソッドを同期的に呼び出してはならない。
@@ -69,7 +88,7 @@ Snapshotにはノードごとの`Ready`、`CanStart`・`StartBlockReasons`、機
 `serial`はJSON・必須フィールド・型・範囲・行長などを検証してから`IncomingMessage`へ変換する。
 識別前はプレイヤーのJSON `hello`とLEDの`HELLO UID`の両形式を判定し、
 どちらも`Type="hello"`として、`Kind=PlayerDevice`または`Kind=LEDDevice`を設定する。
-LEDのUIDは空白を含まないトークン、プレイヤーのUIDは大文字16進12桁として扱う。
+両種別のUIDを大文字16進12桁として検証する。
 セッションIDは再接続を含めてプロセス内で再利用しない。
 識別前の旧入力破棄、HELLO再受信時の要求ID履歴維持、同期世代の更新とSENDの重複排除は
 `app`が担当する。同期世代には暗号学的乱数による128bitの識別子を使う。
@@ -85,8 +104,15 @@ STATUSにはスコア・切り上げた残り秒数・準備完了状態を毎�
 初期同期・再同期・フェーズ変更・READY応答では必ず送り、通常は表示値が変化した場合だけ送る。
 入力イベントの時間進行と操作を確定してから送信するため、遅延Tickの途中経過を蓄積しない。
 ゲームResetでは`phase` → 空FIFOの`reset` → 初期値の`status`の順になる。
-確認表示からの復旧では、現在の`phase`・`status`までを一括で送信する。
+確認表示からの復旧では、`config(preview=false)`から現在の`phase`・`status`までを送信する。
 Startや別機器への確認切替は、この復旧通知の登録後に行う。
+
+Finishedへの遷移時に、対象者だけのスコア比較で順位を確定する。同点は同順位とし、
+100・100・80なら1・1・3となる。最終スコア・資格・順位はモード変更や基板交換でも保持する。
+通常表示の割当済みMCUには`phase(Finished)` → `status` → `summary`を送る。
+Finished中の再同期・再設定でも、現在の同期世代の`summary`をSTATUSの後に送る。
+拒否したSENDなどによるRESETも、`reset` → `phase` → `status` → `summary`で結果を再取得させる。
+対象外はeligible=false・rank=null、確認中や未割当にはSUMMARYを送らない。
 
 ## デバイス運用と実機確認
 
@@ -94,23 +120,23 @@ Startや別機器への確認切替は、この復旧通知の登録後に行う
 空き待ちの機器はUID順で再試行する。未接続の機器の割当も予約として保持する。
 管理操作で解除されたUIDは自動仮割当の対象から外し、Reset・再接続でもこの扱いを維持する。
 交換時は対応表を一括確定してから通信し、ノードのFIFO・得点・ランキング結果は移動しない。
-未割当になるプレイヤー・LEDには`identify`を送る。
+未割当になる機器には両種別とも`identify`を送り、旧設定と確認表示を解除する。
 
-確認表示は全体で1台とし、正本状態とは独立して管理する。プレイヤーのダミーPID9999は
-表示専用で、通常の採番・FIFO・得点へ反映しない。未割当機器にはP1を一時設定するが、
+確認表示は全体で1台とし、正本状態とは独立して管理する。プレイヤーには
+`config(mode=auto, preview=true)`で設定し、FIFOは割当済みなら正本、未割当なら空配列を送る。
+ダミーパケットは生成・送信しない。未割当機器にはP1を一時設定するが、
 正式な対応表を変更せず、ゲーム操作や通常通知の対応先にも使用しない。
-LEDの確認開始は`CONFIG NODE true`、終了は割当済みなら`CONFIG NODE false`とBotの現在件数の`BUFFER`、未割当なら`identify`を送る。
-確認周期はMCUが管理し、サーバーから確認用の周期命令は送らない。
+LEDには`CONFIG NODE true`だけを送り、点滅はMCU内で行う。
 Start・Reset・割当／モード変更・HELLO／RESYNC・切断に合わせ、確認を終了・復旧する。
 
-プレイヤーの確認表示は旧方式である。新しい[プレイヤー通信仕様](../spec/player.md)で定義する
-`config.preview`による確認表示と`summary`による最終スコア・順位通知は未実装であり、
-設定・確認終了時の再同期・Finished中の通知・通信テストを更新する必要がある。
-ダミーパケットによる確認表示は、その対応時に置き換える。
+確認終了時は通常の設定から再同期し、FinishedのプレイヤーにはSUMMARYまで復旧する。
+未割当の確認対象には`identify`を送る。確認中のプレイヤーをResetする場合は、
+`config(preview=false)`を先に送り、その後は通常の`phase(Preparing)`・空FIFO・STATUSで復旧する。
 
 LEDの通常設定は`CONFIG NODE false` → Bot用なら現在件数の`BUFFER`とする。
-ゲームResetでは通常表示中のLEDへ`CLEAR` → Bot用なら`BUFFER 0`を送る。
-確認中の割当済みLEDには`CONFIG NODE false` → Bot用なら`BUFFER 0`、未割当には`identify`を送り、消灯・復旧命令を重複させない。
+ゲームResetでは、確認中の割当済みLEDだけに`CONFIG NODE false` → Bot用なら`BUFFER 0`を送る。
+通常表示のLEDには`CLEAR` → Bot用なら`BUFFER 0`を送り、CONFIGを再送しない。
+確認中の未割当LEDには`identify`を送り、復旧命令を重複させない。
 パケット移動は担当リンク表に対応する`LIGHT`へ、BotのFIFO使用量変更は`BUFFER`へ変換する。
 
 ## ゲーム処理

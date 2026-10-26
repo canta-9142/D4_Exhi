@@ -60,8 +60,9 @@ type Message struct {
 }
 
 type ConfigData struct {
-	Node NodeID `json:"node"`
-	Mode string `json:"mode"`
+	Node    NodeID `json:"node"`
+	Mode    string `json:"mode"`
+	Preview bool   `json:"preview"`
 }
 type StatusData struct {
 	Score     int  `json:"score"`
@@ -71,6 +72,12 @@ type StatusData struct {
 type LEDConfigData struct {
 	Node    NodeID
 	Preview bool
+}
+type SummaryData struct {
+	Sync     string `json:"sync"`
+	Score    int    `json:"score"`
+	Rank     *int   `json:"rank"`
+	Eligible bool   `json:"eligible"`
 }
 type LightData struct {
 	Neighbor    NodeID
@@ -124,6 +131,7 @@ type NodeSnapshot struct {
 	RankingEligible bool    `json:"ranking_eligible"`
 	Rate            float64 `json:"rate"`
 	Ready           bool    `json:"ready"`
+	Rank            *int    `json:"rank"`
 }
 
 type DeviceSnapshot struct {
@@ -142,12 +150,14 @@ type PreviewSnapshot struct {
 }
 
 type Snapshot struct {
-	Phase             Phase            `json:"phase"`
-	Elapsed           time.Duration    `json:"elapsed"`
-	Remaining         time.Duration    `json:"remaining"`
-	Nodes             []NodeSnapshot   `json:"nodes"`
-	Devices           []DeviceSnapshot `json:"devices"`
-	CanStart          bool             `json:"can_start"`
-	StartBlockReasons []string         `json:"start_block_reasons"`
-	Preview           *PreviewSnapshot `json:"preview,omitempty"`
+	Phase     Phase         `json:"phase"`
+	Elapsed   time.Duration `json:"elapsed"`
+	Remaining time.Duration `json:"remaining"`
+	// RemainingSeconds is the value MCUs receive as status.remaining.
+	RemainingSeconds int              `json:"remaining_seconds"`
+	Nodes            []NodeSnapshot   `json:"nodes"`
+	Devices          []DeviceSnapshot `json:"devices"`
+	CanStart         bool             `json:"can_start"`
+	StartBlockers    []StartBlocker   `json:"start_blockers"`
+	Preview          *PreviewSnapshot `json:"preview,omitempty"`
 }
