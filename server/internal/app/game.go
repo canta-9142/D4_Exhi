@@ -5,7 +5,6 @@ import (
 	"math"
 	"math/rand/v2"
 	"slices"
-	"strings"
 	"time"
 )
 
@@ -137,25 +136,29 @@ func newGame(notify func(change)) game {
 	return g
 }
 
-func (g *game) startBlockReasons() []string {
-	reasons := make([]string, 0)
+func (g *game) startBlockers() []StartBlocker {
+	blockers := make([]StartBlocker, 0)
 	if g.phase != Preparing {
-		reasons = append(reasons, "Start requires Preparing phase")
+		blockers = append(blockers, StartBlocker{Code: CodeNotPreparing})
 	}
 	if 65536-g.nextPID < maxGamePackets {
-		reasons = append(reasons, "not enough packet IDs for another game; restart the server")
+		blockers = append(blockers, StartBlocker{Code: CodePIDExhausted})
 	}
+	var unready []NodeID
 	for id := NodeID(1); id <= PlayerCount; id++ {
 		if n := &g.nodes[id]; n.manual && !n.ready {
-			reasons = append(reasons, fmt.Sprintf("%s is not ready", id.wireName()))
+			unready = append(unready, id)
 		}
 	}
-	return reasons
+	if len(unready) > 0 {
+		blockers = append(blockers, StartBlocker{Code: CodePlayersNotReady, Nodes: unready})
+	}
+	return blockers
 }
 
 func (g *game) start(now time.Time) error {
-	if reasons := g.startBlockReasons(); len(reasons) > 0 {
-		return fmt.Errorf("%s", strings.Join(reasons, "; "))
+	if blockers := g.startBlockers(); len(blockers) > 0 {
+		return blockers[0].reject()
 	}
 	g.phase, g.started, g.elapsed = Playing, now, 0
 	for id := NodeID(1); id <= NodeCount; id++ {
@@ -171,7 +174,7 @@ func (g *game) start(now time.Time) error {
 
 func (g *game) finish() error {
 	if g.phase != Playing {
-		return fmt.Errorf("Finish requires Playing phase")
+		return reject(CodePhaseConflict, "Finish requires Playing phase")
 	}
 	g.phase = Finished
 	g.notify(change{kind: "phase"})

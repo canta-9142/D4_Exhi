@@ -57,7 +57,7 @@ func TestReadyAndStartConditions(t *testing.T) {
 		t.Fatal("all-auto game cannot start")
 	}
 	h.execute(Command{Operation: SetNodeEnabled, Node: 1, Enabled: true})
-	if s := h.state(); s.CanStart || len(s.StartBlockReasons) != 1 || !strings.Contains(s.StartBlockReasons[0], "P1") {
+	if s := h.state(); s.CanStart || !reflect.DeepEqual(s.StartBlockers, []StartBlocker{{Code: CodePlayersNotReady, Nodes: []NodeID{1}}}) {
 		t.Fatalf("missing unready reason: %+v", s)
 	}
 	if err := h.a.Execute(h.ctx, Command{Operation: Start}); err == nil {
