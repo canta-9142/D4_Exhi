@@ -22,7 +22,7 @@ def run(cdc, records):
         assert message, "Playing benchmark timed out"
         records.append(message)
         if message["type"] == "playing_done":
-            assert message["data"] == {"samples": 160, "reference_match": True, "buffer_states_valid": True}, message
+            assert message["data"] == {"samples": 224, "reference_match": True, "buffer_states_valid": True}, message
             break
         assert message["type"] == "playing_sample", message
         data = message["data"]
@@ -30,12 +30,14 @@ def run(cdc, records):
             assert type(data[key]) is int and data[key] >= 0, data
         if data["scene"] == "idle":
             assert data["bytes"] == data["spans"] == data["scan_read_us"] == 0, data
-        assert data["bytes"] < 307200, data
+        assert data["bytes"] <= 307200, data
+        if data["scene"] not in ("preparing", "phases"):
+            assert data["bytes"] < 307200, data
         assert data["frame_us"] >= data["draw_us"] + data["scan_read_us"] + data["scan_wait_us"] + data["transfer_us"], data
         cases[data["scene"]].append(data)
-    assert set(cases) == {"idle", "cards", "buttons", "numbers", "mixed"}, cases.keys()
+    assert set(cases) == {"idle", "cards", "buttons", "numbers", "mixed", "preparing", "phases"}, cases.keys()
     assert all(len(rows) == 32 for rows in cases.values())
-    print("PASS: 160 partial frames match a fresh full redraw; both buffers match their own snapshots; idle frames skip transfer")
+    print("PASS: 224 partial frames match a fresh full redraw, including Preparing and phase changes; both buffer histories valid")
     print("scene    draw/ms pack/ms scan-wait/ms transfer/ms frame/ms p95/ms bytes")
     for scene, rows in cases.items():
         median = lambda key: statistics.median(row[key] for row in rows)

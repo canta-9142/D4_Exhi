@@ -9,6 +9,7 @@
 #include "display_snapshot.hpp"
 #include "frame_presenter.hpp"
 #include "packet_renderer.hpp"
+#include "preparing_renderer.hpp"
 
 struct DrawingTaskContext {
   QueueHandle_t snapshots;
@@ -139,6 +140,11 @@ void draw_static_layout() {
   frame.drawString("s", 438, 174);
 }
 
+void draw_screen_layout(const DisplaySnapshot& snapshot) {
+  if (preparing_screen(snapshot)) draw_preparing_layout(frame);
+  else draw_static_layout();
+}
+
 bool initialize_display(bool startup = true) {
   if (!lcd_init()) return false;
   if (!frame.begin() || !presenter.begin()) {
@@ -155,7 +161,12 @@ bool initialize_display(bool startup = true) {
 void render_snapshot(const DisplaySnapshot& snapshot, const DisplayChanges& changes) {
   frame.setTextDatum(lgfx::textdatum_t::top_left);
   frame.setTextPadding(0);
-  packetRenderer.draw(snapshot.cards, changes.cards);
+  if (preparing_screen(snapshot)) {
+    if (changes.self) draw_button(360, 0, snapshot.selfId, false);
+    render_preparing(frame, snapshot, changes);
+    return;
+  }
+  packetRenderer.draw(displayed_cards(snapshot), changes.cards);
   if (changes.self) draw_button(360, 0, snapshot.selfId, false);
   draw_neighbor_buttons(snapshot.selfId, snapshot.pressedMask, changes.buttons);
   if (changes.label) draw_game_status(snapshot);
@@ -173,7 +184,7 @@ DisplayFrameStats draw_snapshot(const DisplaySnapshot& snapshot) {
     const uint32_t drawStarted = micros();
     // backは2フレーム前の場合がある。表示済み状態とは別の基準で描き直す。
     const auto redraw = display_changes(previousBackDisplay, snapshot, !backDisplayDrawn);
-    if (!backDisplayDrawn) draw_static_layout();
+    if (!backDisplayDrawn || redraw.full) draw_screen_layout(snapshot);
     render_snapshot(snapshot, redraw);
     const auto damage = display_damage(changes, !displayDrawn);
     const uint32_t drawUs = micros() - drawStarted;

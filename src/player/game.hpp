@@ -44,15 +44,19 @@ void publish_display_snapshot() {
   const ControlMode mode = ControlMode::Manual;
   const PlayerStatus status{0, 0, false, true};
   const bool awaitingStatus = false;
+  const uint16_t readyHoldMs = 0;
+  const bool readyPending = false;
 #else
   const GamePhase phase = serverLink.phase();
   const bool synced = serverLink.fifo_synced();
   const ControlMode mode = serverLink.mode();
   const PlayerStatus status = serverLink.status();
   const bool awaitingStatus = serverLink.awaiting_status();
+  const uint16_t readyHoldMs = serverLink.ready_progress_ms();
+  const bool readyPending = serverLink.ready_pending();
 #endif
   const DisplaySnapshot snapshot{packetAnimation.snapshot(), status, selfId,
-                                 pswPressedMask, phase, mode, synced, awaitingStatus};
+                                 pswPressedMask, phase, mode, synced, awaitingStatus, readyHoldMs, readyPending};
   xQueueOverwrite(displayQueue, &snapshot);
 }
 
@@ -118,6 +122,7 @@ void loop() {
   if (serverLink.poll(Serial, nodeUid, packetQueue, selfId, nowMs)) {
     packetAnimation = PacketAnimation{};
   }
+  serverLink.update_ready(Serial, pswPressedMask, nowMs);
 #endif
   if (pressedEdges && packetQueue.size() != 0) {
     for (int i = 0; i < 4; ++i) {

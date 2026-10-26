@@ -8,6 +8,7 @@
 #include "packet.hpp"
 #include "game_phase.hpp"
 #include "player_status.hpp"
+#include "ready_hold.hpp"
 
 // PacketQueueと同じくゲーム側のloopだけから呼び出す。
 class ServerLink {
@@ -16,6 +17,7 @@ public:
   static constexpr uint32_t RETRY_MS = 1000;
   static constexpr uint32_t SEND_TIMEOUT_MS = 3000;
   static constexpr uint32_t STATUS_TIMEOUT_MS = 3000;
+  static constexpr uint32_t READY_TIMEOUT_MS = 3000;
   static constexpr uint32_t RECEIVE_TIMEOUT_MS = 1000;
   static constexpr uint32_t DISCONNECT_GRACE_MS = 100;
 
@@ -81,6 +83,7 @@ public:
       }
     }
     if (pending_ && nowMs - sentMs_ >= SEND_TIMEOUT_MS) request_resync();
+    if (readyPending_ && nowMs - readySentMs_ >= READY_TIMEOUT_MS) request_resync();
     if ((!fifo_synced() || phase_ == GamePhase::Unknown) &&
         (resyncNeeded_ || nowMs - handshakeMs_ >= RETRY_MS)) {
       handshake(port, uid, nowMs);
@@ -116,6 +119,25 @@ public:
   ControlMode mode() const { return mode_; }
   const PlayerStatus& status() const { return status_; }
   bool awaiting_status() const { return statusSync_ != StatusSync::Complete; }
+  bool ready_pending() const { return readyPending_; }
+  uint16_t ready_progress_ms() const { return readyPending_ ? ReadyHold::DURATION_MS : readyHold_.progress_ms(); }
+
+  template<class Port>
+  bool update_ready(Port& port, uint8_t pressedMask, uint32_t nowMs) {
+    const bool enabled = port && fifo_synced() && phase_ == GamePhase::Preparing &&
+                         mode_ == ControlMode::Manual && !awaiting_status() && status_.known &&
+                         !status_.ready && !readyPending_;
+    if (!readyHold_.update(pressedMask, enabled, nowMs)) return false;
+    char message[96];
+    std::snprintf(message, sizeof(message), "{\"type\":\"ready\",\"data\":{\"sync\":\"%s\"}}\n", sync_);
+    if (!write_line(port, message)) {
+      request_resync();
+      return false;
+    }
+    readyPending_ = true;
+    readySentMs_ = nowMs;
+    return true;
+  }
 
 private:
   enum class State : uint8_t { AwaitConfig, AwaitReset, Synced };
@@ -167,6 +189,12 @@ private:
     resyncNeeded_ = true;
     statusSync_ = StatusSync::AwaitReset;
     statusTimerStarted_ = false;
+    cancel_ready();
+  }
+
+  void cancel_ready() {
+    readyHold_.reset();
+    readyPending_ = false;
   }
 
   bool forget_config(PacketQueue& queue, NodeId& selfId) {
@@ -408,6 +436,7 @@ private:
       if (phase == GamePhase::Unknown) {
         request_resync();
       } else if (state_ != State::AwaitConfig) {
+        if (phase_ != phase) cancel_ready();
         phase_ = phase;
       }
     } else if (std::strcmp(type, "status") == 0) {
@@ -418,6 +447,7 @@ private:
       } else if (state_ != State::AwaitConfig) {
         status_ = {data["score"].as<int32_t>(), data["remaining"].as<uint8_t>(),
                    data["ready"].as<bool>(), true};
+        if (status_.ready) cancel_ready();
         if (statusSync_ == StatusSync::AwaitStatus) {
           statusSync_ = StatusSync::Complete;
           statusTimerStarted_ = false;
@@ -430,6 +460,7 @@ private:
         return false;
       }
       std::memcpy(sync_, data["sync"].as<const char*>(), sizeof(sync_));
+      cancel_ready();
       if (statusSync_ == StatusSync::AwaitReset) statusSync_ = StatusSync::AwaitStatus;
       state_ = State::Synced;
       pending_ = resyncNeeded_ = false;
@@ -491,6 +522,9 @@ private:
   uint32_t handshakeMs_ = 0;
   uint32_t receivedMs_ = 0;
   uint32_t disconnectedMs_ = 0;
+  ReadyHold readyHold_;
+  bool readyPending_ = false;
+  uint32_t readySentMs_ = 0;
 };
 
 #endif // SERVER_LINK_HPP_

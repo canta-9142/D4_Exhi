@@ -413,7 +413,103 @@ static void test_partial_writes() {
   assert(ctx.port.output == hello && !ctx.link.pending() && ctx.self == NodeId::None);
 }
 
+static void test_ready() {
+  TestContext ctx;
+  const std::string syncA = "0000000000000000000000000000000A";
+  const std::string syncB = "0000000000000000000000000000000B";
+  const auto config = message("config", R"({"node":1,"mode":"manual"})");
+  const auto prep = message("phase", R"({"phase":"Preparing"})");
+  const auto playing = message("phase", R"({"phase":"Playing"})");
+  const auto no = message("status", R"({"score":0,"remaining":120,"ready":false})");
+  const auto yes = message("status", R"({"score":0,"remaining":120,"ready":true})");
+  const auto readyA = message("ready", "{\"sync\":\"" + syncA + "\"}");
+  const auto readyB = message("ready", "{\"sync\":\"" + syncB + "\"}");
+  const auto resync = message("resync", "{}");
+  const auto step = [&](uint8_t mask, uint32_t elapsed = 0) {
+    ctx.now += elapsed;
+    ctx.poll();
+    return ctx.link.update_ready(ctx.port, mask, ctx.now);
+  };
+  ctx.receive(config + reset(syncA, R"([{"pid":10,"dst":2}])") + prep + no);
+  ctx.port.output.clear();
+  assert(!step(9, 2000));
+  step(0);
+  step(1);
+  step(9, 100);
+  assert(!step(15, 1999) && ctx.link.ready_progress_ms() == 1999);
+  assert(step(9, 1) && ctx.port.output == readyA && ctx.link.ready_pending());
+  assert(ctx.queue.size() == 1 && ctx.link.mode() == ControlMode::Manual && ctx.link.phase() == GamePhase::Preparing);
+  ctx.port.output.clear();
+  ctx.receive(no + prep); // falseや同一PHASEで確認待ちの期限を延ばさない。
+  assert(!step(9, 2999) && ctx.link.ready_pending() && ctx.port.output.empty());
+  step(9, 1);
+  assert(!ctx.link.ready_pending() && !ctx.link.fifo_synced() && ctx.port.output == resync);
+  ctx.receive(reset(syncB, R"([{"pid":10,"dst":2}])") + prep + no);
+  ctx.port.output.clear();
+  assert(!step(9, 2000));
+  step(0);
+  step(9);
+  assert(step(9, 2000) && ctx.port.output == readyB);
+  ctx.receive(yes);
+  assert(!ctx.link.ready_pending() && ctx.link.status().ready);
+  ctx.port.output.clear();
+  step(0);
+  assert(!step(9, 10000) && ctx.port.output.empty());
+  ctx.receive(no);
+  step(0);
+  step(9);
+  ctx.receive(playing + prep); // 同じpoll内で戻っても長押しを解除する。
+  assert(!step(9, 2000));
+  step(0);
+  step(9);
+  ctx.receive(reset(syncB, R"([{"pid":10,"dst":2}])") + no);
+  assert(!step(9, 2000));
+  step(0);
+  step(9);
+  assert(step(9, 2000));
+  ctx.receive(playing);
+  assert(!ctx.link.ready_pending());
+  ctx.port.output.clear();
+  assert(ctx.link.send(ctx.port, ctx.queue, NodeId::P2, ctx.now));
+  assert(ctx.port.output.find("\"rid\":0") != std::string::npos); // READYはRIDを消費しない。
+  ctx.receive(result(syncB, 0));
+  ctx.receive(config + reset(syncA, "[]") + prep); // STATUS未取得では要求しない。
+  ctx.port.output.clear();
+  step(0);
+  assert(!step(9, 2000));
+  ctx.receive(no);
+  step(0);
+  step(9);
+  ctx.port.writeLimit = 5;
+  assert(step(9, 2000));
+  for (unsigned i = 0; i < 30; ++i) ctx.poll();
+  assert(ctx.port.output == readyA && ctx.link.ready_pending());
+  ctx.port.writeLimit = 256;
+  ctx.receive(message("config", R"({"node":1,"mode":"auto"})") + reset(syncA, "[]") + prep + no);
+  ctx.port.output.clear();
+  step(0);
+  assert(!step(9, 3000) && !ctx.link.ready_pending() && ctx.port.output.empty());
+  ctx.receive(config + reset(syncA, "[]") + prep + no);
+  step(0);
+  step(9);
+  ctx.port.writable = 0;
+  assert(!step(9, 2000) && !ctx.link.fifo_synced());
+  ctx.port.writable = 256;
+  ctx.poll();
+  assert(ctx.port.output == resync);
+  ctx.receive(config + reset(syncA, "[]") + prep + no);
+  step(0);
+  step(9);
+  assert(step(9, 2000) && ctx.link.ready_pending());
+  ctx.port.connected = false;
+  ctx.poll();
+  ctx.now += ServerLink::DISCONNECT_GRACE_MS;
+  ctx.poll();
+  assert(!ctx.link.ready_pending() && ctx.link.ready_progress_ms() == 0 && ctx.self == NodeId::None);
+}
+
 int main() {
+  test_ready();
   test_status_and_mode();
   test_utf8_validation();
   test_oversized_line_drop();

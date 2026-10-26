@@ -60,6 +60,27 @@ int main() {
   assert(damage.containsPixel(120, 20) && damage.containsPixel(319, 89));
   assert(!damage.containsPixel(400, 200));
 
+  next = displayed;
+  next.phase = GamePhase::Preparing;
+  next.status.ready = false;
+  auto prep = display_changes(displayed, next, false);
+  assert(prep.full && prep.cards.none() && prep.buttons == 0 && prep.preparingBody);
+  assert(preparing_state(next) == PreparingState::Manual);
+  auto holding = next;
+  holding.readyHoldMs = 1000;
+  prep = display_changes(next, holding, false);
+  assert(prep.preparingBar && !prep.full && !prep.preparingBody && !prep.cards.any());
+  assert(display_damage(prep, false).changedTiles() < 100);
+  holding.readyPending = true;
+  assert(preparing_state(holding) == PreparingState::Confirming);
+  holding.status.ready = true;
+  assert(preparing_state(holding) == PreparingState::Ready);
+  holding.mode = ControlMode::Auto;
+  assert(preparing_state(holding) == PreparingState::Auto);
+  holding.synced = false;
+  assert(preparing_state(holding) == PreparingState::Waiting);
+  assert(display_changes(next, displayed, false).full);
+
   ScanTiming timing;
   timing.locked = true;
   std::array<ScanTransferBlock, 3> blocks{{{112, 16, 0, 500}, {304, 16, 400, 1200}, {464, 16, 800, 2000}}};

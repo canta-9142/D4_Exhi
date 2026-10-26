@@ -33,6 +33,23 @@ DisplaySnapshot snapshot(unsigned scene, unsigned index) {
     s.awaitingStatus = !s.status.known;
   }
   if (scene == 4 && index >= 16) s.selfId = NodeId::P8;
+  if (scene >= 5) {
+    s.phase = GamePhase::Preparing;
+    s.status.ready = false;
+    s.readyHoldMs = std::min<unsigned>(index * 80, ReadyHold::DURATION_MS);
+    s.pressedMask = index ? ReadyHold::END_BUTTONS : 0;
+    if (scene == 5) {
+      s.readyPending = index >= 26;
+      s.status.ready = index >= 30;
+    } else {
+      s.readyPending = index >= 8 && index < 12;
+      s.status.ready = index >= 12 && index < 16;
+      if (index >= 16 && index < 20) s.phase = GamePhase::Playing;
+      if (index >= 20 && index < 24) s.mode = ControlMode::Auto;
+      if (index >= 24 && index < 28) { s.synced = false; s.awaitingStatus = true; }
+      if (index >= 28) { s.readyHoldMs = 0; s.pressedMask = 0; }
+    }
+  }
   return s;
 }
 
@@ -41,11 +58,11 @@ bool verify(const DisplaySnapshot& s) {
   std::memcpy(reference, frame.back(), FrameBuffer::BYTES);
   bool valid = true;
   if (backDisplayDrawn) {
-    draw_static_layout();
+    draw_screen_layout(previousBackDisplay);
     render_snapshot(previousBackDisplay, display_changes({}, previousBackDisplay, true));
     valid = !std::memcmp(reference, frame.back(), FrameBuffer::BYTES);
   }
-  draw_static_layout();
+  draw_screen_layout(s);
   render_snapshot(s, display_changes({}, s, true));
   valid = valid && !std::memcmp(frame.front(), frame.back(), FrameBuffer::BYTES);
   std::memcpy(frame.back(), reference, FrameBuffer::BYTES);
@@ -57,8 +74,8 @@ void report_ready() {
 }
 
 void benchmark() {
-  constexpr const char* names[] = {"idle", "cards", "buttons", "numbers", "mixed"};
-  for (unsigned scene = 0; scene < 5; ++scene) {
+  constexpr const char* names[] = {"idle", "cards", "buttons", "numbers", "mixed", "preparing", "phases"};
+  for (unsigned scene = 0; scene < 7; ++scene) {
     queue.clear();
     animation = PacketAnimation{};
     for (unsigned i = 0; i < 6; ++i) queue.push({uint16_t(1001 + i), NodeId(unsigned(NodeId::P2) + i)});
@@ -94,7 +111,7 @@ void benchmark() {
                     (unsigned long)t.scanWaitUs, (unsigned long)t.transferUs, (unsigned long)t.frameUs,
                     (unsigned long)t.bytes, (unsigned long)t.spans);
   }
-  Serial.println("{\"type\":\"playing_done\",\"data\":{\"samples\":160,\"reference_match\":true,\"buffer_states_valid\":true}}");
+  Serial.println("{\"type\":\"playing_done\",\"data\":{\"samples\":224,\"reference_match\":true,\"buffer_states_valid\":true}}");
 }
 }
 
