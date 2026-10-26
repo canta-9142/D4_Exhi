@@ -1,18 +1,13 @@
 package app
 
-import (
-	"errors"
-	"time"
-)
+import "errors"
 
 type preview struct {
-	uid     string
-	node    NodeID // Includes temporary P1 for an unassigned board.
-	started time.Time
-	slot    int64
+	uid  string
+	node NodeID // Includes temporary P1 for an unassigned board.
 }
 
-func (a *App) setPreview(uid string, now time.Time) error {
+func (a *App) setPreview(uid string) error {
 	if uid == "" {
 		a.restorePreview()
 		return nil
@@ -39,11 +34,9 @@ func (a *App) setPreview(uid string, now time.Time) error {
 	if node == 0 {
 		node = 1
 	}
-	a.preview = &preview{uid: uid, node: node, started: now, slot: -1}
+	a.preview = &preview{uid: uid, node: node}
 	if d.kind == LEDDevice {
-		if a.send(d.session, Message{Type: "CONFIG", Data: LEDConfigData{node}}) {
-			a.updatePreview(now)
-		}
+		a.send(d.session, Message{Type: "CONFIG", Data: LEDConfigData{Node: node, Preview: true}})
 	} else if a.send(d.session, Message{Type: "config", Data: ConfigData{Node: node, Mode: "auto"}}) && a.resetFIFO(d.session, d.node) {
 		a.phase(d.session)
 	}
@@ -74,44 +67,7 @@ func (a *App) restorePreview() {
 		if a.resetFIFO(d.session, d.node) && a.phase(d.session) {
 			a.sendStatus(d.session)
 		}
-	} else if a.send(d.session, Message{Type: "CLEAR", Data: struct{}{}}) && d.node.bot() {
+	} else if a.send(d.session, Message{Type: "CONFIG", Data: LEDConfigData{Node: d.node}}) && d.node.bot() {
 		a.send(d.session, Message{Type: "BUFFER", Data: BufferData{len(a.game.nodes[d.node].fifo)}})
-	}
-}
-
-func (a *App) updatePreview(now time.Time) {
-	p := a.preview
-	if p == nil {
-		return
-	}
-	d := a.devices[p.uid]
-	if d.kind != LEDDevice {
-		return
-	}
-	// Send only the current half-second state, even after multiple missed cycles.
-	slot := max(0, int64(now.Sub(p.started)/(500*time.Millisecond)))
-	if slot == p.slot {
-		return
-	}
-	p.slot = slot
-	if !a.send(d.session, Message{Type: "CLEAR", Data: struct{}{}}) || slot%2 != 0 {
-		return
-	}
-	if p.node.bot() {
-		if !a.send(d.session, Message{Type: "BUFFER", Data: BufferData{4}}) {
-			return
-		}
-		// GPIO1 is the first player link for every Bot controller.
-		a.send(d.session, Message{Type: "LIGHT", Data: LightData{neighbors[p.node][0], p.node, "outgoing"}})
-	} else {
-		// P3/P5/P7 use the previous neighbor on GPIO0, next on GPIO1.
-		// P1 instead uses P2 on GPIO0 and the wraparound P8 on GPIO1.
-		first, second := p.node-1, p.node+1
-		if p.node == 1 {
-			first, second = 2, 8
-		}
-		if a.send(d.session, Message{Type: "LIGHT", Data: LightData{first, p.node, "outgoing"}}) {
-			a.send(d.session, Message{Type: "LIGHT", Data: LightData{second, p.node, "outgoing"}})
-		}
 	}
 }

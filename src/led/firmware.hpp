@@ -11,6 +11,26 @@ size_t outputCount = 0;
 char nodeUid[13];
 uint32_t renderedMs = 0;
 
+bool clear_startup_outputs() {
+  unsigned maxPin = 0;
+  for (const led::Route& route : led::ROUTES) {
+    if (route.pin > maxPin) maxPin = route.pin;
+  }
+  for (unsigned pin = 0; pin <= maxPin; ++pin) {
+    uint16_t count = 0;
+    for (const led::Route& route : led::ROUTES) {
+      if (route.pin == pin && route.count > count) count = route.count;
+    }
+    if (!count) continue;
+    // NODEが未確定なので、各GPIOの最長のテープまで消灯する。
+    Adafruit_NeoPixel output(count, pin, NEO_GRB + NEO_KHZ800);
+    if (!output.getPixels() || !output.begin()) return false;
+    output.clear();
+    output.show();
+  }
+  return true;
+}
+
 void clear_outputs() {
   for (size_t i = 0; i < outputCount; ++i) {
     strips[i].clear();
@@ -28,12 +48,14 @@ void configure_outputs() {
     strips[i].updateType(NEO_GRB + NEO_KHZ800);
     strips[i].updateLength(route.count);
     strips[i].setPin(route.pin);
-    ++outputCount;
     if (!strips[i].getPixels() || !strips[i].begin()) {
-      controller.reset();
+      controller.output_failed();
+      strips[i].setPin(-1);
+      strips[i].updateLength(0);
       clear_outputs();
       return;
     }
+    ++outputCount;
     strips[i].setBrightness(255);
     strips[i].clear();
     strips[i].show();
@@ -41,6 +63,7 @@ void configure_outputs() {
 }
 
 void setup() {
+  while (!clear_startup_outputs()) delay(10);
   Serial.setRxBufferSize(1024);
   Serial.setTxTimeoutMs(0);
   Serial.begin(115200);
@@ -49,9 +72,8 @@ void setup() {
 }
 
 void loop() {
+  const bool configured = controller.poll(Serial, nodeUid, millis(), configure_outputs);
   const uint32_t nowMs = millis();
-  const bool configured = controller.poll(Serial, nodeUid, nowMs);
-  if (configured) configure_outputs();
   if (configured || nowMs - renderedMs >= led::FRAME_MS) {
     renderedMs = nowMs;
     for (size_t strip = 0; strip < outputCount; ++strip) {

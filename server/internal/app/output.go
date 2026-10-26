@@ -94,7 +94,7 @@ func (a *App) syncDevice(id SessionID, config bool) {
 		return
 	}
 	if d.kind == LEDDevice {
-		if a.send(id, Message{Type: "CONFIG", Data: LEDConfigData{d.node}}) && d.node.bot() {
+		if a.send(id, Message{Type: "CONFIG", Data: LEDConfigData{Node: d.node}}) && d.node.bot() {
 			a.send(id, Message{Type: "BUFFER", Data: BufferData{len(a.game.nodes[d.node].fifo)}})
 		}
 		return
@@ -116,16 +116,16 @@ func (a *App) restoreUnassigned(uid string) {
 	if d == nil || d.session == "" {
 		return
 	}
-	if d.kind == PlayerDevice {
-		a.identify(d.session, a.eventNow)
-	} else {
-		a.send(d.session, Message{Type: "CLEAR", Data: struct{}{}})
-	}
+	a.identify(d.session, a.eventNow)
 }
 
 func (a *App) notify(c change) {
 	switch c.kind {
 	case "phase", "reset":
+		var stopped *preview
+		if c.kind == "reset" {
+			stopped = a.clearPreview()
+		}
 		for node := NodeID(1); node <= PlayerCount; node++ {
 			if id := a.nodeSession(PlayerDevice, node); id != "" {
 				if a.phase(id) && c.kind == "reset" {
@@ -136,10 +136,17 @@ func (a *App) notify(c change) {
 		if c.kind == "reset" {
 			for _, node := range ledNodes {
 				if id := a.nodeSession(LEDDevice, node); id != "" {
-					if a.send(id, Message{Type: "CLEAR", Data: struct{}{}}) && node.bot() {
+					message := Message{Type: "CLEAR", Data: struct{}{}}
+					if stopped != nil && stopped.uid == a.sessions[id].uid {
+						message = Message{Type: "CONFIG", Data: LEDConfigData{Node: node}}
+					}
+					if a.send(id, message) && node.bot() {
 						a.send(id, Message{Type: "BUFFER", Data: BufferData{0}})
 					}
 				}
+			}
+			if stopped != nil && a.devices[stopped.uid].node == 0 {
+				a.restoreUnassigned(stopped.uid)
 			}
 		}
 		a.autoAssignPending()

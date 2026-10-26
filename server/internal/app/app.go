@@ -114,7 +114,6 @@ func (a *App) Run(ctx context.Context) error {
 			a.advance(a.eventNow)
 			a.autoAssignPending()
 			a.identifyPending(a.eventNow)
-			a.updatePreview(a.eventNow)
 			a.flushStatus()
 		}
 	}
@@ -167,12 +166,7 @@ func (a *App) Execute(ctx context.Context, command Command) error {
 		case Finish:
 			return a.game.finish()
 		case Reset:
-			p := a.clearPreview()
 			a.game.reset()
-			// Assigned devices were restored by the normal Reset notifications.
-			if p != nil && a.devices[p.uid].node == 0 {
-				a.restoreUnassigned(p.uid)
-			}
 		case SetNodeEnabled:
 			if a.game.phase == Playing {
 				return errors.New("operation mode cannot change while Playing")
@@ -204,7 +198,7 @@ func (a *App) Execute(ctx context.Context, command Command) error {
 		case SetDeviceAssignment, SwapDeviceAssignments, ReplaceDeviceAssignment:
 			return a.changeAssignments(command)
 		case SetDevicePreview:
-			return a.setPreview(command.DeviceID, now)
+			return a.setPreview(command.DeviceID)
 		default:
 			return fmt.Errorf("unknown operation %q", command.Operation)
 		}

@@ -68,7 +68,10 @@ type StatusData struct {
 	Remaining int  `json:"remaining"`
 	Ready     bool `json:"ready"`
 }
-type LEDConfigData struct{ Node NodeID }
+type LEDConfigData struct {
+	Node    NodeID
+	Preview bool
+}
 type LightData struct {
 	Neighbor    NodeID
 	Destination NodeID
@@ -81,7 +84,7 @@ func (m Message) MarshalLine() ([]byte, error) {
 	switch m.Type {
 	case "CONFIG":
 		if d, ok := m.Data.(LEDConfigData); ok && validAssignment(LEDDevice, d.Node) {
-			return []byte("CONFIG " + d.Node.wireName()), nil
+			return []byte(fmt.Sprintf("CONFIG %s %t", d.Node.wireName(), d.Preview)), nil
 		}
 	case "LIGHT":
 		if d, ok := m.Data.(LightData); ok && d.Neighbor >= 1 && d.Neighbor <= NodeCount && d.Destination >= 1 && d.Destination <= NodeCount && (d.Direction == "incoming" || d.Direction == "outgoing") {
