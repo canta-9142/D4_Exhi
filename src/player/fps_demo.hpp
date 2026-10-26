@@ -1,94 +1,122 @@
 #ifndef FPS_DEMO_HPP_
 #define FPS_DEMO_HPP_
 
-#include "display.hpp"
-#include "startup_animation.hpp"
+// -DPLAYER_PLAYING_BENCH: 通常と同じ描画経路を計測し、全描画との一致も検証する。
+#include "drawing.hpp"
+#include <cstring>
 
-uint32_t reportStartedUs = 0;
-uint32_t previousFrameStartedUs = 0;
-uint32_t frames = 0;
-uint32_t maxFrameUs = 0;
-uint32_t reports = 0;
-uint64_t drawTotalUs = 0;
-uint64_t transferTotalUs = 0;
+namespace playing_bench {
+constexpr unsigned SAMPLES = 32;
+bool ready = false;
+lgfx::swap565_t* reference = nullptr;
+PacketQueue queue;
+PacketAnimation animation;
+
+DisplaySnapshot snapshot(unsigned scene, unsigned index) {
+  DisplaySnapshot s{};
+  s.selfId = NodeId::P1;
+  s.phase = GamePhase::Playing;
+  s.mode = ControlMode::Manual;
+  s.synced = true;
+  s.status = {123, 120, true, true};
+  for (unsigned i = 0; i < 3; ++i)
+    s.cards[i] = {{uint16_t(1001 + i), NodeId(unsigned(NodeId::P2) + i)}, float(170 - i * 80), int(170 - i * 80), true, PACKET_FADE_MS};
+  if (scene == 1 || scene == 4) {
+    if (index == 8 || index == 24) queue.pop();
+    animation.update(queue, 16, ANIMATION_HEIGHT);
+    s.cards = animation.snapshot();
+  }
+  if (scene == 2 || scene == 4) s.pressedMask = index & 1 ? 5 : 0;
+  if (scene == 3 || scene == 4) {
+    constexpr int32_t scores[] = {0, 9, 10, 99, 100, 1000, 2147483647, 0};
+    s.status = {scores[index % 8], uint8_t(120 - index), bool(index & 1), index % 8 != 0};
+    s.awaitingStatus = !s.status.known;
+  }
+  if (scene == 4 && index >= 16) s.selfId = NodeId::P8;
+  return s;
+}
+
+bool verify(const DisplaySnapshot& s) {
+  // 検証中だけbackを全描画用に使い、検証後は内容と描画履歴をそのまま復元する。
+  std::memcpy(reference, frame.back(), FrameBuffer::BYTES);
+  bool valid = true;
+  if (backDisplayDrawn) {
+    draw_static_layout();
+    render_snapshot(previousBackDisplay, display_changes({}, previousBackDisplay, true));
+    valid = !std::memcmp(reference, frame.back(), FrameBuffer::BYTES);
+  }
+  draw_static_layout();
+  render_snapshot(s, display_changes({}, s, true));
+  valid = valid && !std::memcmp(frame.front(), frame.back(), FrameBuffer::BYTES);
+  std::memcpy(frame.back(), reference, FrameBuffer::BYTES);
+  return valid;
+}
+
+void report_ready() {
+  Serial.printf("{\"type\":\"playing_ready\",\"data\":{\"ok\":%s,\"psram_bytes\":614400,\"dma_bytes\":20480}}\n", ready ? "true" : "false");
+}
+
+void benchmark() {
+  constexpr const char* names[] = {"idle", "cards", "buttons", "numbers", "mixed"};
+  for (unsigned scene = 0; scene < 5; ++scene) {
+    queue.clear();
+    animation = PacketAnimation{};
+    for (unsigned i = 0; i < 6; ++i) queue.push({uint16_t(1001 + i), NodeId(unsigned(NodeId::P2) + i)});
+    draw_static_layout();
+    displayDrawn = false;
+    backDisplayDrawn = false;
+    draw_snapshot(snapshot(0, 0));
+    std::array<DisplayFrameStats, SAMPLES> samples;
+    for (unsigned i = 0; i < SAMPLES + 2; ++i) {
+      const auto s = snapshot(scene, i);
+      const auto scheduled = display_damage(display_changes(previousDisplay, s, false), false);
+      const auto stats = draw_snapshot(s);
+      bool covered = true;
+      if (stats.bytes) {
+        FrameDamage actual;
+        actual.compare(frame.back(), frame.front());
+        actual.forEachSpan([&](int x, int y, int, int h) {
+          for (int row = y; row < y + h; row += FrameDamage::TILE)
+            if (!scheduled.containsPixel(x, row)) covered = false;
+        });
+      }
+      if (!covered || !verify(s)) {
+        Serial.printf("{\"type\":\"playing_error\",\"data\":{\"scene\":\"%s\",\"index\":%u}}\n", names[scene], i);
+        return;
+      }
+      if (i >= 2) samples[i - 2] = stats;
+      delay(1);
+    }
+    for (const auto& t : samples)
+      Serial.printf("{\"type\":\"playing_sample\",\"data\":{\"scene\":\"%s\",\"draw_us\":%lu,\"pack_us\":%lu,"
+                    "\"scan_read_us\":%lu,\"scan_wait_us\":%lu,\"transfer_us\":%lu,\"frame_us\":%lu,\"bytes\":%lu,\"spans\":%lu}}\n",
+                    names[scene], (unsigned long)t.drawUs, (unsigned long)t.packUs, (unsigned long)t.scanReadUs,
+                    (unsigned long)t.scanWaitUs, (unsigned long)t.transferUs, (unsigned long)t.frameUs,
+                    (unsigned long)t.bytes, (unsigned long)t.spans);
+  }
+  Serial.println("{\"type\":\"playing_done\",\"data\":{\"samples\":160,\"reference_match\":true,\"buffer_states_valid\":true}}");
+}
+}
 
 void setup() {
-  if (!lcd_init()) return;
-  startup_animation();
-
-  lcd.setTextColor(TFT_WHITE, TFT_BLACK);
-  lcd.setTextSize(2);
-  lcd.drawString("PLAYER", 8, 16);
-  lcd.drawString("SPI 80 MHz", 328, 16);
-  lcd.drawString("Full:", 328, 38);
-  lcd.drawString("   480x320", 328, 60);
-  lcd.drawString("Sprite:", 328, 82);
-  lcd.drawString("   200x240", 328, 104);
-  lcd.drawString("RGB565", 328, 126);
-  lcd.drawString("UNCAPPED", 328, 148);
-  lcd.drawString("Measuring...", 8, 244);
-
-  reportStartedUs = micros();
+  Serial.setRxBufferSize(1024);
+  Serial.setTxBufferSize(16384);
+  Serial.setTxTimeoutMs(1000);
+  Serial.begin(115200);
+  Serial.setDebugOutput(false);
+  using namespace playing_bench;
+  reference = static_cast<lgfx::swap565_t*>(heap_caps_malloc(FrameBuffer::BYTES, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+  ready = reference && initialize_display(false);
+  report_ready();
 }
 
 void loop() {
-  if (!sprite.getBuffer()) {
-    delay(1000);
-    return;
+  while (Serial.available()) {
+    const char c = Serial.read();
+    if (c == '?') playing_bench::report_ready();
+    if (c == 'b' && playing_bench::ready) playing_bench::benchmark();
   }
-
-  const uint32_t frameStartedUs = micros();
-  if (previousFrameStartedUs != 0) {
-    const uint32_t frameUs = frameStartedUs - previousFrameStartedUs;
-    if (frameUs > maxFrameUs) maxFrameUs = frameUs;
-  }
-  previousFrameStartedUs = frameStartedUs;
-
-  // 経過時間で動かすので、FPSが変わっても移動速度は一定。
-  const uint32_t elapsedMs = millis();
-  sprite.fillSprite(TFT_BLACK);
-  sprite.drawRect(0, 0, ANIMATION_WIDTH, ANIMATION_HEIGHT, TFT_WHITE);
-  for (int lane = 0; lane < 3; ++lane) {
-    const uint32_t phase = (elapsedMs + lane * 600) % 2400;
-    const uint32_t travel = phase < 1200 ? phase : 2400 - phase;
-    const int x = 4 + travel * (ANIMATION_WIDTH - 72) / 1200;
-    const int y = 24 + lane * 72;
-    sprite.drawRect(x, y, 64, 32, TFT_WHITE);
-    sprite.setCursor(x + 20, y + 8);
-    sprite.printf("P%d", lane + 1);
-  }
-  const uint32_t drawFinishedUs = micros();
-
-  sprite.pushSprite(ANIMATION_X, ANIMATION_Y);
-  lcd.waitDMA();  // 転送完了までを計測に含める
-  const uint32_t transferFinishedUs = micros();
-
-  drawTotalUs += drawFinishedUs - frameStartedUs;
-  transferTotalUs += transferFinishedUs - drawFinishedUs;
-  ++frames;
-
-  const uint32_t reportUs = transferFinishedUs - reportStartedUs;
-  if (reportUs >= 1000000) {
-    const float fps = frames * 1000000.0f / reportUs;
-    const float drawMs = drawTotalUs / (frames * 1000.0);
-    const float transferMs = transferTotalUs / (frames * 1000.0);
-
-    // アニメーション外も毎秒更新。この負荷はFPSと最大フレーム時間に含まれる。
-    lcd.fillRect(0, 240, 480, 80, TFT_BLACK);
-    lcd.setCursor(8, 244);
-    lcd.printf("FPS %5.1f | Frames %lu", fps, (unsigned long)frames);
-    lcd.setCursor(8, 268);
-    lcd.printf("Draw %5.2f ms | SPI %5.2f ms", drawMs, transferMs);
-    lcd.setCursor(8, 292);
-    lcd.printf("Max %5.2f ms | UI %lu", maxFrameUs / 1000.0f,
-               (unsigned long)++reports);
-
-    frames = 0;
-    drawTotalUs = 0;
-    transferTotalUs = 0;
-    maxFrameUs = 0;
-    reportStartedUs = transferFinishedUs;
-  }
+  delay(1);
 }
 
 #endif // FPS_DEMO_HPP_

@@ -134,9 +134,17 @@ struct TransferPlan {
   bool feasible = false;
 };
 
-inline TransferPlan plan_transfer(const ScanTiming& timing, int firstX, int transferWidth,
-                                  float columnUs, int blockWidth) {
+struct ScanTransferBlock {
+  int x = 0, width = 0;
+  float earliestStartUs = 0, latestEndUs = 0;
+};
+
+template <size_t N>
+inline TransferPlan plan_transfer(const ScanTiming& timing,
+                                  const std::array<ScanTransferBlock, N>& blocks, unsigned count) {
   TransferPlan plan;
+  if (!count) return plan;
+  const int firstX = blocks[0].x;
   plan.periodUs = timing.periodUs;
   plan.guardUs = timing.guard_us();
   plan.firstScanPhaseUs = firstX * plan.periodUs / SCAN_LINES;
@@ -144,20 +152,19 @@ inline TransferPlan plan_transfer(const ScanTiming& timing, int firstX, int tran
   plan.blankingUs = (SCAN_LINES - SCAN_ACTIVE_LINES) * plan.periodUs / SCAN_LINES;
   plan.earliestStartDelayUs = plan.guardUs + plan.blankingUs;
   plan.latestStartDelayUs = plan.periodUs;
-  // 全列が同じパネル周期の前回走査と次回走査の間に入る共通の開始範囲。
-  for (int x = 0; x < transferWidth; ++x) {
-    const float scanUs = x * plan.periodUs / SCAN_LINES;
-    const int firstColumn = x / blockWidth * blockWidth;
-    const int endColumn = std::min(firstColumn + blockWidth, transferWidth);
-    // 列ごとの進行は仮定せず、ブロック全体の開始・完了を期限に使う。
+  // 未更新列は送らない。物理Xと、実際に送るブロックの時間を別々に扱う。
+  for (unsigned i = 0; i < count; ++i) {
+    const auto& block = blocks[i];
+    const float firstScanUs = (block.x - firstX) * plan.periodUs / SCAN_LINES;
+    const float lastScanUs = (block.x + block.width - 1 - firstX) * plan.periodUs / SCAN_LINES;
     plan.earliestStartDelayUs = std::max(plan.earliestStartDelayUs,
-        scanUs + plan.guardUs + plan.blankingUs - firstColumn * columnUs);
+        lastScanUs + plan.guardUs + plan.blankingUs - block.earliestStartUs);
     plan.latestStartDelayUs = std::min(plan.latestStartDelayUs,
-        scanUs + plan.periodUs - plan.guardUs - endColumn * columnUs);
+        firstScanUs + plan.periodUs - plan.guardUs - block.latestEndUs);
   }
   plan.feasible = timing.locked && plan.latestStartDelayUs >= plan.earliestStartDelayUs;
   const float fallbackStartPhaseUs = wrap_phase(
-      (firstX + transferWidth + FALLBACK_SCAN_MARGIN_LINES) * plan.periodUs / SCAN_LINES
+      (blocks[count - 1].x + blocks[count - 1].width + FALLBACK_SCAN_MARGIN_LINES) * plan.periodUs / SCAN_LINES
           + FALLBACK_START_OFFSET_US, plan.periodUs);
   plan.startDelayFromScanUs = plan.feasible
       ? (plan.earliestStartDelayUs + plan.latestStartDelayUs) / 2
