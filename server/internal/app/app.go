@@ -3,7 +3,6 @@ package app
 import (
 	"context"
 	"errors"
-	"fmt"
 	"log/slog"
 	"math"
 	"os"
@@ -24,16 +23,18 @@ type Options struct {
 }
 
 type session struct {
-	uid          string
-	failed       bool
-	waitingHello bool
-	sync         string
-	lastRID      uint32
-	hasRID       bool
-	lastIdentify time.Time
-	lastStatus   StatusData
-	hasStatus    bool
-	forceStatus  bool
+	uid            string
+	failed         bool
+	waitingHello   bool
+	sync           string
+	lastRID        uint32
+	hasRID         bool
+	lastIdentify   time.Time
+	lastStatus     StatusData
+	hasStatus      bool
+	forceStatus    bool
+	phasePending   bool
+	summaryPending bool
 }
 
 type device struct {
@@ -106,7 +107,7 @@ func (a *App) Run(ctx context.Context) error {
 			err := req.apply(a.eventNow)
 			if req.advance {
 				a.autoAssignPending()
-				a.flushStatus()
+				a.flushPlayerUpdates()
 			}
 			req.reply <- err
 		case <-ticks:
@@ -114,8 +115,7 @@ func (a *App) Run(ctx context.Context) error {
 			a.advance(a.eventNow)
 			a.autoAssignPending()
 			a.identifyPending(a.eventNow)
-			a.updatePreview(a.eventNow)
-			a.flushStatus()
+			a.flushPlayerUpdates()
 		}
 	}
 }
@@ -159,20 +159,15 @@ func (a *App) Execute(ctx context.Context, command Command) error {
 	return a.submit(ctx, true, func(now time.Time) error {
 		switch command.Operation {
 		case Start:
-			if blockers := a.game.startBlockers(); len(blockers) > 0 {
-				return blockers[0].reject()
+			if err := a.game.startError(); err != nil {
+				return err
 			}
 			a.restorePreview()
 			return a.game.start(now)
 		case Finish:
 			return a.game.finish()
 		case Reset:
-			p := a.clearPreview()
 			a.game.reset()
-			// Assigned devices were restored by the normal Reset notifications.
-			if p != nil && a.devices[p.uid].node == 0 {
-				a.restoreUnassigned(p.uid)
-			}
 		case SetNodeEnabled:
 			if a.game.phase == Playing {
 				return reject(CodePhaseConflict, "operation mode cannot change while Playing")
@@ -204,9 +199,9 @@ func (a *App) Execute(ctx context.Context, command Command) error {
 		case SetDeviceAssignment, SwapDeviceAssignments, ReplaceDeviceAssignment:
 			return a.changeAssignments(command)
 		case SetDevicePreview:
-			return a.setPreview(command.DeviceID, now)
+			return a.setPreview(command.DeviceID)
 		default:
-			return reject(CodeInvalid, fmt.Sprintf("unknown operation %q", command.Operation))
+			return reject(CodeInvalid, "unknown operation")
 		}
 		return nil
 	})
@@ -216,10 +211,10 @@ func (a *App) State(ctx context.Context) (Snapshot, error) {
 	var snapshot Snapshot
 	err := a.submit(ctx, false, func(time.Time) error {
 		g := &a.game
-		blockers := g.startBlockers()
+		reasons := g.startBlockers()
 		snapshot = Snapshot{
 			Phase: g.phase, Elapsed: g.elapsed, Remaining: GameDuration - g.elapsed, RemainingSeconds: a.remainingSeconds(),
-			CanStart: len(blockers) == 0, StartBlockers: blockers,
+			CanStart: len(reasons) == 0, StartBlockers: reasons,
 			Nodes: make([]NodeSnapshot, 0, NodeCount), Devices: make([]DeviceSnapshot, 0, len(a.devices)),
 		}
 		for id := NodeID(1); id <= NodeCount; id++ {
@@ -228,9 +223,14 @@ func (a *App) State(ctx context.Context) (Snapshot, error) {
 			if id.bot() {
 				kind = "bot"
 			}
+			var rank *int
+			if n.rank != 0 {
+				value := n.rank
+				rank = &value
+			}
 			snapshot.Nodes = append(snapshot.Nodes, NodeSnapshot{
 				ID: id, Kind: kind, Enabled: n.manual, FIFOUsage: len(n.fifo), Score: n.score,
-				RankingEligible: n.eligible, Rate: n.rate, Ready: n.ready,
+				RankingEligible: n.eligible, Rate: n.rate, Ready: n.ready, Rank: rank,
 			})
 		}
 		for uid, d := range a.devices {
@@ -298,7 +298,7 @@ func (a *App) MessageReceived(ctx context.Context, id SessionID, message Incomin
 				a.clearPreview()
 			}
 			if node != 0 {
-				a.syncDevice(id, false)
+				a.syncDevice(id, wasPreview)
 			} else if wasPreview {
 				a.restoreUnassigned(s.uid)
 			}
@@ -356,10 +356,7 @@ func validHex(s string, length int) bool {
 }
 
 func validIdentity(kind DeviceKind, uid string) bool {
-	if kind == PlayerDevice {
-		return validHex(uid, 12)
-	}
-	return kind == LEDDevice && uid != "" && !strings.ContainsAny(uid, " \t\r\n\x00")
+	return (kind == PlayerDevice || kind == LEDDevice) && validHex(uid, 12)
 }
 
 func (a *App) disconnect(id SessionID) {
@@ -416,6 +413,7 @@ func (a *App) identify(id SessionID, now time.Time) {
 		return
 	}
 	s.waitingHello, s.lastIdentify, s.sync, s.hasStatus = true, now, "", false
+	s.phasePending, s.summaryPending, s.forceStatus = false, false, false
 	a.send(id, Message{Type: "identify", Data: struct{}{}})
 }
 

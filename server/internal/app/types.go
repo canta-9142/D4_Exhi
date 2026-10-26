@@ -60,15 +60,25 @@ type Message struct {
 }
 
 type ConfigData struct {
-	Node NodeID `json:"node"`
-	Mode string `json:"mode"`
+	Node    NodeID `json:"node"`
+	Mode    string `json:"mode"`
+	Preview bool   `json:"preview"`
 }
 type StatusData struct {
 	Score     int  `json:"score"`
 	Remaining int  `json:"remaining"`
 	Ready     bool `json:"ready"`
 }
-type LEDConfigData struct{ Node NodeID }
+type LEDConfigData struct {
+	Node    NodeID
+	Preview bool
+}
+type SummaryData struct {
+	Sync     string `json:"sync"`
+	Score    int    `json:"score"`
+	Rank     *int   `json:"rank"`
+	Eligible bool   `json:"eligible"`
+}
 type LightData struct {
 	Neighbor    NodeID
 	Destination NodeID
@@ -81,7 +91,7 @@ func (m Message) MarshalLine() ([]byte, error) {
 	switch m.Type {
 	case "CONFIG":
 		if d, ok := m.Data.(LEDConfigData); ok && validAssignment(LEDDevice, d.Node) {
-			return []byte("CONFIG " + d.Node.wireName()), nil
+			return []byte(fmt.Sprintf("CONFIG %s %t", d.Node.wireName(), d.Preview)), nil
 		}
 	case "LIGHT":
 		if d, ok := m.Data.(LightData); ok && d.Neighbor >= 1 && d.Neighbor <= NodeCount && d.Destination >= 1 && d.Destination <= NodeCount && (d.Direction == "incoming" || d.Direction == "outgoing") {
@@ -121,6 +131,7 @@ type NodeSnapshot struct {
 	RankingEligible bool    `json:"ranking_eligible"`
 	Rate            float64 `json:"rate"`
 	Ready           bool    `json:"ready"`
+	Rank            *int    `json:"rank"`
 }
 
 type DeviceSnapshot struct {

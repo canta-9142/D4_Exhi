@@ -10,7 +10,7 @@ import (
 
 const (
 	testUID2 = "112233AABBCC"
-	testLED  = "LED-1"
+	testLED  = "A00000000001"
 )
 
 func rejectionOf(t *testing.T, err error) *Rejection {
@@ -61,6 +61,7 @@ func TestRejectionCodes(t *testing.T) {
 		{"assignment out of range", nil, Command{Operation: SetDeviceAssignment, DeviceID: testUID, Kind: PlayerDevice, Node: 9}, CodeInvalid, nil},
 		{"assignment kind mismatch", nil, Command{Operation: SetDeviceAssignment, DeviceID: testUID, Kind: LEDDevice, Node: 3}, CodeDeviceKindMismatch, nil},
 		{"unassignment kind mismatch", nil, Command{Operation: SetDeviceAssignment, DeviceID: testUID, Kind: LEDDevice}, CodeDeviceKindMismatch, nil},
+		{"unassignment with invalid kind", nil, Command{Operation: SetDeviceAssignment, DeviceID: testUID, Kind: "invalid"}, CodeInvalid, nil},
 		{"assignment to used node", twoPlayers, Command{Operation: SetDeviceAssignment, DeviceID: testUID, Kind: PlayerDevice, Node: 2}, CodeAssignmentConflict, nil},
 		{"swap with itself", nil, Command{Operation: SwapDeviceAssignments, DeviceID: testUID, OtherDeviceID: testUID}, CodeInvalid, nil},
 		{"swap with unknown device", nil, Command{Operation: SwapDeviceAssignments, DeviceID: testUID, OtherDeviceID: testUID2}, CodeNotFound, nil},
@@ -158,5 +159,14 @@ func TestSnapshotRemainingSecondsMatchesStatus(t *testing.T) {
 	}
 	if s := h.state(); s.RemainingSeconds != 119 || s.RemainingSeconds != statuses[len(statuses)-1].Remaining {
 		t.Fatalf("snapshot %d, status %d", s.RemainingSeconds, statuses[len(statuses)-1].Remaining)
+	}
+	h.execute(Command{Operation: Finish})
+	h.tick(10 * time.Second)
+	if s := h.state(); s.RemainingSeconds != 119 {
+		t.Fatalf("Finished remaining changed: %d", s.RemainingSeconds)
+	}
+	h.execute(Command{Operation: Reset})
+	if s := h.state(); s.RemainingSeconds != 120 {
+		t.Fatalf("Reset remaining: %d", s.RemainingSeconds)
 	}
 }

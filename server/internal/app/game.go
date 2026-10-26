@@ -104,6 +104,7 @@ type node struct {
 	score          int
 	eligible       bool
 	ready          bool
+	rank           int
 	nextGeneration time.Duration
 	nextTransfer   time.Duration
 }
@@ -137,28 +138,35 @@ func newGame(notify func(change)) game {
 }
 
 func (g *game) startBlockers() []StartBlocker {
-	blockers := make([]StartBlocker, 0)
+	reasons := make([]StartBlocker, 0)
 	if g.phase != Preparing {
-		blockers = append(blockers, StartBlocker{Code: CodeNotPreparing})
+		reasons = append(reasons, StartBlocker{Code: CodeNotPreparing})
 	}
 	if 65536-g.nextPID < maxGamePackets {
-		blockers = append(blockers, StartBlocker{Code: CodePIDExhausted})
+		reasons = append(reasons, StartBlocker{Code: CodePIDExhausted})
 	}
-	var unready []NodeID
+	var nodes []NodeID
 	for id := NodeID(1); id <= PlayerCount; id++ {
 		if n := &g.nodes[id]; n.manual && !n.ready {
-			unready = append(unready, id)
+			nodes = append(nodes, id)
 		}
 	}
-	if len(unready) > 0 {
-		blockers = append(blockers, StartBlocker{Code: CodePlayersNotReady, Nodes: unready})
+	if len(nodes) > 0 {
+		reasons = append(reasons, StartBlocker{Code: CodePlayersNotReady, Nodes: nodes})
 	}
-	return blockers
+	return reasons
+}
+
+func (g *game) startError() error {
+	if blockers := g.startBlockers(); len(blockers) > 0 {
+		return blockers[0].reject()
+	}
+	return nil
 }
 
 func (g *game) start(now time.Time) error {
-	if blockers := g.startBlockers(); len(blockers) > 0 {
-		return blockers[0].reject()
+	if err := g.startError(); err != nil {
+		return err
 	}
 	g.phase, g.started, g.elapsed = Playing, now, 0
 	for id := NodeID(1); id <= NodeCount; id++ {
@@ -176,6 +184,18 @@ func (g *game) finish() error {
 	if g.phase != Playing {
 		return reject(CodePhaseConflict, "Finish requires Playing phase")
 	}
+	for id := NodeID(1); id <= PlayerCount; id++ {
+		n := &g.nodes[id]
+		if !n.eligible {
+			continue
+		}
+		n.rank = 1
+		for other := NodeID(1); other <= PlayerCount; other++ {
+			if g.nodes[other].eligible && g.nodes[other].score > n.score {
+				n.rank++
+			}
+		}
+	}
 	g.phase = Finished
 	g.notify(change{kind: "phase"})
 	return nil
@@ -189,6 +209,7 @@ func (g *game) reset() {
 		n.score, n.nextGeneration, n.nextTransfer = 0, 0, 0
 		n.eligible = n.manual
 		n.ready = false
+		n.rank = 0
 	}
 	g.notify(change{kind: "reset"})
 }

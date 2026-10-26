@@ -130,7 +130,7 @@ func (a *App) changeAssignments(c Command) error {
 		if c.Node == 0 && c.Kind != "" && c.Kind != PlayerDevice && c.Kind != LEDDevice {
 			return reject(CodeInvalid, "invalid assignment kind")
 		}
-		if (c.Node != 0 || c.Kind != "") && c.Kind != d.kind {
+		if c.Kind != "" && c.Kind != d.kind {
 			return reject(CodeDeviceKindMismatch, "assignment kind does not match device")
 		}
 		if c.Node != 0 && a.assigned(d.kind, c.Node, c.DeviceID) {
@@ -139,14 +139,16 @@ func (a *App) changeAssignments(c Command) error {
 		a.applyAssignments(map[string]NodeID{c.DeviceID: c.Node}, true)
 	case SwapDeviceAssignments, ReplaceDeviceAssignment:
 		other := a.devices[c.OtherDeviceID]
-		switch {
-		case c.DeviceID == c.OtherDeviceID:
-			return reject(CodeInvalid, "exchange requires two distinct devices")
-		case other == nil:
-			return reject(CodeNotFound, "exchange target has not been identified")
-		case d.kind != other.kind:
+		if c.DeviceID == c.OtherDeviceID {
+			return reject(CodeInvalid, "exchange requires distinct devices")
+		}
+		if other == nil {
+			return reject(CodeNotFound, "device has not been identified")
+		}
+		if d.kind != other.kind {
 			return reject(CodeDeviceKindMismatch, "exchange requires devices of the same kind")
-		case d.node == 0:
+		}
+		if d.node == 0 {
 			return reject(CodeDeviceNotAssigned, "exchange requires an assigned source")
 		}
 		if c.Operation == SwapDeviceAssignments {
