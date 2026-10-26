@@ -10,16 +10,22 @@
 ```sh
 nix develop -c go -C server run ./cmd/server
 nix develop -c go -C server run ./cmd/server -log-level debug
+nix develop -c go -C server run ./cmd/server -http-addr 127.0.0.1:8080
 nix develop -c go -C server test -race ./...
 nix develop -c go -C server vet ./...
 ```
 
 `main`はログ設定を読み込み、標準出力へのログと`app`を初期化する。
-SIGINT・SIGTERMで`app`を終了する。`app`は終了時に有効なセッションを閉じる。
+`-http-addr`（既定値`:8080`）で管理画面のHTTPを待ち受け、`app`と並行して実行する。
+既定値は全インターフェースで待ち受け、管理用ノートPCからLAN経由で接続できるようにする。
+ポート使用中などで待ち受けられない場合は起動エラーとし、起動ログに待受アドレスを出す。
+SIGINT・SIGTERMではHTTPを最大5秒待って停止してから`app`を終了する。
+`app`とHTTPのどちらかが異常終了した場合は、もう一方も止めてエラーを返す。
+`app`は終了時に有効なセッションを閉じる。
 
-現時点では`serial`・`web`が未実装のため、起動後はPreparingで待機する。
-USB接続やHTTPリクエストはまだ受け付けない。通信設定と各パッケージの起動処理は、
-それぞれの実装時に`main`へ追加する。
+現時点では`serial`が未実装のため、USB接続は受け付けない。`web`はルーティング、
+エラー応答の形式、埋め込みの仮の管理画面だけを実装している。
+`/api/state`・`/api/commands`は`503 unavailable`を返し、`app`をまだ呼び出さない。
 
 ## appの呼び出し
 
