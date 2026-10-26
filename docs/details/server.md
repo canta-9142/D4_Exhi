@@ -28,7 +28,7 @@ USB接続やHTTPリクエストはまだ受け付けない。通信設定と各�
 
 | 呼び出し | 用途 |
 |---|---|
-| `Execute(ctx, Command)` | 管理操作。拒否理由はerrorで返す |
+| `Execute(ctx, Command)` | 管理操作。拒否は理由コード付きの`*Rejection`で返す |
 | `State(ctx)` | ゲームとデバイスの独立したSnapshotを取得 |
 | `Connected(ctx, SessionID)` | 新規シリアルセッションの登録と識別開始 |
 | `Disconnected(ctx, SessionID)` | 切断通知。旧セッションの通知は無視 |
@@ -47,8 +47,11 @@ USB接続やHTTPリクエストはまだ受け付けない。通信設定と各�
 呼び出し元はcontextで待機を中断できる。受理後のキャンセルは、操作の取り消しを保証しない。
 終了済みの`app`への要求は`ErrStopped`を返す。
 Snapshotの時間は`time.Duration`であり、HTTPでの時間表現は`web`側で決める。
-Snapshotにはノードごとの`Ready`、`CanStart`・`StartBlockReasons`、機器種別付きの対応表、
-現在確認表示中の機器と確認用ノードIDも含む。開始条件の判定はStartとStateで共通化する。
+Snapshotにはノードごとの`Ready`、`CanStart`・`StartBlockers`、MCUの`status.remaining`と同じ
+`RemainingSeconds`、機器種別付きの対応表、現在確認表示中の機器と確認用ノードIDも含む。
+開始条件の判定はStartとStateで共通化し、Startの拒否は`StartBlockers`の先頭1件を返す。
+`Execute`の拒否は`errors.As`で`*Rejection`として取り出せ、`Code`はWeb管理APIのcodeへ対応する。
+文面はログ用であり、判定には`Code`を使う。
 
 ## serialとの接続口
 

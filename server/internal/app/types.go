@@ -139,12 +139,14 @@ type PreviewSnapshot struct {
 }
 
 type Snapshot struct {
-	Phase             Phase            `json:"phase"`
-	Elapsed           time.Duration    `json:"elapsed"`
-	Remaining         time.Duration    `json:"remaining"`
-	Nodes             []NodeSnapshot   `json:"nodes"`
-	Devices           []DeviceSnapshot `json:"devices"`
-	CanStart          bool             `json:"can_start"`
-	StartBlockReasons []string         `json:"start_block_reasons"`
-	Preview           *PreviewSnapshot `json:"preview,omitempty"`
+	Phase     Phase         `json:"phase"`
+	Elapsed   time.Duration `json:"elapsed"`
+	Remaining time.Duration `json:"remaining"`
+	// RemainingSeconds is the value MCUs receive as status.remaining.
+	RemainingSeconds int              `json:"remaining_seconds"`
+	Nodes            []NodeSnapshot   `json:"nodes"`
+	Devices          []DeviceSnapshot `json:"devices"`
+	CanStart         bool             `json:"can_start"`
+	StartBlockers    []StartBlocker   `json:"start_blockers"`
+	Preview          *PreviewSnapshot `json:"preview,omitempty"`
 }
