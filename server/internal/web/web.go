@@ -11,6 +11,7 @@ import (
 	"io/fs"
 	"log/slog"
 	"net/http"
+	"path"
 	"runtime/debug"
 	"slices"
 	"strings"
@@ -54,54 +55,85 @@ func newHandler(a App, logger *slog.Logger) *handler {
 	// and get the JSON 405 of web.md 5 instead of ServeMux's plain text.
 	h.mux.Handle("/api/state", allowMethods(h.handleState, http.MethodGet))
 	h.mux.Handle("/api/commands", allowMethods(h.handleCommand, http.MethodPost))
+	// Without the exact /api and /static patterns, ServeMux would redirect
+	// them to the trailing-slash subtree instead of answering JSON 404.
 	h.mux.HandleFunc("/api/", notFound)
-	h.mux.Handle("/static/", allowMethods(h.handleStatic, http.MethodGet, http.MethodHead))
-	index := allowMethods(func(w http.ResponseWriter, r *http.Request) { h.serveFile(w, r, "index.html") },
-		http.MethodGet, http.MethodHead)
+	h.mux.HandleFunc("/api", notFound)
+	h.mux.HandleFunc("/static/", h.handleStatic)
+	h.mux.HandleFunc("/static", notFound)
 	h.mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/" {
 			notFound(w, r)
 			return
 		}
-		index.ServeHTTP(w, r)
+		h.serveFile(w, r, "index.html")
 	})
 	return h
 }
 
 // ServeHTTP recovers panics as 500 internal_error and writes the access log.
+// A panic after the header is sent aborts the response instead, so that the
+// client does not take a partial body as complete.
 func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
 	rec := &recorder{ResponseWriter: w}
 	defer func() {
-		if v := recover(); v != nil {
-			if v == http.ErrAbortHandler {
-				panic(v)
-			}
+		v := recover()
+		abort := v == http.ErrAbortHandler || (v != nil && rec.wrote)
+		if v != nil && v != http.ErrAbortHandler {
 			h.logger.Error("http handler panic", "method", r.Method, "path", r.URL.Path,
 				"panic", fmt.Sprint(v), "stack", string(debug.Stack()))
-			// After the header is sent the status can no longer change.
-			if !rec.wrote {
+			if !abort {
 				writeError(rec, http.StatusInternalServerError, codeInternalError, errorMessages[codeInternalError], nil)
 			}
 		}
 		h.logger.Debug("http request", "method", r.Method, "path", r.URL.Path, "status", rec.status,
-			"duration", time.Since(start), "remote", r.RemoteAddr)
+			"aborted", abort, "duration", time.Since(start), "remote", r.RemoteAddr)
+		if abort {
+			// net/http closes the connection without logging this value.
+			panic(http.ErrAbortHandler)
+		}
 	}()
+	// ServeMux redirects non-canonical paths such as /api//state with an
+	// HTML response; no such path is served, so answer JSON 404 instead.
+	if r.Method != http.MethodConnect && r.URL.Path != cleanPath(r.URL.Path) {
+		notFound(rec, r)
+		return
+	}
 	h.mux.ServeHTTP(rec, r)
+}
+
+// cleanPath is the canonical form ServeMux redirects to: path.Clean with a
+// trailing slash kept.
+func cleanPath(p string) string {
+	if p == "" || p[0] != '/' {
+		p = "/" + p
+	}
+	clean := path.Clean(p)
+	if strings.HasSuffix(p, "/") && clean != "/" {
+		clean += "/"
+	}
+	return clean
 }
 
 // allowMethods rejects other methods with 405 method_not_allowed and an Allow
 // header listing methods.
 func allowMethods(next http.HandlerFunc, methods ...string) http.Handler {
-	allow := strings.Join(methods, ", ")
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !slices.Contains(methods, r.Method) {
-			w.Header().Set("Allow", allow)
-			writeError(w, http.StatusMethodNotAllowed, codeMethodNotAllowed, errorMessages[codeMethodNotAllowed], nil)
-			return
+		if checkMethod(w, r, methods...) {
+			next(w, r)
 		}
-		next(w, r)
 	})
+}
+
+// checkMethod writes 405 and reports false unless r uses one of methods.
+func checkMethod(w http.ResponseWriter, r *http.Request, methods ...string) bool {
+	if slices.Contains(methods, r.Method) {
+		return true
+	}
+	w.Header().Set("Allow", strings.Join(methods, ", "))
+	writeError(w, http.StatusMethodNotAllowed, codeMethodNotAllowed, errorMessages[codeMethodNotAllowed], nil)
+	return false
 }
 
 func notFound(w http.ResponseWriter, _ *http.Request) {
@@ -113,7 +145,7 @@ func (h *handler) handleStatic(w http.ResponseWriter, r *http.Request) {
 }
 
 // serveFile serves an embedded regular file. Directories and missing files
-// are 404 not_found; nothing is listed or redirected.
+// are 404 not_found for every method; nothing is listed or redirected.
 func (h *handler) serveFile(w http.ResponseWriter, r *http.Request, name string) {
 	if name == "" || !fs.ValidPath(name) {
 		notFound(w, r)
@@ -128,6 +160,10 @@ func (h *handler) serveFile(w http.ResponseWriter, r *http.Request, name string)
 	info, err := f.Stat()
 	if err != nil || info.IsDir() {
 		notFound(w, r)
+		return
+	}
+	// The file exists, so other methods are 405 rather than 404 (web.md 5).
+	if !checkMethod(w, r, http.MethodGet, http.MethodHead) {
 		return
 	}
 	content, ok := f.(io.ReadSeeker)
@@ -149,7 +185,8 @@ type recorder struct {
 }
 
 func (r *recorder) WriteHeader(status int) {
-	if !r.wrote {
+	// Informational responses other than 101 do not commit the header.
+	if !r.wrote && (status < 100 || status > 199 || status == http.StatusSwitchingProtocols) {
 		r.status, r.wrote = status, true
 	}
 	r.ResponseWriter.WriteHeader(status)
@@ -161,5 +198,16 @@ func (r *recorder) Write(b []byte) (int, error) {
 	}
 	return r.ResponseWriter.Write(b)
 }
+
+// FlushError sends the header like Write does. http.ResponseController
+// prefers it over Unwrap, so flushes cannot bypass the recorder.
+func (r *recorder) FlushError() error {
+	if !r.wrote {
+		r.status, r.wrote = http.StatusOK, true
+	}
+	return http.NewResponseController(r.ResponseWriter).Flush()
+}
+
+func (r *recorder) Flush() { r.FlushError() }
 
 func (r *recorder) Unwrap() http.ResponseWriter { return r.ResponseWriter }

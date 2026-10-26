@@ -3,6 +3,7 @@ package web
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -81,6 +82,9 @@ func TestMethodNotAllowed(t *testing.T) {
 func TestNotFound(t *testing.T) {
 	h := New(fakeApp{}, nil)
 	for _, tc := range []struct{ method, path string }{
+		{http.MethodGet, "/api"},
+		{http.MethodPost, "/api"},
+		{http.MethodGet, "/static"},
 		{http.MethodGet, "/api/"},
 		{http.MethodGet, "/api/unknown"},
 		{http.MethodPost, "/api/state/extra"},
@@ -88,6 +92,14 @@ func TestNotFound(t *testing.T) {
 		{http.MethodGet, "/index.html"},
 		{http.MethodGet, "/static/"},
 		{http.MethodGet, "/static/missing.js"},
+		{http.MethodPost, "/static/missing.js"},
+		{http.MethodPost, "/static/"},
+		// Non-canonical paths, which ServeMux would redirect.
+		{http.MethodGet, "/api//state"},
+		{http.MethodPost, "/api/./commands"},
+		{http.MethodGet, "/static/../api/state"},
+		{http.MethodGet, "/static//index.html"},
+		{http.MethodGet, "/./"},
 	} {
 		t.Run(tc.method+" "+tc.path, func(t *testing.T) {
 			checkError(t, serve(t, h, tc.method, tc.path), http.StatusNotFound, codeNotFound)
@@ -123,14 +135,74 @@ func TestIndex(t *testing.T) {
 func TestPanicRecovery(t *testing.T) {
 	h := newHandler(fakeApp{}, nil)
 	h.mux.HandleFunc("/panic", func(http.ResponseWriter, *http.Request) { panic("boom") })
-	h.mux.HandleFunc("/panic-after-write", func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusAccepted)
+	// An informational header does not commit the response.
+	h.mux.HandleFunc("/after-early-hints", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusEarlyHints)
 		panic("boom")
 	})
 	checkError(t, serve(t, h, http.MethodGet, "/panic"), http.StatusInternalServerError, codeInternalError)
-	// Once the header is sent, recovery must not write a second response.
-	if w := serve(t, h, http.MethodGet, "/panic-after-write"); w.Code != http.StatusAccepted || w.Body.Len() != 0 {
-		t.Errorf("status = %d, body %q", w.Code, w.Body)
+
+	// ResponseRecorder treats 1xx as final, so check through a real server.
+	server := httptest.NewServer(h)
+	defer server.Close()
+	resp, err := http.Get(server.URL + "/after-early-hints")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Errorf("after 103: status = %d, want 500", resp.StatusCode)
+	}
+}
+
+// A panic after the header is sent must abort the response, not end it as if
+// the partial body were complete.
+func TestPanicAfterWriteAborts(t *testing.T) {
+	h := newHandler(fakeApp{}, nil)
+	for _, tc := range []struct {
+		path   string
+		handle http.HandlerFunc
+	}{
+		{"/after-header", func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusAccepted)
+			panic("boom")
+		}},
+		{"/after-body", func(w http.ResponseWriter, _ *http.Request) {
+			w.Write([]byte(`{"ok":`))
+			if err := http.NewResponseController(w).Flush(); err != nil {
+				t.Errorf("flush: %v", err)
+			}
+			panic("boom")
+		}},
+		// Flushing through ResponseController also sends the header.
+		{"/after-flush", func(w http.ResponseWriter, _ *http.Request) {
+			if err := http.NewResponseController(w).Flush(); err != nil {
+				t.Errorf("flush: %v", err)
+			}
+			panic("boom")
+		}},
+		{"/abort", func(http.ResponseWriter, *http.Request) { panic(http.ErrAbortHandler) }},
+	} {
+		h.mux.HandleFunc(tc.path, tc.handle)
+		t.Run(tc.path, func(t *testing.T) {
+			defer func() {
+				if v := recover(); v != http.ErrAbortHandler {
+					t.Errorf("panic = %v, want http.ErrAbortHandler", v)
+				}
+			}()
+			serve(t, h, http.MethodGet, tc.path)
+		})
+	}
+
+	server := httptest.NewServer(h)
+	defer server.Close()
+	resp, err := http.Get(server.URL + "/after-body")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if body, err := io.ReadAll(resp.Body); err == nil {
+		t.Errorf("client read a complete body %q from an aborted response", body)
 	}
 }
 
