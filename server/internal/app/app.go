@@ -20,12 +20,17 @@ type Options struct {
 	Send   func(SessionID, Message) error
 	Close  func(SessionID)
 	Logger *slog.Logger
+	// Devices must have passed LoadDevices validation. SaveDevices is called
+	// from Run before assignment changes become observable.
+	Devices     []SavedDevice
+	SaveDevices func([]SavedDevice) error
 }
 
 type session struct {
 	uid            string
 	failed         bool
 	waitingHello   bool
+	identification uint64
 	sync           string
 	lastRID        uint32
 	hasRID         bool
@@ -64,6 +69,7 @@ type App struct {
 	ticks     <-chan time.Time
 	eventNow  time.Time
 	advancing bool
+	fatal     error
 }
 
 func New(options Options) *App {
@@ -75,6 +81,9 @@ func New(options Options) *App {
 		options: options, requests: make(chan request), done: make(chan struct{}), now: time.Now,
 	}
 	a.game = newGame(a.notify)
+	for _, d := range options.Devices {
+		a.devices[d.DeviceID] = &device{kind: d.Kind, node: d.Node, noAuto: d.AutoAssignExcluded}
+	}
 	return a
 }
 
@@ -104,10 +113,16 @@ func (a *App) Run(ctx context.Context) error {
 			if req.advance {
 				a.advance(a.eventNow)
 			}
+			if a.fatal != nil {
+				return a.fatal
+			}
 			err := req.apply(a.eventNow)
 			if req.advance {
 				a.autoAssignPending()
 				a.flushPlayerUpdates()
+			}
+			if a.fatal != nil {
+				return a.fatal
 			}
 			req.reply <- err
 		case <-ticks:
@@ -116,6 +131,9 @@ func (a *App) Run(ctx context.Context) error {
 			a.autoAssignPending()
 			a.identifyPending(a.eventNow)
 			a.flushPlayerUpdates()
+			if a.fatal != nil {
+				return a.fatal
+			}
 		}
 	}
 }
@@ -275,7 +293,7 @@ func (a *App) Disconnected(ctx context.Context, id SessionID) error {
 func (a *App) MessageReceived(ctx context.Context, id SessionID, message IncomingMessage) error {
 	return a.submit(ctx, true, func(time.Time) error {
 		s := a.sessions[id]
-		if s == nil {
+		if s == nil || message.Identification == 0 || message.Identification != s.identification {
 			return nil
 		}
 		validHello := message.Type == "hello" && validIdentity(message.Kind, message.UID)
@@ -392,6 +410,9 @@ func (a *App) closeSession(id SessionID) {
 }
 
 func (a *App) send(id SessionID, message Message) bool {
+	if a.fatal != nil {
+		return false
+	}
 	if s := a.sessions[id]; s == nil || s.failed {
 		return false
 	}
@@ -412,9 +433,18 @@ func (a *App) identify(id SessionID, now time.Time) {
 	if s == nil {
 		return
 	}
+	begin := !s.waitingHello
+	if begin {
+		if s.identification == ^uint64(0) {
+			a.options.Logger.Error("identification generations exhausted", "session", id)
+			a.closeSession(id)
+			return
+		}
+		s.identification++
+	}
 	s.waitingHello, s.lastIdentify, s.sync, s.hasStatus = true, now, "", false
 	s.phasePending, s.summaryPending, s.forceStatus = false, false, false
-	a.send(id, Message{Type: "identify", Data: struct{}{}})
+	a.send(id, Message{Type: "identify", Data: struct{}{}, BeginIdentification: begin, Identification: s.identification})
 }
 
 func (a *App) identifyPending(now time.Time) {

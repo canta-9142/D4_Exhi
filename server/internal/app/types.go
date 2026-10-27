@@ -44,19 +44,25 @@ type Command struct {
 // IncomingMessage has already passed serial's JSON/required-field validation.
 // app checks its session, synchronization generation and game semantics.
 type IncomingMessage struct {
-	Type string
-	UID  string
-	Kind DeviceKind // Set by serial when classifying a HELLO response.
-	Sync string
-	RID  uint32
-	PID  uint16
-	To   NodeID
+	// Identification is transport metadata, not an MCU-supplied field.
+	Identification uint64
+	Type           string
+	UID            string
+	Kind           DeviceKind // Set by serial when classifying a HELLO response.
+	Sync           string
+	RID            uint32
+	PID            uint16
+	To             NodeID
 }
 
 // Message is an outgoing command. serial uses MarshalLine and adds LF framing.
 type Message struct {
 	Type string `json:"type"`
 	Data any    `json:"data"`
+	// Identification metadata never changes the wire format. Retries retain
+	// their generation and leave BeginIdentification false.
+	BeginIdentification bool   `json:"-"`
+	Identification      uint64 `json:"-"`
 }
 
 type ConfigData struct {

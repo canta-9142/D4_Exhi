@@ -23,24 +23,25 @@ type sentMessage struct {
 }
 
 type harness struct {
-	t          *testing.T
-	a          *App
-	ctx        context.Context
-	cancel     context.CancelFunc
-	finished   chan error
-	ticks      chan time.Time
-	clock      atomic.Int64
-	mu         sync.Mutex
-	sent       []sentMessage
-	closed     []SessionID
-	failType   string
-	generation map[SessionID]string
+	t               *testing.T
+	a               *App
+	ctx             context.Context
+	cancel          context.CancelFunc
+	finished        chan error
+	ticks           chan time.Time
+	clock           atomic.Int64
+	mu              sync.Mutex
+	sent            []sentMessage
+	closed          []SessionID
+	failType        string
+	generation      map[SessionID]string
+	identifications map[SessionID]uint64
 }
 
 func newHarness(t *testing.T) *harness {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	h := &harness{t: t, ctx: ctx, cancel: cancel, finished: make(chan error, 1), ticks: make(chan time.Time), generation: make(map[SessionID]string)}
+	h := &harness{t: t, ctx: ctx, cancel: cancel, finished: make(chan error, 1), ticks: make(chan time.Time), generation: make(map[SessionID]string), identifications: make(map[SessionID]uint64)}
 	h.a = New(Options{
 		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 		Send: func(id SessionID, message Message) error {
@@ -54,6 +55,9 @@ func newHarness(t *testing.T) *harness {
 			}
 			if message.Type == "reset" {
 				h.generation[id] = message.Data.(ResetData).Sync
+			}
+			if message.Type == "identify" {
+				h.identifications[id] = message.Identification
 			}
 			h.sent = append(h.sent, sentMessage{id, message})
 			return nil
@@ -96,7 +100,15 @@ func (h *harness) message(id SessionID, m IncomingMessage) {
 	if m.Type == "hello" && m.Kind == "" {
 		m.Kind = PlayerDevice
 	}
+	if m.Identification == 0 {
+		m.Identification = h.identification(id)
+	}
 	h.must(h.a.MessageReceived(h.ctx, id, m))
+}
+func (h *harness) identification(id SessionID) uint64 {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.identifications[id]
 }
 func (h *harness) state() Snapshot {
 	h.t.Helper()
@@ -200,6 +212,69 @@ func TestIdentificationAssignmentAndSnapshot(t *testing.T) {
 	s.Devices[0].ID = "mutated"
 	if current := h.state(); current.Nodes[0].Score != 0 || current.Devices[0].ID != testUID {
 		t.Fatal("Snapshot aliases app state")
+	}
+}
+
+func TestIdentificationStartAndRetry(t *testing.T) {
+	h := newHarness(t)
+	h.must(h.a.Connected(h.ctx, "s1"))
+	h.tick(time.Second)
+	h.message("s1", IncomingMessage{Type: "hello", UID: testUID})
+	h.execute(Command{Operation: SetDeviceAssignment, DeviceID: testUID})
+	h.tick(2 * time.Second)
+	var starts []bool
+	var identifications []uint64
+	for _, sent := range h.messages() {
+		if sent.message.Type != "identify" {
+			continue
+		}
+		starts = append(starts, sent.message.BeginIdentification)
+		identifications = append(identifications, sent.message.Identification)
+		line, err := sent.message.MarshalLine()
+		h.must(err)
+		if string(line) != `{"type":"identify","data":{}}` {
+			t.Fatalf("identification metadata changed the wire format: %s", line)
+		}
+	}
+	if want := []bool{true, false, true, false}; !reflect.DeepEqual(starts, want) {
+		t.Fatalf("identification starts = %v; want %v", starts, want)
+	}
+	if want := []uint64{1, 1, 2, 2}; !reflect.DeepEqual(identifications, want) {
+		t.Fatalf("identification generations = %v; want %v", identifications, want)
+	}
+}
+
+func TestIdentificationIsCheckedWhenQueuedRequestIsApplied(t *testing.T) {
+	a := New(Options{Send: func(SessionID, Message) error { return nil }})
+	const id = SessionID("queued-identification")
+	a.sessions[id] = &session{uid: testUID, identification: 1}
+	a.devices[testUID] = &device{kind: PlayerDevice, session: id}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	result := make(chan error, 1)
+	go func() {
+		result <- a.MessageReceived(ctx, id, IncomingMessage{Type: "hello", Kind: PlayerDevice, UID: testUID, Identification: 1})
+	}()
+	// Accept the request, then begin a new identification before applying it.
+	// A check made only by serial, or before submit, would miss this ordering.
+	var queued request
+	select {
+	case queued = <-a.requests:
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
+	}
+	a.identify(id, epoch)
+	queued.reply <- queued.apply(epoch)
+	select {
+	case err := <-result:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
+	}
+	if s := a.sessions[id]; s == nil || !s.waitingHello || s.identification != 2 {
+		t.Fatalf("old accepted request ended new identification: %+v", s)
 	}
 }
 
@@ -492,7 +567,7 @@ func TestCommandValidation(t *testing.T) {
 func TestChangedUIDClosesSession(t *testing.T) {
 	h := newHarness(t)
 	h.connect("s1", testUID, 1)
-	if err := h.a.MessageReceived(h.ctx, "s1", IncomingMessage{Type: "hello", Kind: PlayerDevice, UID: "112233AABBCC"}); err == nil {
+	if err := h.a.MessageReceived(h.ctx, "s1", IncomingMessage{Type: "hello", Kind: PlayerDevice, UID: "112233AABBCC", Identification: h.identification("s1")}); err == nil {
 		t.Fatal("changed UID accepted")
 	}
 	if h.state().Devices[0].Connected {
