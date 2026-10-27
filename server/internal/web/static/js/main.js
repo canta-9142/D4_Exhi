@@ -65,10 +65,10 @@ function canOperate() {
 }
 
 function showSnapshot(snapshot) {
-  ui.game.textContent = toJSON(snapshot.game);
-  ui.players.textContent = toJSON(snapshot.players);
-  ui.bots.textContent = toJSON(snapshot.bots);
-  ui.devices.textContent = toJSON({ devices: snapshot.devices, preview: snapshot.preview });
+  setText(ui.game, toJSON(snapshot.game));
+  setText(ui.players, toJSON(snapshot.players));
+  setText(ui.bots, toJSON(snapshot.bots));
+  setText(ui.devices, toJSON({ devices: snapshot.devices, preview: snapshot.preview }));
   ui.updated.textContent = `最終取得 ${new Date().toLocaleTimeString("ja-JP")}`;
 }
 
@@ -88,7 +88,7 @@ function renderStatus() {
 }
 
 // setText leaves equal text alone, so that the live region announces only
-// changes and not every poll.
+// changes and a selection in an unchanged section survives the next poll.
 function setText(element, text) {
   if (element.textContent !== text) {
     element.textContent = text;
