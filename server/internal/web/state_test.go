@@ -9,6 +9,7 @@ import (
 	"math"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -340,6 +341,39 @@ func TestStateDevices(t *testing.T) {
 	}
 	if got, want := string(body.Preview), `{"deviceId":"bb","nodeId":"P1"}`; got != want {
 		t.Errorf("preview = %s, want %s", got, want)
+	}
+}
+
+// The normal configuration of web.md 3.2: 11 logical nodes, and 15 devices
+// made of 8 player boards and 7 LED boards. A player board and an LED board
+// on the same node are separate devices.
+func TestStateFullConfiguration(t *testing.T) {
+	s := baseSnapshot()
+	var devices []string
+	for _, d := range []struct {
+		kind app.DeviceKind
+		node app.NodeID
+		name string
+	}{
+		{app.PlayerDevice, 1, "P1"}, {app.PlayerDevice, 2, "P2"}, {app.PlayerDevice, 3, "P3"},
+		{app.PlayerDevice, 4, "P4"}, {app.PlayerDevice, 5, "P5"}, {app.PlayerDevice, 6, "P6"},
+		{app.PlayerDevice, 7, "P7"}, {app.PlayerDevice, 8, "P8"},
+		{app.LEDDevice, 9, "B1"}, {app.LEDDevice, 10, "B2"}, {app.LEDDevice, 11, "B3"},
+		{app.LEDDevice, 1, "P1"}, {app.LEDDevice, 3, "P3"}, {app.LEDDevice, 5, "P5"}, {app.LEDDevice, 7, "P7"},
+	} {
+		id := fmt.Sprintf("%02x", len(s.Devices)+1)
+		s.Devices = append(s.Devices, app.DeviceSnapshot{
+			ID: id, Kind: d.kind, Connected: true, Session: "s", Node: d.node, AssignmentKind: d.kind,
+		})
+		devices = append(devices, fmt.Sprintf(`{"deviceId":%q,"kind":%q,"connected":true,"assignment":{"kind":%q,"nodeId":%q}}`,
+			id, d.kind, d.kind, d.name))
+	}
+	_, body := getState(t, s)
+	if len(body.Players) != 8 || len(body.Bots) != 3 {
+		t.Errorf("got %d players and %d bots, want 8 and 3", len(body.Players), len(body.Bots))
+	}
+	if got, want := string(body.Devices), "["+strings.Join(devices, ",")+"]"; got != want {
+		t.Errorf("devices\n got %s\nwant %s", got, want)
 	}
 }
 
