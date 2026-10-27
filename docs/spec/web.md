@@ -116,6 +116,8 @@ JSONはUTF-8とし、APIが生成する応答のContent-Typeは`application/json
 
 `devices`にはサーバープロセス内で保持している識別済み機器を返す。未割当・切断中の機器も含め、Device ID順で返す。保存ファイルから復元された機器も含め、起動後に接続・識別されるまでは`connected:false`とする。
 
+`players`・`bots`は計11個の論理ノードを表し、`devices`は物理MCUを表す。通常構成のプレイヤー基板8台とLED制御基板7台をすべて識別済みなら、`devices`には計15件を含める。未割当の予備基板や交換後の旧基板も含むため、件数は15件に固定しない。同じ`nodeId`でも`assignment.kind`が異なるプレイヤー基板とLED制御基板は別の機器として返す。
+
 | devicesの各要素 | 型と意味 |
 |---|---|
 | deviceId | Device IDの文字列 |
