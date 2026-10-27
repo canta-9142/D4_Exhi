@@ -68,7 +68,6 @@ export class Poller {
     this.#inFlight = true;
     const seq = this.#nextSeq++;
     const result = await getState();
-    this.#inFlight = false;
     let delay = RETRY_MS;
     try {
       // A dropped response leaves #again set by refresh().
@@ -85,6 +84,9 @@ export class Poller {
         resolve();
       }
     } finally {
+      // Until here, a refresh() from a callback only sets #again, so that
+      // #schedule sends the next GET instead of a second one starting now.
+      this.#inFlight = false;
       this.#schedule(delay);
     }
   }
