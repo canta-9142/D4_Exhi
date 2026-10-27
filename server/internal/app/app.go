@@ -24,16 +24,17 @@ type Options struct {
 }
 
 type session struct {
-	uid          string
-	failed       bool
-	waitingHello bool
-	sync         string
-	lastRID      uint32
-	hasRID       bool
-	lastIdentify time.Time
-	lastStatus   StatusData
-	hasStatus    bool
-	forceStatus  bool
+	uid            string
+	failed         bool
+	waitingHello   bool
+	identification uint64
+	sync           string
+	lastRID        uint32
+	hasRID         bool
+	lastIdentify   time.Time
+	lastStatus     StatusData
+	hasStatus      bool
+	forceStatus    bool
 }
 
 type device struct {
@@ -275,7 +276,7 @@ func (a *App) Disconnected(ctx context.Context, id SessionID) error {
 func (a *App) MessageReceived(ctx context.Context, id SessionID, message IncomingMessage) error {
 	return a.submit(ctx, true, func(time.Time) error {
 		s := a.sessions[id]
-		if s == nil {
+		if s == nil || message.Identification == 0 || message.Identification != s.identification {
 			return nil
 		}
 		validHello := message.Type == "hello" && validIdentity(message.Kind, message.UID)
@@ -415,8 +416,17 @@ func (a *App) identify(id SessionID, now time.Time) {
 	if s == nil {
 		return
 	}
+	begin := !s.waitingHello
+	if begin {
+		if s.identification == ^uint64(0) {
+			a.options.Logger.Error("identification generations exhausted", "session", id)
+			a.closeSession(id)
+			return
+		}
+		s.identification++
+	}
 	s.waitingHello, s.lastIdentify, s.sync, s.hasStatus = true, now, "", false
-	a.send(id, Message{Type: "identify", Data: struct{}{}})
+	a.send(id, Message{Type: "identify", Data: struct{}{}, BeginIdentification: begin, Identification: s.identification})
 }
 
 func (a *App) identifyPending(now time.Time) {
