@@ -43,8 +43,8 @@ const poller = new Poller({
 // runCommand sends one admin operation (web.md 4) and resolves to its api.js
 // result, or to null when operations are disabled. Every operation stays
 // disabled until a GET sent after the result has updated the page. The
-// operation is never resent: after a timeout, a network failure or 500 its
-// result is unknown, and the administrator decides from the new state.
+// operation is never resent: after a timeout, a network failure, 500 or 503
+// its result is unknown, and the administrator decides from the new state.
 export async function runCommand(command) {
   if (!canOperate()) {
     return null;
@@ -109,13 +109,17 @@ function describeFailure(result) {
   return `${failureReasons[result.reason]}${status}`;
 }
 
+// After these error responses the operation may have been applied (web.md
+// 6). 503, for example, also comes when app stops after receiving it.
+const unknownStatuses = [500, 503];
+
 // showResult shows the outcome of a POST until the next operation. Only the
 // code and the status decide the outcome; the message is just displayed.
 function showResult(command, result) {
   const name = `「${command.type}」`;
   if (result.kind === "success") {
     showNotice("success", `${name}を受け付けました。`);
-  } else if (result.kind === "error" && result.status !== 500) {
+  } else if (result.kind === "error" && !unknownStatuses.includes(result.status)) {
     showNotice("rejected", `${name}は拒否されました: ${describeFailure(result)}`);
   } else {
     showNotice("unknown", `${name}の結果は不明です（${describeFailure(result)}）。` +
