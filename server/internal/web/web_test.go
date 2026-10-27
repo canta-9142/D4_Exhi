@@ -133,10 +133,36 @@ func TestIndex(t *testing.T) {
 
 var (
 	// htmlRef matches the src and href attributes of the admin page.
-	htmlRef = regexp.MustCompile(`(?:src|href)="([^"]*)"`)
+	htmlRef = regexp.MustCompile(`(?:src|href)=(?:"([^"]*)"|'([^']*)')`)
 	// moduleRef matches static imports such as `from "./api.js"`.
-	moduleRef = regexp.MustCompile(`(?:import|from)\s*"([^"]*)"`)
+	moduleRef = regexp.MustCompile(`(?:import|from)\s*(?:"([^"]*)"|'([^']*)')`)
 )
+
+// quotedRefs returns the references that re finds in s, whichever quotes
+// enclose them. RE2 has no backreferences, so each quote has its own group.
+func quotedRefs(re *regexp.Regexp, s string) []string {
+	var refs []string
+	for _, m := range re.FindAllStringSubmatch(s, -1) {
+		refs = append(refs, m[1]+m[2])
+	}
+	return refs
+}
+
+func TestQuotedRefs(t *testing.T) {
+	for _, tc := range []struct {
+		re   *regexp.Regexp
+		s    string
+		want []string
+	}{
+		{htmlRef, `<link href="/static/a.css"><script src='/static/b.js'>`, []string{"/static/a.css", "/static/b.js"}},
+		{htmlRef, `<a href="">`, []string{""}},
+		{moduleRef, `import "./a.js"; import { b } from './b.js';`, []string{"./a.js", "./b.js"}},
+	} {
+		if got := quotedRefs(tc.re, tc.s); !slices.Equal(got, tc.want) {
+			t.Errorf("quotedRefs(%q) = %q, want %q", tc.s, got, tc.want)
+		}
+	}
+}
 
 // TestStaticFiles serves every embedded file and checks that the page and its
 // modules refer only to embedded files, so that a renamed file cannot break
@@ -178,19 +204,19 @@ func TestStaticFiles(t *testing.T) {
 		}
 		switch ext {
 		case ".html":
-			for _, m := range htmlRef.FindAllStringSubmatch(string(want), -1) {
-				ref, ok := strings.CutPrefix(m[1], "/static/")
+			for _, r := range quotedRefs(htmlRef, string(want)) {
+				ref, ok := strings.CutPrefix(r, "/static/")
 				if !ok {
-					t.Errorf("%s: %q is not an embedded file", name, m[1])
+					t.Errorf("%s: %q is not an embedded file", name, r)
 				}
 				refs[ref] = name
 			}
 		case ".js":
-			for _, m := range moduleRef.FindAllStringSubmatch(string(want), -1) {
-				if !strings.HasPrefix(m[1], "./") && !strings.HasPrefix(m[1], "../") {
-					t.Errorf("%s: import %q is not relative", name, m[1])
+			for _, r := range quotedRefs(moduleRef, string(want)) {
+				if !strings.HasPrefix(r, "./") && !strings.HasPrefix(r, "../") {
+					t.Errorf("%s: import %q is not relative", name, r)
 				}
-				refs[path.Join(path.Dir(name), m[1])] = name
+				refs[path.Join(path.Dir(name), r)] = name
 			}
 		}
 		return nil
