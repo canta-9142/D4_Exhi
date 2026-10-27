@@ -20,6 +20,10 @@ type Options struct {
 	Send   func(SessionID, Message) error
 	Close  func(SessionID)
 	Logger *slog.Logger
+	// Devices must have passed LoadDevices validation. SaveDevices is called
+	// from Run before assignment changes become observable.
+	Devices     []SavedDevice
+	SaveDevices func([]SavedDevice) error
 }
 
 type session struct {
@@ -65,6 +69,7 @@ type App struct {
 	ticks     <-chan time.Time
 	eventNow  time.Time
 	advancing bool
+	fatal     error
 }
 
 func New(options Options) *App {
@@ -76,6 +81,9 @@ func New(options Options) *App {
 		options: options, requests: make(chan request), done: make(chan struct{}), now: time.Now,
 	}
 	a.game = newGame(a.notify)
+	for _, d := range options.Devices {
+		a.devices[d.DeviceID] = &device{kind: d.Kind, node: d.Node, noAuto: d.AutoAssignExcluded}
+	}
 	return a
 }
 
@@ -105,10 +113,16 @@ func (a *App) Run(ctx context.Context) error {
 			if req.advance {
 				a.advance(a.eventNow)
 			}
+			if a.fatal != nil {
+				return a.fatal
+			}
 			err := req.apply(a.eventNow)
 			if req.advance {
 				a.autoAssignPending()
 				a.flushPlayerUpdates()
+			}
+			if a.fatal != nil {
+				return a.fatal
 			}
 			req.reply <- err
 		case <-ticks:
@@ -117,6 +131,9 @@ func (a *App) Run(ctx context.Context) error {
 			a.autoAssignPending()
 			a.identifyPending(a.eventNow)
 			a.flushPlayerUpdates()
+			if a.fatal != nil {
+				return a.fatal
+			}
 		}
 	}
 }
@@ -393,6 +410,9 @@ func (a *App) closeSession(id SessionID) {
 }
 
 func (a *App) send(id SessionID, message Message) bool {
+	if a.fatal != nil {
+		return false
+	}
 	if s := a.sessions[id]; s == nil || s.failed {
 		return false
 	}

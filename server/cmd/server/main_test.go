@@ -3,13 +3,18 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"net"
 	"net/http"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/canta-9142/d4-exhi/internal/app"
 )
 
 // Tests listen on an ephemeral loopback port instead of the default :8080.
@@ -36,7 +41,8 @@ func TestRun(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
 			cancel()
 			var output bytes.Buffer
-			err := run(ctx, tc.args, &output)
+			args := append(append([]string(nil), tc.args...), "-devices-file", filepath.Join(t.TempDir(), "devices.json"))
+			err := run(ctx, args, &output)
 			if (err != nil) != tc.wantError {
 				t.Fatalf("run returned %v", err)
 			}
@@ -54,7 +60,7 @@ func TestRunPortInUse(t *testing.T) {
 	}
 	defer l.Close()
 	var output bytes.Buffer
-	if err := run(context.Background(), []string{"-http-addr", l.Addr().String()}, &output); err == nil {
+	if err := run(context.Background(), []string{"-http-addr", l.Addr().String(), "-devices-file", filepath.Join(t.TempDir(), "devices.json")}, &output); err == nil {
 		t.Fatal("run succeeded on a port in use")
 	}
 }
@@ -80,8 +86,12 @@ func TestRunServesHTTP(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	var output syncBuffer
+	devicesFile := filepath.Join(t.TempDir(), "devices.json")
+	if err := app.SaveDevices(devicesFile, []app.SavedDevice{{DeviceID: "AABBCCDDEEFF", Kind: app.PlayerDevice, Node: 1}}); err != nil {
+		t.Fatal(err)
+	}
 	done := make(chan error, 1)
-	go func() { done <- run(ctx, []string{"-http-addr", testAddr}, &output) }()
+	go func() { done <- run(ctx, []string{"-http-addr", testAddr, "-devices-file", devicesFile}, &output) }()
 
 	addrPattern := regexp.MustCompile(`http_addr=(\S+)`)
 	var addr string
@@ -104,6 +114,22 @@ func TestRunServesHTTP(t *testing.T) {
 			t.Errorf("GET %s: status = %d, want %d", path, resp.StatusCode, want)
 		}
 	}
+	resp, err := http.Get("http://" + addr + "/api/state")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var state struct {
+		Devices []struct {
+			DeviceID   string
+			Connected  bool
+			Assignment struct{ NodeID string }
+		}
+	}
+	err = json.NewDecoder(resp.Body).Decode(&state)
+	resp.Body.Close()
+	if err != nil || resp.StatusCode != http.StatusOK || len(state.Devices) != 1 || state.Devices[0].DeviceID != "AABBCCDDEEFF" || state.Devices[0].Connected || state.Devices[0].Assignment.NodeID != "P1" {
+		t.Fatalf("restored devices not exposed as disconnected: %+v, %v", state, err)
+	}
 
 	cancel()
 	select {
@@ -119,5 +145,23 @@ func TestRunServesHTTP(t *testing.T) {
 	}
 	if _, err := net.DialTimeout("tcp", addr, time.Second); err == nil {
 		t.Error("listener still open after run returned")
+	}
+}
+
+func TestRunRejectsInvalidDeviceFileBeforeListening(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "devices.json")
+	if err := os.WriteFile(path, []byte(`{"version":99,"devices":[]}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	// The invalid address would fail independently; the device file must be
+	// validated first, before HTTP or serial can accept an event.
+	err := run(context.Background(), []string{"-http-addr", "invalid", "-devices-file", path}, &output)
+	if err == nil || !strings.Contains(err.Error(), "load device assignments") || !strings.Contains(output.String(), "cannot load device assignments") || strings.Contains(output.String(), "server starting") {
+		t.Fatalf("invalid device file did not prevent startup: %v, %s", err, output.String())
+	}
+	data, _ := os.ReadFile(path)
+	if string(data) != `{"version":99,"devices":[]}` {
+		t.Fatal("invalid file was replaced during startup")
 	}
 }

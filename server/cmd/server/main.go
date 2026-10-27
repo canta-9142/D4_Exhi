@@ -40,6 +40,7 @@ func run(ctx context.Context, args []string, output io.Writer) error {
 	levelName := flags.String("log-level", "info", "log level: debug, info, warn, error")
 	// All interfaces by default: the admin connects from a laptop over the LAN.
 	httpAddr := flags.String("http-addr", ":8080", "listen address of the admin HTTP server")
+	devicesFile := flags.String("devices-file", "data/devices.json", "device assignment JSON file")
 	listPorts := flags.Bool("list-serial-ports", false, "list USB serial port candidates and exit")
 	var ports []string
 	flags.Func("serial-port", "USB CDC port path (repeat for multiple ports)", func(value string) error {
@@ -82,13 +83,24 @@ func run(ctx context.Context, args []string, output io.Writer) error {
 		return nil
 	}
 	logger := slog.New(slog.NewTextHandler(output, &slog.HandlerOptions{Level: level}))
+	if strings.TrimSpace(*devicesFile) == "" {
+		return errors.New("device assignment file path must not be empty")
+	}
+	devices, err := app.LoadDevices(*devicesFile)
+	if err != nil {
+		logger.Error("cannot load device assignments", "path", *devicesFile, "error", err)
+		return fmt.Errorf("load device assignments: %w", err)
+	}
 	// Listen before starting app so that a port in use is a startup error.
 	listener, err := net.Listen("tcp", *httpAddr)
 	if err != nil {
 		return fmt.Errorf("http listen: %w", err)
 	}
 	transport := serial.New(logger)
-	application := app.New(app.Options{Logger: logger, Send: transport.Send, Close: transport.Close})
+	application := app.New(app.Options{
+		Logger: logger, Send: transport.Send, Close: transport.Close, Devices: devices,
+		SaveDevices: func(candidate []app.SavedDevice) error { return app.SaveDevices(*devicesFile, candidate) },
+	})
 	server := &http.Server{
 		Handler:           web.New(application, logger),
 		ReadHeaderTimeout: 5 * time.Second,
