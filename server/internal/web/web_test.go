@@ -107,11 +107,6 @@ func TestNotFound(t *testing.T) {
 	}
 }
 
-func TestPlaceholderAPI(t *testing.T) {
-	h := New(fakeApp{}, nil)
-	checkError(t, serve(t, h, http.MethodPost, "/api/commands"), http.StatusServiceUnavailable, codeUnavailable)
-}
-
 func TestIndex(t *testing.T) {
 	h := New(fakeApp{}, nil)
 	for _, path := range []string{"/", "/static/index.html"} {

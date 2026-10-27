@@ -5,12 +5,18 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
 	"slices"
+	"strings"
 	"unicode/utf8"
 
 	"github.com/canta-9142/d4-exhi/internal/app"
 )
+
+// maxCommandBytes limits the body of POST /api/commands. Larger bodies are
+// 400 invalid_request.
+const maxCommandBytes = 64 << 10
 
 // noDataOperations are the types whose data must be {}.
 var noDataOperations = map[string]app.Operation{"start": app.Start, "finish": app.Finish, "reset": app.Reset}
@@ -18,10 +24,98 @@ var noDataOperations = map[string]app.Operation{"start": app.Start, "finish": ap
 // ledNodes are the LED control nodes of web.md 2: P1, P3, P5, P7 and B1-B3.
 var ledNodes = []app.NodeID{1, 3, 5, 7, 9, 10, 11}
 
-// handleCommand serves POST /api/commands (web.md 4). Until commands are
-// executed through app it answers 503 unavailable without calling app.
-func (h *handler) handleCommand(w http.ResponseWriter, _ *http.Request) {
-	writeError(w, http.StatusServiceUnavailable, codeUnavailable, errorMessages[codeUnavailable], nil)
+// conflictCodes are the app codes answered with 409 and the same-named code
+// (web.md 5).
+var conflictCodes = map[app.Code]errorCode{
+	app.CodePhaseConflict:      codePhaseConflict,
+	app.CodePIDExhausted:       codePIDExhausted,
+	app.CodePlayersNotReady:    codePlayersNotReady,
+	app.CodeAssignmentConflict: codeAssignmentConflict,
+	app.CodeDeviceDisconnected: codeDeviceDisconnected,
+	app.CodeDeviceKindMismatch: codeDeviceKindMismatch,
+	app.CodeDeviceNotAssigned:  codeDeviceNotAssigned,
+	app.CodeManualModeConflict: codeManualModeConflict,
+}
+
+type okBody struct {
+	OK bool `json:"ok"`
+}
+
+// handleCommand serves POST /api/commands (web.md 4). A request that is not
+// a valid command never reaches app.
+func (h *handler) handleCommand(w http.ResponseWriter, r *http.Request) {
+	if !isJSONContentType(r.Header.Get("Content-Type")) {
+		writeError(w, http.StatusUnsupportedMediaType, codeUnsupportedMediaType, errorMessages[codeUnsupportedMediaType], nil)
+		return
+	}
+	command, err := decodeCommand(http.MaxBytesReader(w, r.Body, maxCommandBytes))
+	if err != nil {
+		h.logger.Info("invalid command request", "error", err)
+		writeError(w, http.StatusBadRequest, codeInvalidRequest, errorMessages[codeInvalidRequest], nil)
+		return
+	}
+	err = h.app.Execute(r.Context(), command)
+	var rejection *app.Rejection
+	switch {
+	case err == nil:
+		writeJSON(w, http.StatusOK, okBody{OK: true})
+	case errors.As(err, &rejection):
+		h.writeRejection(w, command, rejection)
+	case errors.Is(err, app.ErrStopped):
+		writeError(w, http.StatusServiceUnavailable, codeUnavailable, errorMessages[codeUnavailable], nil)
+	default:
+		h.logger.Error("app execute failed", "operation", command.Operation, "error", err)
+		writeError(w, http.StatusInternalServerError, codeInternalError, errorMessages[codeInternalError], nil)
+	}
+}
+
+// writeRejection answers a command app did not apply. The app message is
+// English and goes only to the log; the response uses errorMessages.
+func (h *handler) writeRejection(w http.ResponseWriter, command app.Command, r *app.Rejection) {
+	h.logger.Info("command rejected", "operation", command.Operation, "code", r.Code, "error", r.Error())
+	switch r.Code {
+	case app.CodeInvalid:
+		writeError(w, http.StatusBadRequest, codeInvalidRequest, errorMessages[codeInvalidRequest], nil)
+		return
+	case app.CodeNotFound:
+		writeError(w, http.StatusNotFound, codeNotFound, errorMessages[codeNotFound], nil)
+		return
+	}
+	code, ok := conflictCodes[r.Code]
+	if !ok {
+		h.logger.Error("unknown rejection code", "code", r.Code)
+		writeError(w, http.StatusInternalServerError, codeInternalError, errorMessages[codeInternalError], nil)
+		return
+	}
+	var details map[string]any
+	if code == codePlayersNotReady {
+		names := make([]string, 0, len(r.Nodes))
+		for _, id := range sortedIDs(r.Nodes) {
+			name, err := playerName(id)
+			if err != nil {
+				h.logger.Error("invalid rejection", "code", r.Code, "error", err)
+				writeError(w, http.StatusInternalServerError, codeInternalError, errorMessages[codeInternalError], nil)
+				return
+			}
+			names = append(names, name)
+		}
+		details = map[string]any{"nodeIds": names}
+	}
+	writeError(w, http.StatusConflict, code, errorMessages[code], details)
+}
+
+// isJSONContentType accepts application/json with at most charset=utf-8.
+func isJSONContentType(value string) bool {
+	mediaType, params, err := mime.ParseMediaType(value)
+	if err != nil || mediaType != "application/json" {
+		return false
+	}
+	for name, v := range params {
+		if name != "charset" || !strings.EqualFold(v, "utf-8") {
+			return false
+		}
+	}
+	return true
 }
 
 // decodeCommand reads one command of web.md 4.1 from body.

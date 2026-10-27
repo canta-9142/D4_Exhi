@@ -1,6 +1,12 @@
 package web
 
 import (
+	"context"
+	"errors"
+	"fmt"
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -191,4 +197,236 @@ func TestDecodeCommandInvalid(t *testing.T) {
 			}
 		})
 	}
+}
+
+// commandApp records the commands passed to Execute and returns err.
+type commandApp struct {
+	err      error
+	commands []app.Command
+	ctx      context.Context
+}
+
+func (a *commandApp) State(context.Context) (app.Snapshot, error) { return app.Snapshot{}, nil }
+
+func (a *commandApp) Execute(ctx context.Context, c app.Command) error {
+	a.commands = append(a.commands, c)
+	a.ctx = ctx
+	return a.err
+}
+
+// postCommand sends body to POST /api/commands. An empty contentType leaves
+// the header unset.
+func postCommand(t *testing.T, h http.Handler, contentType, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	ctx := context.WithValue(t.Context(), ctxKey{}, "request")
+	r := httptest.NewRequestWithContext(ctx, http.MethodPost, "/api/commands", strings.NewReader(body))
+	if contentType != "" {
+		r.Header.Set("Content-Type", contentType)
+	}
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	return w
+}
+
+// checkOK verifies the success response of web.md 4.2.
+func checkOK(t *testing.T, w *httptest.ResponseRecorder) {
+	t.Helper()
+	if w.Code != http.StatusOK || w.Body.String() != "{\"ok\":true}\n" {
+		t.Fatalf("got %d %s, want 200 {\"ok\":true}", w.Code, w.Body)
+	}
+	if got := w.Header().Get("Content-Type"); got != "application/json" {
+		t.Errorf("Content-Type = %q", got)
+	}
+	if got := w.Header().Get("Cache-Control"); got != "no-store" {
+		t.Errorf("Cache-Control = %q", got)
+	}
+}
+
+// Each valid request reaches Execute once, with the request context.
+func TestCommandExecutes(t *testing.T) {
+	for _, tc := range validCommands {
+		t.Run(tc.name, func(t *testing.T) {
+			a := &commandApp{}
+			checkOK(t, postCommand(t, New(a, nil), "application/json", tc.body))
+			if len(a.commands) != 1 || a.commands[0] != tc.want {
+				t.Errorf("Execute got %+v, want [%+v]", a.commands, tc.want)
+			}
+			if a.ctx == nil || a.ctx.Value(ctxKey{}) != "request" {
+				t.Errorf("Execute was not called with the request context")
+			}
+		})
+	}
+}
+
+func TestCommandInvalidRequest(t *testing.T) {
+	for _, tc := range invalidCommands {
+		t.Run(tc.name, func(t *testing.T) {
+			a := &commandApp{}
+			checkError(t, postCommand(t, New(a, nil), "application/json", tc.body), http.StatusBadRequest, codeInvalidRequest)
+			if len(a.commands) != 0 {
+				t.Errorf("Execute called with %+v", a.commands)
+			}
+		})
+	}
+}
+
+func TestCommandBodyLimit(t *testing.T) {
+	start := `{"type":"start","data":{}}`
+	for _, tc := range []struct {
+		name string
+		body string
+		ok   bool
+	}{
+		{"at limit", start + strings.Repeat(" ", maxCommandBytes-len(start)), true},
+		{"trailing space over limit", start + strings.Repeat(" ", maxCommandBytes-len(start)+1), false},
+		{"leading space over limit", strings.Repeat(" ", maxCommandBytes-len(start)+1) + start, false},
+		{"long Device ID", `{"type":"set_device_preview","data":{"deviceId":"` + strings.Repeat("A", maxCommandBytes) + `"}}`, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a := &commandApp{}
+			w := postCommand(t, New(a, nil), "application/json", tc.body)
+			if tc.ok {
+				checkOK(t, w)
+				return
+			}
+			checkError(t, w, http.StatusBadRequest, codeInvalidRequest)
+			if len(a.commands) != 0 {
+				t.Errorf("Execute called with %+v", a.commands)
+			}
+		})
+	}
+}
+
+func TestCommandContentType(t *testing.T) {
+	body := `{"type":"start","data":{}}`
+	for _, contentType := range []string{
+		"application/json",
+		"application/json; charset=utf-8",
+		"application/json;charset=UTF-8",
+		`Application/JSON; Charset="utf-8"`,
+	} {
+		t.Run(contentType, func(t *testing.T) {
+			a := &commandApp{}
+			checkOK(t, postCommand(t, New(a, nil), contentType, body))
+			if len(a.commands) != 1 {
+				t.Errorf("Execute called %d times, want 1", len(a.commands))
+			}
+		})
+	}
+	for _, contentType := range []string{
+		"",
+		"text/plain",
+		"text/json",
+		"application/x-www-form-urlencoded",
+		"application/problem+json",
+		"application/jsonx",
+		"application",
+		"*/*",
+		"application/json; charset=iso-8859-1",
+		"application/json; charset=utf-16",
+		"application/json; charset=utf8",
+		"application/json; version=1",
+		"application/json; charset=utf-8; version=1",
+		"application/json; charset",
+	} {
+		t.Run(contentType, func(t *testing.T) {
+			a := &commandApp{}
+			checkError(t, postCommand(t, New(a, nil), contentType, body), http.StatusUnsupportedMediaType, codeUnsupportedMediaType)
+			if len(a.commands) != 0 {
+				t.Errorf("Execute called with %+v", a.commands)
+			}
+		})
+	}
+	// The media type is checked before the body.
+	checkError(t, postCommand(t, New(&commandApp{}, nil), "text/plain", "not JSON"),
+		http.StatusUnsupportedMediaType, codeUnsupportedMediaType)
+}
+
+func TestCommandErrors(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		err    error
+		status int
+		code   errorCode
+	}{
+		{"invalid", &app.Rejection{Code: app.CodeInvalid}, http.StatusBadRequest, codeInvalidRequest},
+		{"not found", &app.Rejection{Code: app.CodeNotFound}, http.StatusNotFound, codeNotFound},
+		{"phase conflict", &app.Rejection{Code: app.CodePhaseConflict}, http.StatusConflict, codePhaseConflict},
+		{"PID exhausted", &app.Rejection{Code: app.CodePIDExhausted}, http.StatusConflict, codePIDExhausted},
+		{"assignment conflict", &app.Rejection{Code: app.CodeAssignmentConflict}, http.StatusConflict, codeAssignmentConflict},
+		{"device disconnected", &app.Rejection{Code: app.CodeDeviceDisconnected}, http.StatusConflict, codeDeviceDisconnected},
+		{"device kind mismatch", &app.Rejection{Code: app.CodeDeviceKindMismatch}, http.StatusConflict, codeDeviceKindMismatch},
+		{"device not assigned", &app.Rejection{Code: app.CodeDeviceNotAssigned}, http.StatusConflict, codeDeviceNotAssigned},
+		{"manual mode conflict", &app.Rejection{Code: app.CodeManualModeConflict}, http.StatusConflict, codeManualModeConflict},
+		{"wrapped rejection", fmt.Errorf("execute: %w", &app.Rejection{Code: app.CodeDeviceDisconnected}),
+			http.StatusConflict, codeDeviceDisconnected},
+		// Only players_not_ready has details.
+		{"nodes of another code", &app.Rejection{Code: app.CodePhaseConflict, Nodes: []app.NodeID{1}},
+			http.StatusConflict, codePhaseConflict},
+		// Codes web.md 5 does not define never reach the client.
+		{"not preparing", &app.Rejection{Code: app.CodeNotPreparing}, http.StatusInternalServerError, codeInternalError},
+		{"unknown code", &app.Rejection{Code: "busy"}, http.StatusInternalServerError, codeInternalError},
+		{"bot not ready", &app.Rejection{Code: app.CodePlayersNotReady, Nodes: []app.NodeID{1, 9}},
+			http.StatusInternalServerError, codeInternalError},
+		{"stopped", app.ErrStopped, http.StatusServiceUnavailable, codeUnavailable},
+		{"wrapped stopped", fmt.Errorf("execute: %w", app.ErrStopped), http.StatusServiceUnavailable, codeUnavailable},
+		{"canceled", context.Canceled, http.StatusInternalServerError, codeInternalError},
+		{"other", errors.New("boom"), http.StatusInternalServerError, codeInternalError},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a := &commandApp{err: tc.err}
+			checkError(t, postCommand(t, New(a, nil), "application/json", `{"type":"start","data":{}}`), tc.status, tc.code)
+			if len(a.commands) != 1 {
+				t.Errorf("Execute called %d times, want 1", len(a.commands))
+			}
+		})
+	}
+}
+
+func TestCommandPlayersNotReady(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		nodes []app.NodeID
+		want  string
+	}{
+		{"sorted", []app.NodeID{8, 1, 3}, `["P1","P3","P8"]`},
+		{"one", []app.NodeID{2}, `["P2"]`},
+		{"none", nil, `[]`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a := &commandApp{err: &app.Rejection{Code: app.CodePlayersNotReady, Nodes: tc.nodes}}
+			w := postCommand(t, New(a, nil), "application/json", `{"type":"start","data":{}}`)
+			want := `{"ok":false,"error":{"code":"players_not_ready","message":"` + errorMessages[codePlayersNotReady] +
+				`","details":{"nodeIds":` + tc.want + `}}}` + "\n"
+			if w.Code != http.StatusConflict || w.Body.String() != want {
+				t.Errorf("got %d %s, want 409 %s", w.Code, w.Body, want)
+			}
+		})
+	}
+}
+
+// With the real app, rejections carry app's English messages, which must not
+// reach the response.
+func TestCommandWithApp(t *testing.T) {
+	a := app.New(app.Options{Logger: slog.New(slog.DiscardHandler)})
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() { done <- a.Run(ctx) }()
+	h := New(a, nil)
+	start := `{"type":"start","data":{}}`
+
+	// Every player starts in auto mode, so Start is accepted once.
+	checkOK(t, postCommand(t, h, "application/json", start))
+	checkError(t, postCommand(t, h, "application/json", start), http.StatusConflict, codePhaseConflict)
+	checkOK(t, postCommand(t, h, "application/json", `{"type":"reset","data":{}}`))
+	checkError(t, postCommand(t, h, "application/json", `{"type":"set_device_preview","data":{"deviceId":"AABBCCDDEEFF"}}`),
+		http.StatusNotFound, codeNotFound)
+	checkError(t, postCommand(t, h, "application/json", `{"type":"set_node_mode","data":{"nodeId":"P1","mode":"manual"}}`),
+		http.StatusConflict, codeDeviceDisconnected)
+
+	cancel()
+	if err := <-done; err != nil && !errors.Is(err, context.Canceled) {
+		t.Fatalf("Run: %v", err)
+	}
+	checkError(t, postCommand(t, h, "application/json", start), http.StatusServiceUnavailable, codeUnavailable)
 }
