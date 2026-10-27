@@ -13,10 +13,19 @@
 ## 通信と描画
 
 起動時と再接続時に、eFuse MAC由来の12桁の16進UIDで`HELLO UID`を送信する。
+起動時は通信開始前に配線表の全GPIOへ消灯データを送り、LED電源を保ったMCU再起動でも前の表示を消す。
+NODEが未確定なので、GPIOごとに配線表の最大LED数を使用する。出力初期化に失敗した場合は再試行する。
 `CONFIG`を受け取るまでは1秒ごとに再送する。USB未接続判定が100ms継続すると設定を破棄して全出力を消灯する。
+切断確定中はCDCの受信キューも破棄し、旧接続の命令を再接続後へ持ち越さない。100ms未満の切断では受信状態・キューを保持する。
+起動・再接続直後は最初の`HELLO`を送信してから受信命令を処理する。送信バッファ不足の場合は、その送信まで新しい入力の処理を保留する。
+共通JSONの`{"type":"identify","data":{}}`は全状態で受け付け、設定・表示・演出・受信状態を初期化して毎回直ちに`HELLO UID`を返す。
+設定変更・無効化時の出力処理は`poll()`のコールバックで同期的に行い、旧出力の消灯を完了してから応答を送る。
+送信バッファ不足時は応答件数を保持し、後続の`CONFIG`で設定済みになっても送信を再試行する。切断確定時には旧接続の未送信応答を破棄する。
+出力初期化の失敗時は`output_failed()`で未設定へ戻し、同じ接続の未送信応答と受信行を維持する。未送信応答がなければ復旧用の`HELLO`を1件保留する。
+設定済みの通常の無通信にはタイムアウトを設けず、タワーの表示を維持する。
 
 ```text
-CONFIG B1
+CONFIG B1 false
 BUFFER 2
 LIGHT P2 P8 outgoing
 LIGHT P1 P4 incoming
@@ -30,20 +39,31 @@ CLEAR
 LED数が1個の間は移動方向の見た目は同じになり、減衰と色の加算を確認できる。
 
 `BUFFER COUNT`はBot制御ノードのみで有効で、`COUNT`は0〜4。0〜1は青、2は緑、3は黄、4は赤。
-`CLEAR`は演出とタワーを消灯し、ノード設定を保持する。
-`CONFIG`の再受信でも演出とタワーを消灯する。タワーは次の`BUFFER`を受けるまで消灯したままとする。
+`CONFIG NODE PREVIEW`は両引数を必須とし、PREVIEWは小文字の`true`・`false`だけを受理する。
+`CLEAR`は演出とタワーを消灯し、NODE・PREVIEWを保持する。
+`CONFIG`の再受信でも演出とタワーを初期化する。通常表示（preview=false）のタワーは次の`BUFFER`まで消灯を保持する。
 
-不正な命令・余分な引数・未接続経路・タワーへの`LIGHT`は状態を変更せず無視する。
-受信行はLF区切りで最大96バイト、CRLFも受理する。長過ぎる行、NULや非ASCII文字を含む行、受信が1秒以上途切れた行は次のLFまで捨てる。
+`CONFIG NODE true`では、MCUが適用時を起点とする1秒周期で確認表示を描画する。
+GPIO0・1の経路にはNODE自身の色を外向きに流し、Bot用GPIO0のタワーは赤く点灯する。
+周期内500msで全出力を消灯する。遅延時は経過時間から現在の周期内の位置を求め、過去の周期をまとめて再生しない。
+確認中の通常の`LIGHT`・`BUFFER`は適用しない。`CLEAR`は現在の周期を消灯し、起点を変えず次の周期で再開する。
+確認終了は`CONFIG NODE false`、未割当基板は`identify`で行う。`identify`・切断・受信異常では確認モードも解除する。
+
+`LIGHT`・`BUFFER`・`CLEAR`の不正な引数や逆方向の`HELLO`は状態を変更せず無視する。
+不正な`CONFIG`・未知命令・不正なJSONは全出力を消灯して未設定へ戻し、`HELLO UID`による再識別を行う。行末で判明したエラーでは次の行を通常どおり処理する。
+受信行は終端を除いて最大96バイトとし、LF・CRLF、前後や区切りのスペース・タブを受理する。
+長過ぎる行、NUL・非ASCII・許可されていない制御文字を含む行、最後の受信から1秒以上途切れた部分行も同様に再識別へ移るが、当該行は次のLFまで捨てる。
+行破棄中も`HELLO`を1秒ごとに再送し、未設定中の追加エラーで再送周期を巻き戻さない。
 同時に保持する経路演出は制御ノード全体で128本までとし、上限超過時は新しい`LIGHT`を無視する。終了した演出の領域は再利用する。
 
 ## ビルド
 
-ESP32 Arduinoコア3.3.12、Adafruit NeoPixel 1.15.5で確認。
+ESP32 Arduinoコア3.3.12、Adafruit NeoPixel 1.15.5、ArduinoJson 7.4.3で確認。
 USB CDC On Bootを有効にし、通信へデバッグログを混ぜない。
 
 ```sh
 nix develop -c arduino-cli lib install 'Adafruit NeoPixel@1.15.5'
+nix develop -c arduino-cli lib install 'ArduinoJson@7.4.3'
 nix develop -c arduino-cli compile \
   --fqbn esp32:esp32:esp32c3:CDCOnBoot=cdc,DebugLevel=none \
   --jobs 2 --build-path /tmp/d4-led-cdc-build src/led
@@ -61,13 +81,26 @@ nix develop -c arduino-cli compile \
 
 ## テスト
 
-[led_controller.cpp](../../tests/led_controller.cpp)では実際の通信・描画処理をホスト上で動かし、識別、全ノードのGPIO設定、方向、減衰、飽和加算、タワー、消灯、不正入力、切断、時刻の周回を検証する。
+[led_controller.cpp](../../tests/led_controller.cpp)では実際の通信・描画処理をホスト上で動かし、識別、全ノードのGPIO設定、方向、減衰、飽和加算、タワー、確認周期と解除、消灯、不正入力、切断、時刻の周回を検証する。
+GCC 16でのArduinoJson内の最適化時警告を避けるため、ホストテストはNixのhardeningを無効化した非最適化ビルドで実行する。
 
 ```sh
 nix develop -c bash -c '
-  c++ -std=c++17 -Wall -Wextra -Werror -fsanitize=address,undefined \
+  NIX_HARDENING_ENABLE="" c++ -O0 -std=c++17 -Wall -Wextra -Werror \
+    -fsanitize=address,undefined -I "$HOME/Arduino/libraries/ArduinoJson/src" \
     tests/led_controller.cpp -o /tmp/d4-led-controller-test &&
   /tmp/d4-led-controller-test
+'
+```
+
+[led_firmware.cpp](../../tests/led_firmware.cpp)はArduino・NeoPixelの代替実装で実際の`setup()`・`loop()`を動かし、起動時の全GPIO消灯、初期化失敗からの再試行、消灯と識別応答の順序、設定失敗時の応答保持と通常設定への移行を確認する。
+
+```sh
+nix develop -c bash -c '
+  NIX_HARDENING_ENABLE="" c++ -O0 -std=c++17 -Wall -Wextra -Werror \
+    -fsanitize=address,undefined -I "$HOME/Arduino/libraries/ArduinoJson/src" \
+    -I tests/led_stubs tests/led_firmware.cpp -o /tmp/d4-led-firmware-test &&
+  /tmp/d4-led-firmware-test
 '
 ```
 
