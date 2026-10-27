@@ -81,6 +81,46 @@ int main() {
   assert(preparing_state(holding) == PreparingState::Waiting);
   assert(display_changes(next, displayed, false).full);
 
+
+  auto result = displayed;
+  result.phase = GamePhase::Finished;
+  result.summary = {INT32_MAX, 1, true, true, 1, true};
+  assert(display_changes(displayed, result, false).full);
+  assert(finished_state(result) == FinishedState::Ready);
+  FinishedAnimation animation;
+  result.finishedProgress = animation.update(result.summary, true, UINT32_MAX - 500);
+  assert(result.finishedProgress == 0 && displayed_final_score(result) == 0);
+  result.finishedProgress = animation.update(result.summary, true, 99);
+  assert(result.finishedProgress == 500 && displayed_final_score(result) > INT32_MAX / 2);
+  result.finishedProgress = animation.update(result.summary, true, 699);
+  assert(result.finishedProgress == 1000 && displayed_final_score(result) == INT32_MAX);
+  assert(animation.update(result.summary, true, 2000) == 1000); // 重複は再演しない。
+  auto moving = result;
+  moving.finishedProgress = 750;
+  auto diff = display_changes(result, moving, false);
+  assert(diff.resultScore && diff.resultRank && diff.resultAccent && !diff.full && !diff.resultBody);
+  auto area = display_damage(diff, false);
+  assert(area.containsPixel(24, 128) && area.containsPixel(455, 319) && !area.containsPixel(0, 0));
+  moving.summary.eligible = false;
+  moving.summary.rank = 0;
+  assert(display_changes(result, moving, false).resultRank);
+  moving.synced = false;
+  assert(finished_state(moving) == FinishedState::Syncing);
+  assert(display_changes(result, moving, false).resultBody);
+  assert(animation.update(result.summary, false, 3000) == 1000);
+  assert(animation.update(result.summary, true, 3001) == 1000);
+  auto preview = result;
+  preview.preview = true;
+  assert(display_screen(preview) == DisplayScreen::Preview);
+  assert(display_changes(result, preview, false).full);
+  auto dark = preview;
+  dark.previewLit = false;
+  diff = display_changes(preview, dark, false);
+  assert(diff.previewBody && !diff.resultBody && !diff.full);
+  const auto beforeScore = dark;
+  dark.summary.score = 10;
+  assert(!display_changes(beforeScore, dark, false).any());
+
   ScanTiming timing;
   timing.locked = true;
   std::array<ScanTransferBlock, 3> blocks{{{112, 16, 0, 500}, {304, 16, 400, 1200}, {464, 16, 800, 2000}}};

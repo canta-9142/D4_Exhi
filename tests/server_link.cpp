@@ -57,8 +57,8 @@ static void test_status_and_mode() {
   TestContext ctx;
   const std::string sync = "0000000000000000000000000000000A";
   const std::string fifo = reset(sync, R"([{"pid":10,"dst":2}])");
-  const std::string manual = message("config", R"({"node":1,"mode":"manual"})");
-  const std::string automatic = message("config", R"({"node":1,"mode":"auto"})");
+  const std::string manual = message("config", R"({"node":1,"mode":"manual","preview":false})");
+  const std::string automatic = message("config", R"({"node":1,"mode":"auto","preview":false})");
   const std::string playing = message("phase", R"({"phase":"Playing"})");
   const std::string status = message("status", R"({"score":23,"remaining":87,"ready":true})");
   const std::string maximum = message("status", R"({"score":2147483647,"remaining":120,"ready":false})");
@@ -132,42 +132,42 @@ static void test_status_and_mode() {
   }
 
   const std::string badConfigOrJson[] = {
-    message("config", R"({"node":1})"), message("config", R"({"mode":"manual"})"),
-    message("config", R"({"node":true,"mode":"manual"})"),
-    message("config", R"({"node":9,"mode":"manual"})"),
+    message("config", R"({"node":1})"), message("config", R"({"mode":"manual","preview":false})"),
+    message("config", R"({"node":true,"mode":"manual","preview":false})"),
+    message("config", R"({"node":9,"mode":"manual","preview":false})"),
     message("config", R"({"node":1,"mode":"MANUAL"})"),
     message("config", R"({"node":1,"mode":true})"),
     message("config", R"({"node":1,"mode":"manual\u0000x"})"),
     message("config", R"({"node":1,"mode":"manual\uD800"})"),
     message("config", R"({"node":1,"mode":"man\uD800ual"})"),
-    message(R"(config\uD800)", R"({"node":1,"mode":"manual"})"),
+    message(R"(config\uD800)", R"({"node":1,"mode":"manual","preview":false})"),
     message("phase", R"({"phase":"Play\uD800ing"})"),
-    message("config", R"({"node":1,"mode":"manual","\uD800":0})"),
-    message("config", R"({"node":1,"mode":"manual","extra":"\uDC00"})"),
-    message("config", R"({"node":1,"mode":"manual","extra":"\uDFFF"})"),
-    message("config", R"({"node":1,"mode":"manual","extra":"\uDC00\uD800"})"),
-    message("config", R"({"node":1,"mode":"manual","extra":"\uD800\u0041"})"),
-    message("config", R"({"node":1,"mode":"manual","extra":"\uD800\uD800\uDC00"})"),
-    message("config", R"({"node":1,"mode":"manual","extra":"\uD800\n\uDC00"})"),
-    message("config", R"({"node":1,"mode":"manual","extra":"\uD800あ\uDC00"})"),
-    message("config", R"({"node":1,"mode":"manual","extra":"\uD800\uDC0"})"),
+    message("config", R"({"node":1,"mode":"manual","preview":false,"\uD800":0})"),
+    message("config", R"({"node":1,"mode":"manual","preview":false,"extra":"\uDC00"})"),
+    message("config", R"({"node":1,"mode":"manual","preview":false,"extra":"\uDFFF"})"),
+    message("config", R"({"node":1,"mode":"manual","preview":false,"extra":"\uDC00\uD800"})"),
+    message("config", R"({"node":1,"mode":"manual","preview":false,"extra":"\uD800\u0041"})"),
+    message("config", R"({"node":1,"mode":"manual","preview":false,"extra":"\uD800\uD800\uDC00"})"),
+    message("config", R"({"node":1,"mode":"manual","preview":false,"extra":"\uD800\n\uDC00"})"),
+    message("config", R"({"node":1,"mode":"manual","preview":false,"extra":"\uD800あ\uDC00"})"),
+    message("config", R"({"node":1,"mode":"manual","preview":false,"extra":"\uD800\uDC0"})"),
     message("config", "[]"), "garbage\n", "{\n",
     "{'type':'config','data':{'node':1,'mode':'manual'}}\n",
     "{type:\"config\",data:{node:1,mode:\"manual\"}}\n",
-    message("config", R"({"node":+1,"mode":"manual"})"),
-    message("config", R"({"node":01,"mode":"manual"})"),
-    message("config", R"({"node":1,"mode":"manual","extra":.1})"),
-    message("config", R"({"node":1,"mode":"manual","extra":1.})"),
-    message("config", R"({"node":1,"mode":"manual","extra":1.e2})"),
-    message("config", R"({"node":1,"mode":"manual","extra":1e+})"),
-    message("config", R"({"node":1,"mode":"manual","extra":truex})"),
-    message("config", R"({"node":1,"mode":"manual","extra":"\'"})"),
-    message("config", R"({"node":1,"mode":"manual","extra":"\uZZZZ"})"),
-    message("config", R"({"node":1,"mode":"manual",true:0})"),
-    message("config", R"({"node":1,"mode":"manual",0:0})"),
-    message("config", R"({"node":1,"mode":"manual","extra":"raw)" + std::string(1, '\t') + "tab\"}"),
-    message("config", R"({"node":1,"mode":"manual",})"),
-    message("config", R"({"node":1,"mode":"manual","extra":[1,]})"),
+    message("config", R"({"node":+1,"mode":"manual","preview":false})"),
+    message("config", R"({"node":01,"mode":"manual","preview":false})"),
+    message("config", R"({"node":1,"mode":"manual","preview":false,"extra":.1})"),
+    message("config", R"({"node":1,"mode":"manual","preview":false,"extra":1.})"),
+    message("config", R"({"node":1,"mode":"manual","preview":false,"extra":1.e2})"),
+    message("config", R"({"node":1,"mode":"manual","preview":false,"extra":1e+})"),
+    message("config", R"({"node":1,"mode":"manual","preview":false,"extra":truex})"),
+    message("config", R"({"node":1,"mode":"manual","preview":false,"extra":"\'"})"),
+    message("config", R"({"node":1,"mode":"manual","preview":false,"extra":"\uZZZZ"})"),
+    message("config", R"({"node":1,"mode":"manual","preview":false,true:0})"),
+    message("config", R"({"node":1,"mode":"manual","preview":false,0:0})"),
+    message("config", R"({"node":1,"mode":"manual","preview":false,"extra":"raw)" + std::string(1, '\t') + "tab\"}"),
+    message("config", R"({"node":1,"mode":"manual","preview":false,})"),
+    message("config", R"({"node":1,"mode":"manual","preview":false,"extra":[1,]})"),
     manual.substr(0, manual.size() - 1) + "garbage\n",
     manual.substr(0, manual.size() - 1) + automatic,
     manual.substr(0, manual.size() - 1) + std::string(1, '\0') + "\n"
@@ -183,7 +183,7 @@ static void test_status_and_mode() {
 
   // 正当なJSONの空白、エスケープ、負数、小数、指数、未知の追加フィールドは許可する。
   ctx.receive(" \t" + message("config",
-      R"({"node":1,"mode":"man\u0075al","extra":[-0,-12,0.5,1e2,1E-2,1e+2,true,false,null,"apostrophe's", "\"\\\/\b\f\n\r\t\u3042"]})"));
+      R"({"node":1,"mode":"man\u0075al","preview":false,"extra":[-0,-12,0.5,1e2,1E-2,1e+2,true,false,null,"apostrophe's", "\"\\\/\b\f\n\r\t\u3042"]})"));
   ctx.receive(fifo + playing + status);
   assert(ctx.self == NodeId::P1 && ctx.link.mode() == ControlMode::Manual && ctx.link.fifo_synced());
 
@@ -211,12 +211,12 @@ static void test_status_and_mode() {
 
 static void test_utf8_validation() {
   TestContext ctx;
-  const std::string config = message("config", R"({"node":1,"mode":"manual"})");
+  const std::string config = message("config", R"({"node":1,"mode":"manual","preview":false})");
   const std::string fifo = reset("0000000000000000000000000000000A", R"([{"pid":10,"dst":2}])");
   const std::string status = message("status", R"({"score":1,"remaining":120,"ready":false})");
   const std::string hello = message("hello", R"({"uid":"001122334455"})");
   const auto with_text = [](const std::string& text) {
-    return message("config", "{\"node\":1,\"mode\":\"manual\",\"extra\":\"" + text + "\"}");
+    return message("config", "{\"node\":1,\"mode\":\"manual\",\"preview\":false,\"extra\":\"" + text + "\"}");
   };
   const std::string invalid[] = {
     "\x80", "\xBF", "\xC0\x80", "\xC1\xBF", "\xC2", "\xC2" "x",
@@ -251,7 +251,7 @@ static void test_utf8_validation() {
 
 static void test_oversized_line_drop() {
   TestContext ctx;
-  const std::string config = message("config", R"({"node":1,"mode":"manual"})");
+  const std::string config = message("config", R"({"node":1,"mode":"manual","preview":false})");
   const std::string fifo = reset("0000000000000000000000000000000A", R"([{"pid":10,"dst":2}])");
   ctx.receive(config + fifo);
   ctx.receive(std::string(ServerLink::MAX_LINE_BYTES + 1, 'x'));
@@ -282,13 +282,13 @@ static void test_unicode_escapes_and_nesting() {
   TestContext ctx;
   const std::string fifo = reset("0000000000000000000000000000000A", R"([{"pid":10,"dst":2}])");
   const std::string validFields[] = {
-    R"({"node":1,"mode":"manual","extra":"\uD800\uDC00\uDBFF\uDFFF"})",
-    R"({"node":1,"mode":"manual","extra":"\ud83d\udc1f\uD7FF\uE000"})",
-    R"({"node":1,"mode":"manual","extra":"\\uD800"})",
-    R"({"node":1,"mode":"manual","\uD800\uDC00":0})",
-    R"({"node":1,"mode":"manual","extra":{"a":{}}})",
-    R"({"node":1,"mode":"manual","extra":[[]]})",
-    R"({"node":1,"mode":"manual","extra":[{}]})"
+    R"({"node":1,"mode":"manual","preview":false,"extra":"\uD800\uDC00\uDBFF\uDFFF"})",
+    R"({"node":1,"mode":"manual","preview":false,"extra":"\ud83d\udc1f\uD7FF\uE000"})",
+    R"({"node":1,"mode":"manual","preview":false,"extra":"\\uD800"})",
+    R"({"node":1,"mode":"manual","preview":false,"\uD800\uDC00":0})",
+    R"({"node":1,"mode":"manual","preview":false,"extra":{"a":{}}})",
+    R"({"node":1,"mode":"manual","preview":false,"extra":[[]]})",
+    R"({"node":1,"mode":"manual","preview":false,"extra":[{}]})"
   };
   for (const auto& fields : validFields) {
     ctx.receive(message("identify", "{}"));
@@ -296,12 +296,12 @@ static void test_unicode_escapes_and_nesting() {
     assert(ctx.self == NodeId::P1 && ctx.link.mode() == ControlMode::Manual && ctx.link.fifo_synced());
   }
   const std::string tooDeep[] = {
-    R"({"node":1,"mode":"manual","extra":{"a":{"b":{}}}})",
-    R"({"node":1,"mode":"manual","extra":[[[]]]})",
-    R"({"node":1,"mode":"manual","extra":[{"a":[]}]})"
+    R"({"node":1,"mode":"manual","preview":false,"extra":{"a":{"b":{}}}})",
+    R"({"node":1,"mode":"manual","preview":false,"extra":[[[]]]})",
+    R"({"node":1,"mode":"manual","preview":false,"extra":[{"a":[]}]})"
   };
   for (const auto& fields : tooDeep) {
-    ctx.receive(message("config", R"({"node":1,"mode":"manual"})") + fifo);
+    ctx.receive(message("config", R"({"node":1,"mode":"manual","preview":false})") + fifo);
     ctx.port.output.clear();
     ctx.receive(message("config", fields));
     assert(ctx.port.output == message("hello", R"({"uid":"001122334455"})"));
@@ -311,7 +311,7 @@ static void test_unicode_escapes_and_nesting() {
 
 static void test_partial_writes() {
   const std::string sync = "0000000000000000000000000000000A";
-  const std::string config = message("config", R"({"node":1,"mode":"manual"})");
+  const std::string config = message("config", R"({"node":1,"mode":"manual","preview":false})");
   const std::string fifo = reset(sync, R"([{"pid":10,"dst":2}])");
   const std::string playing = message("phase", R"({"phase":"Playing"})");
   const std::string status = message("status", R"({"score":0,"remaining":120,"ready":false})");
@@ -417,7 +417,7 @@ static void test_ready() {
   TestContext ctx;
   const std::string syncA = "0000000000000000000000000000000A";
   const std::string syncB = "0000000000000000000000000000000B";
-  const auto config = message("config", R"({"node":1,"mode":"manual"})");
+  const auto config = message("config", R"({"node":1,"mode":"manual","preview":false})");
   const auto prep = message("phase", R"({"phase":"Preparing"})");
   const auto playing = message("phase", R"({"phase":"Playing"})");
   const auto no = message("status", R"({"score":0,"remaining":120,"ready":false})");
@@ -485,7 +485,7 @@ static void test_ready() {
   for (unsigned i = 0; i < 30; ++i) ctx.poll();
   assert(ctx.port.output == readyA && ctx.link.ready_pending());
   ctx.port.writeLimit = 256;
-  ctx.receive(message("config", R"({"node":1,"mode":"auto"})") + reset(syncA, "[]") + prep + no);
+  ctx.receive(message("config", R"({"node":1,"mode":"auto","preview":false})") + reset(syncA, "[]") + prep + no);
   ctx.port.output.clear();
   step(0);
   assert(!step(9, 3000) && !ctx.link.ready_pending() && ctx.port.output.empty());
@@ -508,7 +508,137 @@ static void test_ready() {
   assert(!ctx.link.ready_pending() && ctx.link.ready_progress_ms() == 0 && ctx.self == NodeId::None);
 }
 
+static void test_summary_and_preview() {
+  const std::string a(32, 'A'), b(32, 'B');
+  const auto config = message("config", R"({"node":1,"mode":"manual","preview":false})");
+  const auto playing = message("phase", R"({"phase":"Playing"})");
+  const auto finished = message("phase", R"({"phase":"Finished"})");
+  const auto status = message("status", R"({"score":9,"remaining":0,"ready":false})");
+  const auto summary = [&](const std::string& sync, const std::string& fields = R"("score":2147483647,"rank":2,"eligible":true)") {
+    return message("summary", "{\"sync\":\"" + sync + "\"," + fields + "}");
+  };
+  // 同じ遷移を一括・行単位・1バイトずつ受け取っても、終了演出の判定は同じ。
+  for (unsigned delivery = 0; delivery < 3; ++delivery) {
+    TestContext transition;
+    transition.receive(config + reset(a, "[]") + message("phase", R"({"phase":"Preparing"})") + status);
+    const std::string events[] = {playing, status, finished, status, summary(a)};
+    std::string batch;
+    for (const auto& event : events) batch += event;
+    if (delivery == 0) transition.receive(batch);
+    else if (delivery == 1) for (const auto& event : events) transition.receive(event);
+    else for (char byte : batch) transition.receive(std::string(1, byte));
+    assert(transition.link.summary().known && transition.link.summary().animate);
+    const auto revision = transition.link.summary().revision;
+    transition.receive(summary(a));
+    assert(transition.link.summary().revision == revision);
+    // 再同期では、保持中のPlayingを通常の終了遷移として扱わない。
+    transition.receive(playing + message("phase", R"({"phase":"invalid"})"));
+    transition.receive(reset(b, "[]") + finished + status + summary(b));
+    assert(transition.link.summary().known && !transition.link.summary().animate);
+  }
+  TestContext ctx;
+  ctx.receive(summary(a));
+  assert(!ctx.link.summary().known);
+  ctx.receive(config + reset(a, "[]") + playing + status);
+  ctx.receive(summary(a));
+  assert(!ctx.link.summary().known);
+  ctx.receive(finished + status + summary(b));
+  assert(!ctx.link.summary().known);
+  ctx.receive(summary(a));
+  assert(ctx.link.summary().known && ctx.link.summary().score == INT32_MAX && ctx.link.summary().rank == 2);
+  assert(ctx.link.summary().animate);
+  const auto revision = ctx.link.summary().revision;
+  ctx.receive(finished + status + summary(a));
+  assert(ctx.link.summary().revision == revision && ctx.link.summary().animate);
+  ctx.now = 100000;
+  ctx.poll();
+  assert(ctx.link.fifo_synced()); // 正常な無通信には期限なし。
+  ctx.receive(reset(b, "[]") + status);
+  assert(!ctx.link.summary().known);
+  ctx.receive(summary(a));
+  assert(!ctx.link.summary().known);
+  ctx.receive(summary(b, R"("score":400,"rank":null,"eligible":false)"));
+  assert(ctx.link.summary().score == 400 && !ctx.link.summary().eligible && !ctx.link.summary().animate);
+  ctx.receive(playing);
+  assert(!ctx.link.summary().known);
+
+  // 結果取得期限は通常RESET（異なる世代を含む）・重複PHASE/STATUSでも延ばさない。
+  ctx.now = 200000;
+  ctx.receive(finished);
+  ctx.now += ServerLink::SUMMARY_TIMEOUT_MS - 1;
+  ctx.receive(reset(a, "[]") + finished + status + summary(b));
+  assert(ctx.link.fifo_synced());
+  ++ctx.now;
+  ctx.port.output.clear();
+  ctx.poll();
+  assert(!ctx.link.fifo_synced() && ctx.port.output == message("resync", "{}"));
+  ctx.receive(reset(b, "[]") + finished + status + summary(b));
+  assert(ctx.link.summary().known && !ctx.link.summary().animate);
+
+  const std::string bad[] = {
+    R"("score":-1,"rank":1,"eligible":true)", R"("score":2147483648,"rank":1,"eligible":true)",
+    R"("score":true,"rank":1,"eligible":true)", R"("score":1.5,"rank":1,"eligible":true)",
+    R"("score":1,"rank":0,"eligible":true)", R"("score":1,"rank":9,"eligible":true)",
+    R"("score":1,"rank":null,"eligible":true)", R"("score":1,"rank":true,"eligible":true)",
+    R"("score":1,"rank":1,"eligible":false)", R"("score":1,"eligible":false)",
+    R"("score":1,"rank":null)", R"("score":1,"rank":null,"eligible":0)",
+    R"("rank":1,"eligible":true)"
+  };
+  for (const auto& fields : bad) {
+    ctx.receive(config + reset(a, "[]") + finished + status + summary(a));
+    ctx.receive(summary(a, fields));
+    assert(!ctx.link.fifo_synced());
+    assert(ctx.link.summary().known && ctx.link.summary().score == INT32_MAX && ctx.link.summary().rank == 2);
+    assert(!ctx.link.summary().animate);
+  }
+  for (const auto& sync : {std::string(31, 'A'), std::string(32, 'a'), std::string(32, 'G')}) {
+    ctx.receive(config + reset(a, "[]") + finished + status + summary(a));
+    ctx.receive(summary(sync));
+    assert(!ctx.link.fifo_synced() && ctx.link.summary().score == INT32_MAX);
+  }
+  ctx.receive(config + reset(a, "[]") + finished + status + summary(a));
+  assert(!ctx.link.summary().animate); // 初期同期のFinishedは静止表示。
+  ctx.port.connected = false;
+  ctx.poll();
+  ctx.now += ServerLink::DISCONNECT_GRACE_MS;
+  ctx.poll();
+  assert(!ctx.link.summary().known && !ctx.link.preview());
+  ctx.port.connected = true;
+
+  const auto preview = message("config", R"({"node":8,"mode":"auto","preview":true})");
+  ctx.receive(preview + reset(a, R"([{"pid":10,"dst":2}])") + finished + status + summary(a));
+  assert(ctx.link.preview() && !ctx.link.summary().known);
+  ctx.now += 10000;
+  ctx.poll();
+  assert(ctx.link.fifo_synced()); // 確認中は結果待ちを開始しない。
+  assert(!ctx.link.send(ctx.port, ctx.queue, NodeId::P2, ctx.now));
+  ctx.receive(message("phase", R"({"phase":"Preparing"})"));
+  ctx.link.update_ready(ctx.port, 0, ctx.now);
+  ctx.link.update_ready(ctx.port, ReadyHold::END_BUTTONS, ++ctx.now);
+  ctx.now += ReadyHold::DURATION_MS;
+  assert(!ctx.link.update_ready(ctx.port, ReadyHold::END_BUTTONS, ctx.now));
+  ctx.receive(config + reset(b, "[]") + finished + status + summary(b));
+  assert(!ctx.link.preview() && ctx.link.summary().known && !ctx.link.summary().animate);
+
+  const std::string badConfig[] = {
+    "{\"type\":\"config\",\"data\":{\"node\":1,\"mode\":\"manual\"}}\n",
+    message("config", R"({"node":1,"mode":"manual","preview":true})"),
+    message("config", R"({"node":1,"mode":"auto","preview":0})"),
+    message("config", R"({"node":1,"mode":"auto","preview":null})")
+  };
+  for (const auto& invalid : badConfig) {
+    ctx.receive(preview + reset(a, "[]") + finished + status);
+    ctx.receive(invalid);
+    assert(ctx.self == NodeId::None && !ctx.link.preview() && !ctx.link.summary().known);
+    assert(ctx.link.mode() == ControlMode::Auto);
+  }
+  ctx.receive(preview + reset(a, "[]") + finished + status);
+  ctx.receive(message("identify", "{}"));
+  assert(!ctx.link.preview() && ctx.self == NodeId::None);
+}
+
 int main() {
+  test_summary_and_preview();
   test_ready();
   test_status_and_mode();
   test_utf8_validation();
@@ -519,7 +649,7 @@ int main() {
   const std::string syncA = "0000000000000000000000000000000A";
   const std::string syncB = "0000000000000000000000000000000B";
   const std::string packets = R"([{"pid":10,"dst":2}])";
-  const std::string config = message("config", R"({"node":1,"mode":"manual"})");
+  const std::string config = message("config", R"({"node":1,"mode":"manual","preview":false})");
   const std::string status = message("status", R"({"score":23,"remaining":87,"ready":true})");
   const std::string identify = message("identify", "{}");
   const std::string hello = message("hello", R"({"uid":"001122334455"})");

@@ -99,12 +99,12 @@ def exercise_buttons(cdc, packets, sync):
 
     cdc.send("phase", phase="Preparing")
     input("READY: AUTO mode; press Enter, then wait for AUTO and press the leftmost switch repeatedly for 10 seconds: ")
-    cdc.send("config", node=1, mode="auto")
+    cdc.send("config", node=1, mode="auto", preview=False)
     cdc.expect("resync")
     cdc.reset(packets)
     cdc.quiet(10)
     print("PASS: no SEND in AUTO/Playing", flush=True)
-    cdc.send("config", node=1, mode="manual")
+    cdc.send("config", node=1, mode="manual", preview=False)
     cdc.expect("resync")
     sync = cdc.reset(packets, "Preparing")
 
@@ -123,6 +123,8 @@ def exercise_buttons(cdc, packets, sync):
 
     for phase in ("Preparing", "Finished"):
         cdc.send("phase", phase=phase)
+        if phase == "Finished":
+            cdc.send("summary", sync=sync, score=0, rank=1, eligible=True)
         input(f"READY: {phase}; press Enter, then press the leftmost switch repeatedly for 10 seconds: ")
         cdc.quiet(10)
         print(f"PASS: no SEND in {phase}", flush=True)
@@ -164,12 +166,12 @@ def exercise(cdc, buttons, idle_seconds):
     print("PASS: identify/repeated identify, hello uid=" + uid, flush=True)
 
     def configure(mode="manual"):
-        cdc.send("config", node=1, mode=mode)
+        cdc.send("config", node=1, mode=mode, preview=False)
         cdc.expect("resync")
 
     cdc.write(b'{"type":"config","data":')
     time.sleep(0.05)
-    cdc.write(b'{"node":1,"mode":"manual"}}\r\n')
+    cdc.write(b'{"node":1,"mode":"manual","preview":false}}\r\n')
     cdc.expect("resync")
     sync = cdc.reset([packet(10)], phase=None, with_status=False)
     cdc.expect("resync", timeout=2)
@@ -254,15 +256,15 @@ def exercise(cdc, buttons, idle_seconds):
         configure()
         cdc.reset([])
     for raw in (
-        b'{"type":"config","data":{"node":2,"mode":"manual"}}garbage\n',
+        b'{"type":"config","data":{"node":2,"mode":"manual","preview":false}}garbage\n',
         b"{'type':'config','data':{'node':1,'mode':'manual'}}\n",
         b'{type:"config",data:{node:1,mode:"manual"}}\n',
-        b'{"type":"config","data":{"node":+1,"mode":"manual"}}\n',
-        b'{"type":"config","data":{"node":1,"mode":"manual","extra":"\xff"}}\n',
-        b'{"type":"config","data":{"node":1,"mode":"manual","extra":"\xed\xa0\x80"}}\n',
+        b'{"type":"config","data":{"node":+1,"mode":"manual","preview":false}}\n',
+        b'{"type":"config","data":{"node":1,"mode":"manual","preview":false,"extra":"\xff"}}\n',
+        b'{"type":"config","data":{"node":1,"mode":"manual","preview":false,"extra":"\xed\xa0\x80"}}\n',
         b'{"type":"config","data":{"node":1,"mode":"manual\\uD800"}}\n',
-        b'{"type":"config","data":{"node":1,"mode":"manual","extra":"\\uDC00"}}\n',
-        b'{"type":"config","data":{"node":1,"mode":"manual","extra":{"a":{"b":{}}}}}\n',
+        b'{"type":"config","data":{"node":1,"mode":"manual","preview":false,"extra":"\\uDC00"}}\n',
+        b'{"type":"config","data":{"node":1,"mode":"manual","preview":false,"extra":{"a":{"b":{}}}}}\n',
     ):
         cdc.write(raw)
         assert cdc.expect("hello")["uid"] == uid
@@ -272,7 +274,7 @@ def exercise(cdc, buttons, idle_seconds):
 
     for extra in ("🐟", {"a": {}}, [[]]):
         # ensure_ascii=Trueで絵文字を正しいサロゲートペアとして送る。
-        cdc.send("config", node=1, mode="manual", extra=extra)
+        cdc.send("config", node=1, mode="manual", preview=False, extra=extra)
         cdc.expect("resync")
         cdc.reset([])
     print("PASS: valid surrogate pair and nesting depth 4", flush=True)
@@ -289,13 +291,13 @@ def exercise(cdc, buttons, idle_seconds):
     cdc.expect("hello")
     configure()
     cdc.reset([])
-    cdc.write('{"type":"config","data":{"node":1,"mode":"manual","extra":"準備完了🐟"}}\n'.encode("utf-8"))
+    cdc.write('{"type":"config","data":{"node":1,"mode":"manual","preview":false,"extra":"準備完了🐟"}}\n'.encode("utf-8"))
     cdc.expect("resync")
     cdc.reset([])
     cdc.write(b"x" * 32769)  # LF前に停止しても、超過行の破棄を継続する。
     cdc.expect("hello")
     cdc.expect("hello")  # 1秒間の停止をまたぐ。
-    cdc.write(b'{"type":"config","data":{"node":1,"mode":"manual"}}\n')
+    cdc.write(b'{"type":"config","data":{"node":1,"mode":"manual","preview":false}}\n')
     cdc.expect("hello")  # 同じ超過行の末尾をCONFIGとして受理していない。
     configure()
     cdc.reset([])

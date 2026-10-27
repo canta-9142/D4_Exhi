@@ -17,6 +17,7 @@ public:
   static constexpr uint32_t RETRY_MS = 1000;
   static constexpr uint32_t SEND_TIMEOUT_MS = 3000;
   static constexpr uint32_t STATUS_TIMEOUT_MS = 3000;
+  static constexpr uint32_t SUMMARY_TIMEOUT_MS = 3000;
   static constexpr uint32_t READY_TIMEOUT_MS = 3000;
   static constexpr uint32_t RECEIVE_TIMEOUT_MS = 1000;
   static constexpr uint32_t DISCONNECT_GRACE_MS = 100;
@@ -82,6 +83,14 @@ public:
         request_resync();
       }
     }
+    if (fifo_synced() && phase_ == GamePhase::Finished && !preview_ && !summary_.known) {
+      if (!summaryTimerStarted_) {
+        summaryTimerStarted_ = true;
+        summaryStartedMs_ = nowMs;
+      } else if (nowMs - summaryStartedMs_ >= SUMMARY_TIMEOUT_MS) {
+        request_resync();
+      }
+    }
     if (pending_ && nowMs - sentMs_ >= SEND_TIMEOUT_MS) request_resync();
     if (readyPending_ && nowMs - readySentMs_ >= READY_TIMEOUT_MS) request_resync();
     if ((!fifo_synced() || phase_ == GamePhase::Unknown) &&
@@ -93,7 +102,7 @@ public:
 
   template<class Port>
   bool send(Port& port, const PacketQueue& queue, NodeId to, uint32_t nowMs) {
-    if (!port || !fifo_synced() || mode_ != ControlMode::Manual ||
+    if (!port || !fifo_synced() || preview_ || mode_ != ControlMode::Manual ||
         phase_ != GamePhase::Playing || pending_ || txLength_ || !queue.size() ||
         nextRid_ > UINT32_MAX) return false;
     const unsigned target = static_cast<unsigned>(to);
@@ -119,12 +128,14 @@ public:
   ControlMode mode() const { return mode_; }
   const PlayerStatus& status() const { return status_; }
   bool awaiting_status() const { return statusSync_ != StatusSync::Complete; }
+  bool preview() const { return preview_; }
+  const FinalSummary& summary() const { return summary_; }
   bool ready_pending() const { return readyPending_; }
   uint16_t ready_progress_ms() const { return readyPending_ ? ReadyHold::DURATION_MS : readyHold_.progress_ms(); }
 
   template<class Port>
   bool update_ready(Port& port, uint8_t pressedMask, uint32_t nowMs) {
-    const bool enabled = port && fifo_synced() && phase_ == GamePhase::Preparing &&
+    const bool enabled = port && !preview_ && fifo_synced() && phase_ == GamePhase::Preparing &&
                          mode_ == ControlMode::Manual && !awaiting_status() && status_.known &&
                          !status_.ready && !readyPending_;
     if (!readyHold_.update(pressedMask, enabled, nowMs)) return false;
@@ -189,6 +200,9 @@ private:
     resyncNeeded_ = true;
     statusSync_ = StatusSync::AwaitReset;
     statusTimerStarted_ = false;
+    summaryTimerStarted_ = false;
+    allowIntro_ = false;
+    summary_.animate = false;
     cancel_ready();
   }
 
@@ -204,6 +218,8 @@ private:
     phase_ = GamePhase::Unknown;
     mode_ = ControlMode::Auto;
     status_ = {};
+    preview_ = false;
+    summary_ = {};
     sync_[0] = '\0';
     request_resync();
     return true;
@@ -426,7 +442,11 @@ private:
       }
       const JsonString mode = data["mode"].as<JsonString>();
       if (mode != "manual" && mode != "auto") return forget_config(queue, selfId);
+      if (!data["preview"].is<bool>() || (data["preview"].as<bool>() && mode != "auto")) {
+        return forget_config(queue, selfId);
+      }
       forget_config(queue, selfId);
+      preview_ = data["preview"].as<bool>();
       selfId = static_cast<NodeId>(data["node"].as<uint8_t>());
       mode_ = mode == "manual" ? ControlMode::Manual : ControlMode::Auto;
       state_ = State::AwaitReset;
@@ -436,7 +456,14 @@ private:
       if (phase == GamePhase::Unknown) {
         request_resync();
       } else if (state_ != State::AwaitConfig) {
-        if (phase_ != phase) cancel_ready();
+        if (phase_ != phase) {
+          // 直前のpollのキャッシュではなく、この通知時点の同期状態で判定する。
+          allowIntro_ = phase_ == GamePhase::Playing && phase == GamePhase::Finished &&
+                        fifo_synced() && !preview_ && !awaiting_status();
+          summary_ = {};
+          summaryTimerStarted_ = false;
+          cancel_ready();
+        }
         phase_ = phase;
       }
     } else if (std::strcmp(type, "status") == 0) {
@@ -453,11 +480,33 @@ private:
           statusTimerStarted_ = false;
         }
       }
+    } else if (std::strcmp(type, "summary") == 0) {
+      const bool eligible = data["eligible"].as<bool>();
+      const bool validRank = eligible ?
+          data["rank"].is<uint8_t>() && data["rank"].as<unsigned>() >= 1 && data["rank"].as<unsigned>() <= 8 :
+          !data["rank"].isUnbound() && data["rank"].isNull();
+      if (!valid_sync(data["sync"]) || !data["score"].is<int32_t>() || data["score"].as<int32_t>() < 0 ||
+          !data["eligible"].is<bool>() || !validRank) {
+        request_resync();
+      } else if (fifo_synced() && phase_ == GamePhase::Finished && !preview_ &&
+                 std::strcmp(sync_, data["sync"].as<const char*>()) == 0) {
+        const bool first = !summary_.known;
+        summary_ = {data["score"].as<int32_t>(), eligible ? data["rank"].as<uint8_t>() : uint8_t(0),
+                    eligible, true, first ? ++summaryRevision_ : summary_.revision,
+                    first ? allowIntro_ : summary_.animate};
+        summaryTimerStarted_ = false;
+        allowIntro_ = false;
+      }
     } else if (std::strcmp(type, "reset") == 0) {
       if (state_ == State::AwaitConfig) return false;
       if (!valid_sync(data["sync"]) || !apply_reset(data["packets"].as<JsonArrayConst>(), queue)) {
         request_resync();
         return false;
+      }
+      if (std::strcmp(sync_, data["sync"].as<const char*>()) != 0) summary_ = {};
+      if (phase_ == GamePhase::Finished) {
+        allowIntro_ = false;
+        summary_.animate = false;
       }
       std::memcpy(sync_, data["sync"].as<const char*>(), sizeof(sync_));
       cancel_ready();
@@ -507,6 +556,12 @@ private:
   GamePhase phase_ = GamePhase::Unknown;
   ControlMode mode_ = ControlMode::Auto;
   PlayerStatus status_{};
+  bool preview_ = false;
+  FinalSummary summary_{};
+  uint32_t summaryRevision_ = 0;
+  bool allowIntro_ = false;
+  bool summaryTimerStarted_ = false;
+  uint32_t summaryStartedMs_ = 0;
   StatusSync statusSync_ = StatusSync::AwaitReset;
   bool statusTimerStarted_ = false;
   uint32_t statusStartedMs_ = 0;

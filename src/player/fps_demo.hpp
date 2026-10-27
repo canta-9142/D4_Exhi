@@ -33,7 +33,7 @@ DisplaySnapshot snapshot(unsigned scene, unsigned index) {
     s.awaitingStatus = !s.status.known;
   }
   if (scene == 4 && index >= 16) s.selfId = NodeId::P8;
-  if (scene >= 5) {
+  if (scene == 5 || scene == 6) {
     s.phase = GamePhase::Preparing;
     s.status.ready = false;
     s.readyHoldMs = std::min<unsigned>(index * 80, ReadyHold::DURATION_MS);
@@ -48,6 +48,35 @@ DisplaySnapshot snapshot(unsigned scene, unsigned index) {
       if (index >= 20 && index < 24) s.mode = ControlMode::Auto;
       if (index >= 24 && index < 28) { s.synced = false; s.awaitingStatus = true; }
       if (index >= 28) { s.readyHoldMs = 0; s.pressedMask = 0; }
+    }
+  }
+  if (scene >= 7) {
+    s.phase = GamePhase::Finished;
+    s.status = {INT32_MAX, 0, true, true};
+    s.summary = {INT32_MAX, 2, true, true, 1, true};
+    // ウォームアップ2枚の後も、32サンプルすべてで演出の進捗を更新する。
+    s.finishedProgress = std::min<unsigned>(index, SAMPLES + 1) * 1000 / (SAMPLES + 1);
+    if (scene == 8) {
+      s.finishedProgress = 1000;
+      s.summary.score = index % 2 ? INT32_MAX : 0;
+      s.summary.eligible = index / 8 != 1;
+      s.summary.rank = s.summary.eligible ? uint8_t(index % 8 + 1) : 0;
+      s.mode = index & 1 ? ControlMode::Manual : ControlMode::Auto;
+      if (index / 8 == 2) {
+        if (index % 8 == 0) s.synced = false;
+        if (index % 8 == 1) s.awaitingStatus = true;
+        if (index % 8 == 2) s.summary.known = false;
+      }
+      if (index / 8 == 3) {
+        if (index % 8 == 6) s.phase = GamePhase::Preparing;
+        if (index % 8 == 7) s.phase = GamePhase::Playing;
+      }
+    }
+    if (scene == 9) {
+      s.preview = index < 16 || index % 8 < 6;
+      s.previewLit = index % 2 == 0;
+      s.selfId = NodeId(index / 2 % 8 + 1);
+      if (index >= 16 && index % 8 == 6) s.phase = GamePhase::Preparing;
     }
   }
   return s;
@@ -74,8 +103,8 @@ void report_ready() {
 }
 
 void benchmark() {
-  constexpr const char* names[] = {"idle", "cards", "buttons", "numbers", "mixed", "preparing", "phases"};
-  for (unsigned scene = 0; scene < 7; ++scene) {
+  constexpr const char* names[] = {"idle", "cards", "buttons", "numbers", "mixed", "preparing", "phases", "finished", "results", "preview"};
+  for (unsigned scene = 0; scene < 10; ++scene) {
     queue.clear();
     animation = PacketAnimation{};
     for (unsigned i = 0; i < 6; ++i) queue.push({uint16_t(1001 + i), NodeId(unsigned(NodeId::P2) + i)});
@@ -86,6 +115,10 @@ void benchmark() {
     std::array<DisplayFrameStats, SAMPLES> samples;
     for (unsigned i = 0; i < SAMPLES + 2; ++i) {
       const auto s = snapshot(scene, i);
+      const bool normalFinished = scene != 7 ||
+          (display_screen(s) == DisplayScreen::Finished && finished_state(s) == FinishedState::Ready &&
+           s.mode == ControlMode::Manual && s.summary.score == INT32_MAX &&
+           s.summary.eligible && s.summary.rank == 2);
       const auto scheduled = display_damage(display_changes(previousDisplay, s, false), false);
       const auto stats = draw_snapshot(s);
       bool covered = true;
@@ -97,7 +130,7 @@ void benchmark() {
             if (!scheduled.containsPixel(x, row)) covered = false;
         });
       }
-      if (!covered || !verify(s)) {
+      if (!normalFinished || !covered || !verify(s)) {
         Serial.printf("{\"type\":\"playing_error\",\"data\":{\"scene\":\"%s\",\"index\":%u}}\n", names[scene], i);
         return;
       }
@@ -111,7 +144,7 @@ void benchmark() {
                     (unsigned long)t.scanWaitUs, (unsigned long)t.transferUs, (unsigned long)t.frameUs,
                     (unsigned long)t.bytes, (unsigned long)t.spans);
   }
-  Serial.println("{\"type\":\"playing_done\",\"data\":{\"samples\":224,\"reference_match\":true,\"buffer_states_valid\":true}}");
+  Serial.println("{\"type\":\"playing_done\",\"data\":{\"samples\":320,\"reference_match\":true,\"buffer_states_valid\":true}}");
 }
 }
 

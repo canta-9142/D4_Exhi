@@ -26,6 +26,7 @@ PacketDemo packetDemo;
 #else
 ServerLink serverLink;
 char nodeUid[13]{};
+FinishedAnimation finishedAnimation;
 #endif
 
 NodeId selfId = NodeId::None;
@@ -55,8 +56,16 @@ void publish_display_snapshot() {
   const uint16_t readyHoldMs = serverLink.ready_progress_ms();
   const bool readyPending = serverLink.ready_pending();
 #endif
-  const DisplaySnapshot snapshot{packetAnimation.snapshot(), status, selfId,
+  DisplaySnapshot snapshot{packetAnimation.snapshot(), status, selfId,
                                  pswPressedMask, phase, mode, synced, awaitingStatus, readyHoldMs, readyPending};
+#ifndef PLAYER_PACKET_DEMO
+  snapshot.preview = serverLink.preview();
+  snapshot.summary = serverLink.summary();
+  snapshot.finishedProgress = finishedAnimation.update(snapshot.summary,
+      !snapshot.preview && snapshot.phase == GamePhase::Finished &&
+      finished_state(snapshot) == FinishedState::Ready, millis());
+  snapshot.previewLit = millis() / 500 % 2 == 0;
+#endif
   xQueueOverwrite(displayQueue, &snapshot);
 }
 

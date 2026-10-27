@@ -10,6 +10,7 @@
 #include "frame_presenter.hpp"
 #include "packet_renderer.hpp"
 #include "preparing_renderer.hpp"
+#include "finished_renderer.hpp"
 
 struct DrawingTaskContext {
   QueueHandle_t snapshots;
@@ -142,6 +143,8 @@ void draw_static_layout() {
 
 void draw_screen_layout(const DisplaySnapshot& snapshot) {
   if (preparing_screen(snapshot)) draw_preparing_layout(frame);
+  else if (display_screen(snapshot) == DisplayScreen::Finished) draw_result_layout(frame, false);
+  else if (display_screen(snapshot) == DisplayScreen::Preview) draw_result_layout(frame, true);
   else draw_static_layout();
 }
 
@@ -161,6 +164,13 @@ bool initialize_display(bool startup = true) {
 void render_snapshot(const DisplaySnapshot& snapshot, const DisplayChanges& changes) {
   frame.setTextDatum(lgfx::textdatum_t::top_left);
   frame.setTextPadding(0);
+  if (display_screen(snapshot) == DisplayScreen::Finished || display_screen(snapshot) == DisplayScreen::Preview) {
+    if (changes.self) draw_button(360, 0, snapshot.selfId, false);
+    if (display_screen(snapshot) == DisplayScreen::Preview) {
+      if (changes.previewBody) render_preview(frame, snapshot);
+    } else render_finished(frame, snapshot, changes);
+    return;
+  }
   if (preparing_screen(snapshot)) {
     if (changes.self) draw_button(360, 0, snapshot.selfId, false);
     render_preparing(frame, snapshot, changes);

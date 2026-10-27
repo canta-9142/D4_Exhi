@@ -22,12 +22,34 @@ struct DisplaySnapshot {
   bool awaitingStatus;
   uint16_t readyHoldMs = 0;
   bool readyPending = false;
+  bool preview = false;
+  FinalSummary summary{};
+  uint16_t finishedProgress = 1000;
+  bool previewLit = true;
 };
 
 static_assert(std::is_trivially_copyable<DisplaySnapshot>::value, "FreeRTOS queues copy snapshots as bytes");
 using PacketDirtyRows = std::bitset<ANIMATION_HEIGHT>;
 
-inline bool preparing_screen(const DisplaySnapshot& s) { return s.phase == GamePhase::Preparing; }
+enum class DisplayScreen : uint8_t { Playing, Preparing, Finished, Preview };
+inline DisplayScreen display_screen(const DisplaySnapshot& s) {
+  if (s.preview && s.synced && s.selfId != NodeId::None && s.phase != GamePhase::Unknown) return DisplayScreen::Preview;
+  if (s.phase == GamePhase::Preparing) return DisplayScreen::Preparing;
+  if (s.phase == GamePhase::Finished) return DisplayScreen::Finished;
+  return DisplayScreen::Playing;
+}
+inline bool preparing_screen(const DisplaySnapshot& s) { return display_screen(s) == DisplayScreen::Preparing; }
+
+enum class FinishedState : uint8_t { Syncing, Status, Result, Ready };
+inline FinishedState finished_state(const DisplaySnapshot& s) {
+  if (!s.synced || s.selfId == NodeId::None) return FinishedState::Syncing;
+  if (s.awaitingStatus || !s.status.known) return FinishedState::Status;
+  return s.summary.known ? FinishedState::Ready : FinishedState::Result;
+}
+inline int32_t displayed_final_score(const DisplaySnapshot& s) {
+  const uint64_t left = 1000 - std::min<unsigned>(s.finishedProgress, 1000);
+  return static_cast<int32_t>(uint64_t(s.summary.score) * (1000000000 - left * left * left) / 1000000000);
+}
 
 enum class PreparingState : uint8_t { Waiting, Auto, Manual, Confirming, Ready };
 
@@ -65,18 +87,39 @@ struct DisplayChanges {
   uint8_t buttons = 0;
   bool self = false, label = false, score = false, remaining = false, ready = false;
   bool full = false, preparingHeader = false, preparingBody = false, preparingBar = false, preparingArrows = false;
+  bool resultHeader = false, resultBody = false, resultScore = false, resultRank = false, resultAccent = false;
+  bool previewBody = false;
   bool any() const {
-    return full || preparingHeader || preparingBody || preparingBar || preparingArrows || cards.any() || buttons || self || label || score || remaining || ready;
+    return resultHeader || resultBody || resultScore || resultRank || resultAccent || previewBody || full || preparingHeader || preparingBody || preparingBar || preparingArrows || cards.any() || buttons || self || label || score || remaining || ready;
   }
 };
 
 inline DisplayChanges display_changes(const DisplaySnapshot& previous, const DisplaySnapshot& next, bool first) {
   DisplayChanges changes;
-  first = first || preparing_screen(previous) != preparing_screen(next);
+  first = first || display_screen(previous) != display_screen(next);
   changes.full = first;
   changes.self = first || previous.selfId != next.selfId;
   changes.label = changes.self || previous.phase != next.phase || previous.mode != next.mode ||
                   previous.synced != next.synced || previous.awaitingStatus != next.awaitingStatus;
+  if (display_screen(next) == DisplayScreen::Preview) {
+    changes.label = false;
+    changes.previewBody = first || changes.self || previous.previewLit != next.previewLit;
+    return changes;
+  }
+  if (display_screen(next) == DisplayScreen::Finished) {
+    changes.resultHeader = changes.label || previous.status.known != next.status.known;
+    changes.label = false;
+    changes.resultBody = first || finished_state(previous) != finished_state(next);
+    if (finished_state(next) == FinishedState::Ready) {
+      changes.resultScore = changes.resultBody || displayed_final_score(previous) != displayed_final_score(next);
+      changes.resultRank = changes.resultBody || previous.summary.rank != next.summary.rank ||
+          previous.summary.eligible != next.summary.eligible ||
+          (previous.finishedProgress != next.finishedProgress &&
+           (previous.finishedProgress >= 500 || next.finishedProgress >= 500));
+      changes.resultAccent = changes.resultBody || previous.finishedProgress != next.finishedProgress || changes.self;
+    }
+    return changes;
+  }
   if (preparing_screen(next)) {
     const auto state = preparing_state(next);
     changes.preparingHeader = changes.label || previous.status.known != next.status.known;
@@ -108,6 +151,11 @@ inline DisplayChanges display_changes(const DisplaySnapshot& previous, const Dis
 inline FrameDamage display_damage(const DisplayChanges& changes, bool first) {
   FrameDamage damage;
   if (first || changes.full) { damage.full(); return damage; }
+  if (changes.resultBody || changes.previewBody) damage.markRect(0, 81, 480, 239);
+  if (changes.resultHeader) damage.markRect(24, 48, 320, 24);
+  if (changes.resultScore) damage.markRect(24, 128, 432, 56);
+  if (changes.resultRank) damage.markRect(24, 216, 432, 104);
+  if (changes.resultAccent) damage.markRect(40, 192, 400, 4);
   if (changes.preparingBody) damage.markRect(0, 81, 480, 239);
   if (changes.preparingHeader) damage.markRect(24, 48, 320, 24);
   if (changes.preparingBar) damage.markRect(40, 152, 400, 32);
