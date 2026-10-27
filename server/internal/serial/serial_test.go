@@ -32,7 +32,8 @@ func TestParseMessages(t *testing.T) {
 		want app.IncomingMessage
 	}{
 		{playerHello, playerIdentity},
-		{"HELLO led-01", app.IncomingMessage{Type: "hello", UID: "led-01", Kind: app.LEDDevice}},
+		{"HELLO AABBCCDDEEFF", app.IncomingMessage{Type: "hello", UID: "AABBCCDDEEFF", Kind: app.LEDDevice}},
+		{" \tHELLO\t  AABBCCDDEEFF\t ", app.IncomingMessage{Type: "hello", UID: "AABBCCDDEEFF", Kind: app.LEDDevice}},
 		{resyncLine, app.IncomingMessage{Type: "resync"}},
 		{readyLine, app.IncomingMessage{Type: "ready", Sync: generation}},
 		{sendLine, app.IncomingMessage{Type: "send", Sync: generation, To: 1}},
@@ -51,6 +52,9 @@ func TestParseMessages(t *testing.T) {
 
 func TestInvalidMessages(t *testing.T) {
 	invalid := []string{
+		"HELLO led-01", "HELLO aabbccddeeff", "HELLO AABBCCDDEEF", "HELLO AABBCCDDEEFF extra",
+		"HELLO\vAABBCCDDEEFF", "HELLO AABBCCDDEEFF\r", "HELLO AABBCCDDEEFF\x7f",
+		strings.Repeat(" ", MaxLEDLineBytes) + "HELLO AABBCCDDEEFF",
 		`null`, `[]`, `1`, `"hello"`, `{`, playerHello + resyncLine,
 		`{}`, `{"Type":"hello","data":{"uid":"001122AABBCC"}}`,
 		`{"type":null,"data":{}}`, `{"type":1,"data":{}}`,
@@ -151,9 +155,9 @@ func TestReceiverErrorsAreTerminal(t *testing.T) {
 	for _, tt := range []struct{ hello, invalid string }{
 		{playerHello, "not JSON"},
 		{playerHello, `{"type":"ready","data":{}}`},
-		{playerHello, "HELLO led-01"},
-		{"HELLO led-01", playerHello},
-		{"HELLO led-01", sendLine},
+		{playerHello, "HELLO AABBCCDDEEFF"},
+		{"HELLO AABBCCDDEEFF", playerHello},
+		{"HELLO AABBCCDDEEFF", sendLine},
 	} {
 		t.Run(tt.hello+tt.invalid, func(t *testing.T) {
 			var receiver Receiver
@@ -221,7 +225,7 @@ func TestReceiverLineLimit(t *testing.T) {
 	// A CR inside the payload counts; only the CR immediately before LF is free.
 	var receiver Receiver
 	calls := 0
-	input := strings.Repeat("x", MaxLineBytes) + "\r\r\n" + "HELLO led-01\n"
+	input := strings.Repeat("x", MaxLineBytes) + "\r\r\n" + "HELLO AABBCCDDEEFF\n"
 	if err := receiver.Feed([]byte(input), time.Time{}, func(app.IncomingMessage) error { calls++; return nil }); err != nil || calls != 1 {
 		t.Fatalf("oversized CR payload was not discarded: %v, calls = %d", err, calls)
 	}
@@ -321,7 +325,7 @@ func TestReceiverReidentification(t *testing.T) {
 }
 
 func TestReceiverIdentifyRetriesPreserveHello(t *testing.T) {
-	for _, line := range []string{playerHello, "HELLO led-01"} {
+	for _, line := range []string{playerHello, "HELLO AABBCCDDEEFF"} {
 		t.Run(line, func(t *testing.T) {
 			var receiver Receiver
 			var got []app.IncomingMessage
@@ -532,6 +536,36 @@ func TestReceiverLogsDiscardReasons(t *testing.T) {
 			calls := 0
 			if err := receiver.Feed([]byte(playerHello+"\n"), now.Add(2*LineTimeout), func(app.IncomingMessage) error { calls++; return nil }); err != nil || calls != 1 {
 				t.Fatalf("did not recover after logging: %v, calls = %d", err, calls)
+			}
+		})
+	}
+}
+
+func TestLEDLineLimitAndReidentification(t *testing.T) {
+	const hello = "HELLO AABBCCDDEEFF"
+	for _, reidentify := range []bool{false, true} {
+		t.Run(fmt.Sprint(reidentify), func(t *testing.T) {
+			receiver := Receiver{Logger: slog.New(slog.DiscardHandler)}
+			receiver.WaitHello(1)
+			calls := 0
+			handle := func(app.IncomingMessage) error { calls++; return nil }
+			boundary := strings.Repeat(" ", MaxLEDLineBytes-len(hello)) + hello
+			if err := receiver.Feed([]byte(boundary+"\r\n \t\n"), time.Now(), handle); err != nil || calls != 1 {
+				t.Fatalf("valid LED boundary/blank line: calls=%d, %v", calls, err)
+			}
+			if reidentify {
+				receiver.WaitHello(2)
+			}
+			err := receiver.Feed([]byte(strings.Repeat("x", MaxLEDLineBytes+1)), time.Now(), handle)
+			if reidentify {
+				if err != nil || len(receiver.line) != 0 || !receiver.dropping {
+					t.Fatalf("LED limit was lost while awaiting HELLO: %v", err)
+				}
+				if err := receiver.Feed([]byte("\n"+hello+"\n"), time.Now(), handle); err != nil || calls != 2 {
+					t.Fatalf("LED did not recover after oversized input: calls=%d, %v", calls, err)
+				}
+			} else if !errors.Is(err, ErrLineTooLong) {
+				t.Fatalf("identified LED exceeded 96-byte limit: %v", err)
 			}
 		})
 	}

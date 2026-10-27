@@ -10,19 +10,19 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
-	"unicode"
 	"unicode/utf8"
 
 	"github.com/canta-9142/d4-exhi/internal/app"
 )
 
 const (
-	MaxLineBytes = 32768
-	LineTimeout  = time.Second
+	MaxLineBytes    = 32768
+	MaxLEDLineBytes = 96
+	LineTimeout     = time.Second
 )
 
 var (
-	ErrLineTooLong = errors.New("serial line exceeds 32768 bytes")
+	ErrLineTooLong = errors.New("serial line exceeds byte limit")
 	ErrLineTimeout = errors.New("serial line reception stalled for one second")
 )
 
@@ -42,6 +42,7 @@ type Receiver struct {
 	lastByte       time.Time
 	dropping       bool
 	kind           app.DeviceKind
+	maxLineBytes   int // The identified protocol's limit survives WaitHello.
 	err            error
 }
 
@@ -101,7 +102,15 @@ func (r *Receiver) feed(data []byte, now time.Time, identification uint64, handl
 			if len(line) == 0 {
 				continue
 			}
+			if r.maxLineBytes == MaxLEDLineBytes && len(bytes.Trim(line, " \t")) == 0 {
+				continue
+			}
 			message, err := parseLine(line)
+			if r.maxLineBytes == MaxLEDLineBytes {
+				if ledErr := validateLEDLine(line); ledErr != nil {
+					err = ledErr
+				}
+			}
 			if err == nil && r.kind != "" && message.Kind != "" && message.Kind != r.kind {
 				err = errors.New("message uses a different device protocol")
 			}
@@ -122,6 +131,9 @@ func (r *Receiver) feed(data []byte, now time.Time, identification uint64, handl
 			}
 			if message.Type == "hello" {
 				r.kind = message.Kind
+				if message.Kind == app.LEDDevice {
+					r.maxLineBytes = MaxLEDLineBytes
+				}
 			}
 			message.Identification = r.identification
 			if err := handle(message); err != nil {
@@ -134,7 +146,11 @@ func (r *Receiver) feed(data []byte, now time.Time, identification uint64, handl
 			continue
 		}
 		// Reserve one extra byte for CRLF, which does not count toward the limit.
-		if len(r.line) == MaxLineBytes+1 || (len(r.line) == MaxLineBytes && b != '\r') {
+		limit := r.maxLineBytes
+		if limit == 0 {
+			limit = MaxLineBytes
+		}
+		if len(r.line) == limit+1 || (len(r.line) == limit && b != '\r') {
 			if err := r.dropLine(ErrLineTooLong); err != nil {
 				return err
 			}
@@ -183,11 +199,15 @@ func parseLine(line []byte) (app.IncomingMessage, error) {
 	if !utf8.Valid(line) {
 		return message, errors.New("serial line is not UTF-8")
 	}
-	if uid, ok := strings.CutPrefix(string(line), "HELLO "); ok {
-		if uid == "" || strings.ContainsRune(uid, 0) || strings.ContainsFunc(uid, unicode.IsSpace) {
+	if bytes.HasPrefix(bytes.TrimLeft(line, " \t"), []byte("HELLO")) {
+		if err := validateLEDLine(line); err != nil {
+			return message, err
+		}
+		fields := strings.Fields(string(line))
+		if len(fields) != 2 || fields[0] != "HELLO" || !upperHex(fields[1], 12) {
 			return message, errors.New("invalid LED UID")
 		}
-		return app.IncomingMessage{Type: "hello", UID: uid, Kind: app.LEDDevice}, nil
+		return app.IncomingMessage{Type: "hello", UID: fields[1], Kind: app.LEDDevice}, nil
 	}
 	var envelope, data map[string]json.RawMessage
 	if err := json.Unmarshal(line, &envelope); err != nil {
@@ -234,6 +254,18 @@ func parseLine(line []byte) (app.IncomingMessage, error) {
 		return message, errors.New("unknown or server-only message type")
 	}
 	return message, nil
+}
+
+func validateLEDLine(line []byte) error {
+	if len(line) > MaxLEDLineBytes {
+		return ErrLineTooLong
+	}
+	for _, b := range line {
+		if b != '\t' && (b < ' ' || b > '~') {
+			return errors.New("invalid character in LED line")
+		}
+	}
+	return nil
 }
 
 func requiredField(object map[string]json.RawMessage, name string, target any) error {

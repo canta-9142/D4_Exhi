@@ -2,7 +2,6 @@ package main
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -41,9 +40,11 @@ func TestRunWithPlayerAndLEDPorts(t *testing.T) {
 	led, ledPath := serverTestPTY(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	var output bytes.Buffer
+	var output syncBuffer
 	done := make(chan error, 1)
-	go func() { done <- run(ctx, []string{"-serial-port", playerPath, "-serial-port", ledPath}, &output) }()
+	go func() {
+		done <- run(ctx, []string{"-http-addr", testAddr, "-serial-port", playerPath, "-serial-port", ledPath}, &output)
+	}()
 	finished := false
 	t.Cleanup(func() {
 		cancel()
@@ -80,10 +81,10 @@ func TestRunWithPlayerAndLEDPorts(t *testing.T) {
 			t.Fatalf("player synchronization = %+v, %v; want %s", message, err, kind)
 		}
 	}
-	if _, err := io.WriteString(led, "HELLO led-main-test\n"); err != nil {
+	if _, err := io.WriteString(led, "HELLO AABBCCDDEEFF\n"); err != nil {
 		t.Fatal(err)
 	}
-	if line := readLine(ledReader); line != "CONFIG P1" {
+	if line := readLine(ledReader); line != "CONFIG P1 false" {
 		t.Fatalf("LED configuration = %s", line)
 	}
 	cancel()

@@ -5,7 +5,6 @@ import (
 	"math"
 	"math/rand/v2"
 	"slices"
-	"strings"
 	"time"
 )
 
@@ -105,6 +104,7 @@ type node struct {
 	score          int
 	eligible       bool
 	ready          bool
+	rank           int
 	nextGeneration time.Duration
 	nextTransfer   time.Duration
 }
@@ -137,25 +137,36 @@ func newGame(notify func(change)) game {
 	return g
 }
 
-func (g *game) startBlockReasons() []string {
-	reasons := make([]string, 0)
+func (g *game) startBlockers() []StartBlocker {
+	reasons := make([]StartBlocker, 0)
 	if g.phase != Preparing {
-		reasons = append(reasons, "Start requires Preparing phase")
+		reasons = append(reasons, StartBlocker{Code: CodeNotPreparing})
 	}
 	if 65536-g.nextPID < maxGamePackets {
-		reasons = append(reasons, "not enough packet IDs for another game; restart the server")
+		reasons = append(reasons, StartBlocker{Code: CodePIDExhausted})
 	}
+	var nodes []NodeID
 	for id := NodeID(1); id <= PlayerCount; id++ {
 		if n := &g.nodes[id]; n.manual && !n.ready {
-			reasons = append(reasons, fmt.Sprintf("%s is not ready", id.wireName()))
+			nodes = append(nodes, id)
 		}
+	}
+	if len(nodes) > 0 {
+		reasons = append(reasons, StartBlocker{Code: CodePlayersNotReady, Nodes: nodes})
 	}
 	return reasons
 }
 
+func (g *game) startError() error {
+	if blockers := g.startBlockers(); len(blockers) > 0 {
+		return blockers[0].reject()
+	}
+	return nil
+}
+
 func (g *game) start(now time.Time) error {
-	if reasons := g.startBlockReasons(); len(reasons) > 0 {
-		return fmt.Errorf("%s", strings.Join(reasons, "; "))
+	if err := g.startError(); err != nil {
+		return err
 	}
 	g.phase, g.started, g.elapsed = Playing, now, 0
 	for id := NodeID(1); id <= NodeCount; id++ {
@@ -171,7 +182,19 @@ func (g *game) start(now time.Time) error {
 
 func (g *game) finish() error {
 	if g.phase != Playing {
-		return fmt.Errorf("Finish requires Playing phase")
+		return reject(CodePhaseConflict, "Finish requires Playing phase")
+	}
+	for id := NodeID(1); id <= PlayerCount; id++ {
+		n := &g.nodes[id]
+		if !n.eligible {
+			continue
+		}
+		n.rank = 1
+		for other := NodeID(1); other <= PlayerCount; other++ {
+			if g.nodes[other].eligible && g.nodes[other].score > n.score {
+				n.rank++
+			}
+		}
 	}
 	g.phase = Finished
 	g.notify(change{kind: "phase"})
@@ -186,6 +209,7 @@ func (g *game) reset() {
 		n.score, n.nextGeneration, n.nextTransfer = 0, 0, 0
 		n.eligible = n.manual
 		n.ready = false
+		n.rank = 0
 	}
 	g.notify(change{kind: "reset"})
 }
