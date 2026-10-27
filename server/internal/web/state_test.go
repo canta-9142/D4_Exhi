@@ -349,8 +349,8 @@ type ctxKey struct{}
 func TestStateCallsAppOnce(t *testing.T) {
 	a := &stateApp{snapshot: baseSnapshot()}
 	h := New(a, nil)
-	r := httptest.NewRequest(http.MethodGet, "/api/state", nil)
-	r = r.WithContext(context.WithValue(r.Context(), ctxKey{}, "request"))
+	ctx := context.WithValue(context.Background(), ctxKey{}, "request")
+	r := httptest.NewRequestWithContext(ctx, http.MethodGet, "/api/state", nil)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, r)
 	if w.Code != http.StatusOK {
