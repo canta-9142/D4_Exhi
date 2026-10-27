@@ -23,7 +23,7 @@ var validCommands = []struct {
 	{"finish", `{"type":"finish","data":{}}`, app.Command{Operation: app.Finish}},
 	{"reset", `{"type":"reset","data":{}}`, app.Command{Operation: app.Reset}},
 	{"whitespace and key order", " \r\n\t{ \"data\" : { } , \"type\" : \"start\" }\n", app.Command{Operation: app.Start}},
-	{"escaped key and value", `{"type":"start","data":{}}`, app.Command{Operation: app.Start}},
+	{"escaped key and value", `{"\u0074ype":"\u0073tart","data":{}}`, app.Command{Operation: app.Start}},
 	{"manual", `{"type":"set_node_mode","data":{"nodeId":"P1","mode":"manual"}}`,
 		app.Command{Operation: app.SetNodeEnabled, Node: 1, Enabled: true}},
 	{"auto", `{"type":"set_node_mode","data":{"mode":"auto","nodeId":"P8"}}`,
