@@ -1,11 +1,16 @@
 package web
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
+	"path"
+	"regexp"
+	"slices"
 	"strings"
 	"testing"
 
@@ -123,6 +128,83 @@ func TestIndex(t *testing.T) {
 	}
 	if w := serve(t, h, http.MethodHead, "/"); w.Code != http.StatusOK {
 		t.Errorf("HEAD /: status = %d", w.Code)
+	}
+}
+
+var (
+	// htmlRef matches the src and href attributes of the admin page.
+	htmlRef = regexp.MustCompile(`(?:src|href)="([^"]*)"`)
+	// moduleRef matches static imports such as `from "./api.js"`.
+	moduleRef = regexp.MustCompile(`(?:import|from)\s*"([^"]*)"`)
+)
+
+// TestStaticFiles serves every embedded file and checks that the page and its
+// modules refer only to embedded files, so that a renamed file cannot break
+// the admin page silently.
+func TestStaticFiles(t *testing.T) {
+	h := New(fakeApp{}, nil)
+	static, err := fs.Sub(embedded, "static")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Browsers refuse module scripts and stylesheets of other types.
+	types := map[string][]string{
+		".html": {"text/html"},
+		".css":  {"text/css"},
+		".js":   {"text/javascript", "application/javascript"},
+	}
+	refs := map[string]string{} // embedded name -> file referring to it
+	err = fs.WalkDir(static, ".", func(name string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		want, err := fs.ReadFile(static, name)
+		if err != nil {
+			return err
+		}
+		w := serve(t, h, http.MethodGet, "/static/"+name)
+		if w.Code != http.StatusOK {
+			t.Errorf("%s: status = %d", name, w.Code)
+		} else if !bytes.Equal(w.Body.Bytes(), want) {
+			t.Errorf("%s: body differs from the embedded file", name)
+		}
+		ext := path.Ext(name)
+		got := w.Header().Get("Content-Type")
+		if !slices.ContainsFunc(types[ext], func(prefix string) bool { return strings.HasPrefix(got, prefix) }) {
+			t.Errorf("%s: Content-Type = %q, want one of %q", name, got, types[ext])
+		}
+		if got := w.Header().Get("Cache-Control"); got != "no-cache" {
+			t.Errorf("%s: Cache-Control = %q", name, got)
+		}
+		switch ext {
+		case ".html":
+			for _, m := range htmlRef.FindAllStringSubmatch(string(want), -1) {
+				ref, ok := strings.CutPrefix(m[1], "/static/")
+				if !ok {
+					t.Errorf("%s: %q is not an embedded file", name, m[1])
+				}
+				refs[ref] = name
+			}
+		case ".js":
+			for _, m := range moduleRef.FindAllStringSubmatch(string(want), -1) {
+				if !strings.HasPrefix(m[1], "./") && !strings.HasPrefix(m[1], "../") {
+					t.Errorf("%s: import %q is not relative", name, m[1])
+				}
+				refs[path.Join(path.Dir(name), m[1])] = name
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(refs) == 0 {
+		t.Error("no references found in the admin page")
+	}
+	for ref, from := range refs {
+		if info, err := fs.Stat(static, ref); err != nil || info.IsDir() {
+			t.Errorf("%s refers to %s, which is not an embedded file", from, ref)
+		}
 	}
 }
 
