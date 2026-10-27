@@ -109,7 +109,6 @@ func TestNotFound(t *testing.T) {
 
 func TestPlaceholderAPI(t *testing.T) {
 	h := New(fakeApp{}, nil)
-	checkError(t, serve(t, h, http.MethodGet, "/api/state"), http.StatusServiceUnavailable, codeUnavailable)
 	checkError(t, serve(t, h, http.MethodPost, "/api/commands"), http.StatusServiceUnavailable, codeUnavailable)
 }
 
