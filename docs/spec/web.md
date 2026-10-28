@@ -134,7 +134,7 @@ JSONはUTF-8とし、APIが生成する応答のContent-Typeは`application/json
 | code | 意味・追加項目 |
 |---|---|
 | not_preparing | Preparingではない |
-| pid_exhausted | 次ゲームの最大生成数1000件分の未発行PIDがない |
+| pid_exhausted | 次ゲームの最大生成数1000件分の未発行PIDがない。Resetで採番を0に戻すため、通常は発生しない |
 | players_not_ready | manualの未準備プレイヤーがある。nodeIdsに対象IDを番号順で列挙 |
 
 各要素は`code`を必須とし、`nodeIds`は`players_not_ready`の場合だけ含める。該当する理由はすべて返し、理由が空であることと`canStart=true`を一致させる。manualが0台なら準備完了条件を満たす。
@@ -211,7 +211,7 @@ APIが生成するエラー応答は次の共通形式とする。状態取得�
 | 404 | not_found | 未知のDevice IDまたはエンドポイント |
 | 405 | method_not_allowed | 既知のエンドポイントに対する未対応メソッド。Allowヘッダーで対応メソッドを返す |
 | 409 | phase_conflict | 現在のフェーズでは受理できない操作 |
-| 409 | pid_exhausted | Startに必要な未発行PIDが不足 |
+| 409 | pid_exhausted | Startに必要な未発行PIDが不足。Resetで採番を0に戻すため、通常は発生しない |
 | 409 | players_not_ready | manualの未準備プレイヤーがある。details.nodeIdsに対象IDを番号順で列挙 |
 | 409 | assignment_conflict | 通常割当の対象が他UIDに使用されているなど、対応が競合 |
 | 409 | device_disconnected | 操作に必要な機器が接続・識別済みでない |
