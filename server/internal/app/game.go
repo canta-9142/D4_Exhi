@@ -211,6 +211,8 @@ func (g *game) reset() {
 		n.ready = false
 		n.rank = 0
 	}
+	// Stale requests are rejected by sync generation and session, not by PID.
+	g.nextPID = 0
 	g.notify(change{kind: "reset"})
 }
 

@@ -383,9 +383,10 @@ func TestSendGenerationsDuplicatesAndReset(t *testing.T) {
 	send.RID++
 	send.Sync = resetSync
 	h.clear()
-	h.message("s1", send) // Old game's PID with the current generation.
-	if h.messages()[0].message.Data.(ResultData).OK || h.state().Nodes[0].FIFOUsage != 1 {
-		t.Fatal("old PID applied in new game")
+	// PIDs restart at 0 with each game, so the current generation is what makes this request valid.
+	h.message("s1", send)
+	if !h.messages()[0].message.Data.(ResultData).OK || h.state().Nodes[0].FIFOUsage != 0 {
+		t.Fatal("SEND with the current generation and head PID was not applied")
 	}
 }
 
@@ -441,6 +442,82 @@ func TestDisconnectDuplicateUIDAndReassignment(t *testing.T) {
 	if got := messageTypes(h.messages()); !reflect.DeepEqual(got, []string{"identify"}) {
 		t.Fatal(got)
 	}
+}
+
+func TestStaleGenerationSendIgnoredWhenPIDMatchesNewGame(t *testing.T) {
+	h := newHarness(t)
+	h.connect("s1", testUID, 1)
+	h.execute(Command{Operation: SetNodeEnabled, Node: 1, Enabled: true})
+	oldSync := h.reset("s1").Sync
+	h.start()
+	h.tick(time.Second)
+	if s := h.state(); s.Nodes[0].FIFOUsage != 1 {
+		t.Fatalf("first game did not queue a packet: %+v", s.Nodes[0])
+	}
+	h.execute(Command{Operation: Reset})
+	newSync := h.reset("s1").Sync
+	if newSync == oldSync {
+		t.Fatal("Reset reused the sync generation")
+	}
+	h.start()
+	h.tick(2 * time.Second)
+	if s := h.state(); s.Nodes[0].FIFOUsage != 1 {
+		t.Fatalf("second game did not queue a packet: %+v", s.Nodes[0])
+	}
+	// Both games' first packets have PID 0, so only the generation can tell them apart.
+	h.clear()
+	h.message("s1", IncomingMessage{Type: "send", Sync: oldSync, RID: 0, PID: 0, To: 2})
+	got := h.messages()
+	if types := messageTypes(got); !reflect.DeepEqual(types, []string{"result"}) {
+		t.Fatalf("stale SEND produced %v, want only result", types)
+	}
+	if result := got[0].message.Data.(ResultData); result.OK || result.Sync != oldSync || result.RID != 0 {
+		t.Fatalf("bad rejection: %+v", result)
+	}
+	if s := h.state(); s.Nodes[0].Score != 0 || s.Nodes[0].FIFOUsage != 1 {
+		t.Fatalf("stale SEND changed the game: %+v", s.Nodes[0])
+	}
+	// The same request with the current generation is applied.
+	h.clear()
+	h.message("s1", IncomingMessage{Type: "send", Sync: newSync, RID: 1, PID: 0, To: 2})
+	if types := messageTypes(h.messages()); len(types) == 0 || types[0] != "result" || !h.messages()[0].message.Data.(ResultData).OK {
+		t.Fatalf("current SEND was not applied: %v", types)
+	}
+	if s := h.state(); s.Nodes[0].FIFOUsage != 0 || s.Nodes[0].Score == 0 {
+		t.Fatalf("current SEND did not deliver: %+v", s.Nodes[0])
+	}
+}
+
+func TestResetRecoversFromPIDExhaustionInApp(t *testing.T) {
+	h := newHarness(t)
+	h.connect("s1", testUID, 1)
+	h.execute(Command{Operation: SetNodeEnabled, Node: 1, Enabled: true})
+	h.start()
+	h.tick(time.Second)
+	h.must(h.a.submit(h.ctx, false, func(time.Time) error { h.a.game.nextPID = 65536 - 999; return nil }))
+	h.execute(Command{Operation: Finish})
+	if s := h.state(); s.CanStart || !hasBlocker(s.StartBlockers, CodePIDExhausted) {
+		t.Fatalf("exhausted PIDs not reported: %+v", s.StartBlockers)
+	}
+	h.execute(Command{Operation: Reset})
+	// Node 1 is manual, so only its readiness may still block Start.
+	if s := h.state(); hasBlocker(s.StartBlockers, CodePIDExhausted) || !hasBlocker(s.StartBlockers, CodePlayersNotReady) {
+		t.Fatalf("Reset did not recover from pid_exhausted: %+v", s.StartBlockers)
+	}
+	h.start()
+	h.tick(2 * time.Second)
+	if s := h.state(); s.Phase != Playing || s.Nodes[0].FIFOUsage != 1 {
+		t.Fatalf("game did not run after Reset: %+v", s)
+	}
+}
+
+func hasBlocker(blockers []StartBlocker, code Code) bool {
+	for _, b := range blockers {
+		if b.Code == code {
+			return true
+		}
+	}
+	return false
 }
 
 func TestSendFailureKeepsCommittedGameState(t *testing.T) {
