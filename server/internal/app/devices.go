@@ -2,7 +2,9 @@ package app
 
 import (
 	"errors"
+	"fmt"
 	"slices"
+	"strings"
 )
 
 var ledNodes = []NodeID{1, 3, 5, 7, 9, 10, 11}
@@ -41,7 +43,7 @@ func (a *App) hello(id SessionID, message IncomingMessage) error {
 	}
 	if d.node != 0 {
 		a.syncDevice(id, true)
-	} else if !a.autoAssign(s.uid) && wasPreview {
+	} else if !a.autoAssign(s.uid) && wasPreview && a.fatalErr == nil {
 		a.restoreUnassigned(s.uid)
 	}
 	return nil
@@ -81,7 +83,7 @@ func (a *App) assigned(kind DeviceKind, node NodeID, except string) bool {
 
 func (a *App) autoAssign(uid string) bool {
 	d := a.devices[uid]
-	if a.game.phase == Playing || d.node != 0 || d.noAuto || d.session == "" {
+	if a.fatalErr != nil || a.game.phase == Playing || d.node != 0 || d.noAuto || d.session == "" {
 		return false
 	}
 	if s := a.sessions[d.session]; s == nil || s.failed || s.waitingHello {
@@ -93,17 +95,17 @@ func (a *App) autoAssign(uid string) bool {
 	}
 	for _, node := range nodes {
 		if !a.assigned(d.kind, node, uid) {
-			a.applyAssignments(map[string]NodeID{uid: node}, false)
-			return true
+			return a.applyAssignments(map[string]NodeID{uid: node}, false) == nil
 		}
 	}
 	return false
 }
 
 func (a *App) autoAssignPending() {
-	if a.game.phase == Playing {
+	if a.fatalErr != nil || a.game.phase == Playing || !a.assignPending {
 		return
 	}
+	a.assignPending = false
 	uids := make([]string, 0, len(a.devices))
 	for uid := range a.devices {
 		uids = append(uids, uid)
@@ -111,6 +113,9 @@ func (a *App) autoAssignPending() {
 	slices.Sort(uids)
 	for _, uid := range uids {
 		a.autoAssign(uid)
+		if a.fatalErr != nil {
+			return
+		}
 	}
 }
 
@@ -136,7 +141,7 @@ func (a *App) changeAssignments(c Command) error {
 		if c.Node != 0 && a.assigned(d.kind, c.Node, c.DeviceID) {
 			return reject(CodeAssignmentConflict, "node is already assigned")
 		}
-		a.applyAssignments(map[string]NodeID{c.DeviceID: c.Node}, true)
+		return a.applyAssignments(map[string]NodeID{c.DeviceID: c.Node}, true)
 	case SwapDeviceAssignments, ReplaceDeviceAssignment:
 		other := a.devices[c.OtherDeviceID]
 		if c.DeviceID == c.OtherDeviceID {
@@ -155,20 +160,32 @@ func (a *App) changeAssignments(c Command) error {
 			if other.node == 0 {
 				return reject(CodeDeviceNotAssigned, "swap requires two assigned devices")
 			}
-			a.applyAssignments(map[string]NodeID{c.DeviceID: other.node, c.OtherDeviceID: d.node}, true)
+			return a.applyAssignments(map[string]NodeID{c.DeviceID: other.node, c.OtherDeviceID: d.node}, true)
 		} else {
 			s := a.sessions[other.session]
 			if s == nil || s.failed || s.waitingHello {
 				return reject(CodeDeviceDisconnected, "replacement device is not connected and identified")
 			}
-			a.applyAssignments(map[string]NodeID{c.DeviceID: 0, c.OtherDeviceID: d.node}, true)
+			return a.applyAssignments(map[string]NodeID{c.DeviceID: 0, c.OtherDeviceID: d.node}, true)
 		}
 	}
 	return nil
 }
 
-// Validate first, then commit the complete mapping before notifying any MCU.
-func (a *App) applyAssignments(updates map[string]NodeID, explicit bool) {
+// Save the complete candidate before changing any state or notifying an MCU.
+func (a *App) applyAssignments(updates map[string]NodeID, explicit bool) error {
+	before := a.assignmentCandidate(nil, false)
+	after := a.assignmentCandidate(updates, explicit)
+	if a.options.SaveDevices != nil && !slices.Equal(before, after) {
+		if err := a.options.SaveDevices(after); err != nil {
+			err = fmt.Errorf("save device assignments: %w", err)
+			a.options.Logger.Error("device assignments not committed", "error", err)
+			if errors.Is(err, ErrSaveUncertain) {
+				a.fatalErr = err
+			}
+			return err
+		}
+	}
 	changed := make([]string, 0, len(updates))
 	for uid, node := range updates {
 		d := a.devices[uid]
@@ -177,6 +194,11 @@ func (a *App) applyAssignments(updates map[string]NodeID, explicit bool) {
 		}
 		if d.node != node {
 			changed = append(changed, uid)
+			if d.node != 0 && !slices.ContainsFunc(after, func(next SavedDevice) bool {
+				return next.Kind == d.kind && next.Node == d.node
+			}) {
+				a.assignPending = true
+			}
 		}
 	}
 	slices.Sort(changed)
@@ -208,4 +230,21 @@ func (a *App) applyAssignments(updates map[string]NodeID, explicit bool) {
 			a.syncDevice(d.session, true)
 		}
 	}
+	return nil
+}
+
+func (a *App) assignmentCandidate(updates map[string]NodeID, explicit bool) []SavedDevice {
+	result := make([]SavedDevice, 0, len(a.devices))
+	for uid, d := range a.devices {
+		node, excluded := d.node, d.noAuto
+		if next, ok := updates[uid]; ok {
+			node = next
+			excluded = excluded || (explicit && next == 0)
+		}
+		if node != 0 || excluded {
+			result = append(result, SavedDevice{uid, d.kind, node, excluded})
+		}
+	}
+	slices.SortFunc(result, func(a, b SavedDevice) int { return strings.Compare(a.DeviceID, b.DeviceID) })
+	return result
 }

@@ -2,178 +2,225 @@
 #define DRAWING_HPP_
 
 #include <Arduino.h>
-#include <LovyanGFX.hpp>
 #include <freertos/FreeRTOS.h>
 #include <freertos/queue.h>
 #include <freertos/task.h>
-#include <type_traits>
 #include "node_config.hpp"
-#include "packet_animation.hpp"
-#include "display.hpp"
+#include "display_snapshot.hpp"
+#include "frame_presenter.hpp"
 #include "packet_renderer.hpp"
-
-struct DisplaySnapshot {
-  PacketAnimation::Snapshot cards;
-  int score;
-  int remaining;
-  NodeId selfId;
-  uint8_t pressedMask;
-};
-
-static_assert(std::is_trivially_copyable<DisplaySnapshot>::value, "FreeRTOS queues copy snapshots as bytes");
+#include "preparing_renderer.hpp"
+#include "finished_renderer.hpp"
 
 struct DrawingTaskContext {
   QueueHandle_t snapshots;
   TaskHandle_t readyTask;
 };
 
-PacketRenderer packetRenderer{lcd, sprite};
+FrameBuffer frame;
+FramePresenter presenter{lcd, frame};
+PacketRenderer packetRenderer{frame};
+DisplaySnapshot previousDisplay{};
+DisplaySnapshot previousBackDisplay{};
+bool displayDrawn = false;
+bool backDisplayDrawn = false;
 
 void startup_animation() {
-  if (!sprite.getBuffer()) return;
-
   constexpr uint32_t durationMs = 1000;
-  constexpr int barLength = 10;
-  const int startupX = (lcd.width() - sprite.width()) / 2;
-  const int startupY = (lcd.height() - sprite.height()) / 2;
-  sprite.setFont(&fonts::Font0);
-  sprite.setTextSize(2);
-  sprite.setTextColor(TFT_WHITE, TFT_BLACK);
   const uint32_t startedMs = millis();
-
-  while (true) {
-    const uint32_t elapsedMs = millis() - startedMs;
-    const uint32_t progressMs = elapsedMs < durationMs ? elapsedMs : durationMs;
-    const int filled = progressMs * barLength / durationMs;
+  bool first = true;
+  for (;;) {
+    const uint32_t progress = std::min<uint32_t>(millis() - startedMs, durationMs);
     char bar[] = "[..........]";
-    for (int i = 0; i < barLength; ++i) {
-      bar[i + 1] = i < filled ? '#' : '.';
-    }
-
-    sprite.fillSprite(TFT_BLACK);
-    sprite.drawString("STARTING", (ANIMATION_WIDTH - sprite.textWidth("STARTING")) / 2, 80);
-    sprite.drawString(bar, (ANIMATION_WIDTH - sprite.textWidth(bar)) / 2, 112);
-    sprite.setCursor((ANIMATION_WIDTH - sprite.textWidth("100%")) / 2, 144);
-    sprite.printf("%3lu%%", (unsigned long)(progressMs * 100 / durationMs));
-    sprite.pushSprite(startupX, startupY);
-    lcd.waitDMA();
-
-    if (progressMs == durationMs) break;
+    for (int i = 0; i < 10; ++i) bar[i + 1] = i < int(progress * 10 / durationMs) ? '#' : '.';
+    frame.fillRect(140, 112, 200, 96, TFT_BLACK);
+    frame.setFont(&fonts::Font0);
+    frame.setTextSize(2);
+    frame.setTextColor(TFT_WHITE, TFT_BLACK);
+    frame.drawString("STARTING", (480 - frame.textWidth("STARTING")) / 2, 120);
+    frame.drawString(bar, (480 - frame.textWidth(bar)) / 2, 152);
+    frame.setCursor((480 - frame.textWidth("100%")) / 2, 184);
+    frame.printf("%3lu%%", (unsigned long)(progress * 100 / durationMs));
+    FrameDamage damage;
+    if (first) damage.full();
+    else damage.markRect(140, 112, 200, 96);
+    presenter.present(damage);
+    first = false;
+    if (progress == durationMs) break;
     delay(1);
   }
   delay(500);
-  lcd.fillRect(0, 0, lcd.width(), lcd.height(), TFT_BLACK);
-  sprite.fillSprite(TFT_BLACK);
 }
 
-void draw_button(int x, int y, NodeId id, bool pressed = false) {
-  constexpr int w = 120 - 1;
-  constexpr int h = 80 - 1;
-
+void draw_button(int x, int y, NodeId id, bool pressed) {
   const auto& visual = nodeVisuals[static_cast<int>(id)];
-
-  uint16_t back_color = pressed ? TFT_BLACK : visual.color;
-  uint16_t fore_color = pressed ? visual.color : TFT_BLACK;
-
-  lcd.fillRect(x + 1, y + 1, w, h, back_color);
-  lcd.setTextColor(fore_color, back_color);
-  lcd.setTextSize(6);
-  lcd.drawChar(visual.name, x + 42, y + 16);
+  const uint16_t background = pressed ? TFT_BLACK : visual.color;
+  const uint16_t foreground = id == NodeId::None ? TFT_WHITE : pressed ? visual.color : TFT_BLACK;
+  frame.fillRect(x + 1, y + 1, 119, 79, background);
+  frame.setFont(&fonts::Font0);
+  frame.setTextColor(foreground, background);
+  frame.setTextSize(6);
+  frame.drawChar(visual.name, x + 42, y + 16);
 }
 
-void draw_neighbor_buttons(NodeId id, uint8_t pressedMask, uint8_t changedMask = 0x0f) {
+void draw_neighbor_buttons(NodeId id, uint8_t pressedMask, uint8_t changedMask) {
   const auto& layout = nodeLayouts[static_cast<int>(id)];
-
   for (int i = 0; i < 4; ++i) {
     if (!(changedMask & (1u << i))) continue;
     const NodeId neighbor = layout.neighbors[i];
-    if (neighbor == NodeId::None) continue;
-    draw_button(i * 120, 240, neighbor, pressedMask & (1u << i));
+    if (neighbor == NodeId::None) {
+      frame.fillRect(i * 120 + 1, 241, 119, 79, TFT_BLACK);
+    } else draw_button(i * 120, 240, neighbor, pressedMask & (1u << i));
   }
 }
 
-void draw_info_number(int value, int y) {
-  char number[5];
-  if (snprintf(number, sizeof(number), "%4d", value) > 4) {
-    strcpy(number, "####");
+const char* phase_label(GamePhase phase) {
+  switch (phase) {
+    case GamePhase::Preparing: return "PREPARING";
+    case GamePhase::Playing: return "PLAYING";
+    case GamePhase::Finished: return "FINISHED";
+    case GamePhase::Unknown: return "WAITING";
   }
-  lcd.drawString(number, 366, y);
+  return "WAITING";
 }
 
-void draw_info(int score, int remaining) {
-  static bool drawn = false;
-  static int previousScore = 0;
-  static int previousRemaining = 0;
+const char* connection_label(const DisplaySnapshot& snapshot) {
+  if (snapshot.selfId == NodeId::None) return "CONNECTING";
+  if (!snapshot.synced) return "SYNCING";
+  if (snapshot.phase == GamePhase::Unknown) return "WAIT PHASE";
+  if (snapshot.awaitingStatus) return "WAIT STATUS";
+  return snapshot.mode == ControlMode::Manual ? "MANUAL" : "AUTO";
+}
 
-  if (drawn && score == previousScore && remaining == previousRemaining) return;
+void draw_game_status(const DisplaySnapshot& snapshot) {
+  frame.fillRect(361, 81, 118, 36, TFT_BLACK);
+  frame.setFont(&fonts::Font0);
+  frame.setTextColor(TFT_WHITE, TFT_BLACK);
+  frame.setTextSize(2);
+  frame.drawString(phase_label(snapshot.phase), 366, 84);
+  frame.setTextSize(1);
+  frame.drawString(connection_label(snapshot), 366, 105);
+}
 
-  lcd.setFont(&fonts::Font0);
-  lcd.setTextSize(3);
-  lcd.setTextColor(TFT_WHITE, TFT_BLACK);
-  lcd.setTextDatum(lgfx::textdatum_t::top_left);
-  lcd.setTextPadding(0);
+void draw_info_number(int32_t value, bool known, int y) {
+  char number[12] = "----";
+  if (known) snprintf(number, sizeof(number), "%ld", static_cast<long>(value));
+  frame.fillRect(366, y, 72, 24, TFT_BLACK);
+  int size = 3;
+  frame.setTextSize(size);
+  while (size > 1 && frame.textWidth(number) > 72) frame.setTextSize(--size);
+  frame.drawString(number, 438 - frame.textWidth(number), y + (24 - 8 * size) / 2);
+}
 
-  lcd.startWrite();
-
-  if (!drawn) {
-    lcd.drawString("pt", 438, 121);
-    lcd.drawString("s", 438, 174);
+void draw_info(const PlayerStatus& status, const DisplayChanges& changes) {
+  frame.setFont(&fonts::Font0);
+  frame.setTextColor(TFT_WHITE, TFT_BLACK);
+  if (changes.score) draw_info_number(status.score, status.known, 121);
+  if (changes.remaining) draw_info_number(status.remaining, status.known, 174);
+  if (changes.ready) {
+    const char* label = !status.known ? "READY: --" : status.ready ? "READY" : "NOT READY";
+    frame.fillRect(366, 151, 108, 12, TFT_BLACK);
+    frame.setTextSize(1);
+    frame.drawString(label, 366, 151);
   }
+}
 
-  if (!drawn || score != previousScore) {
-    draw_info_number(score, 121);
-    previousScore = score;
+void draw_static_layout() {
+  frame.fillScreen(TFT_BLACK);
+  frame.drawLine(360, 0, 360, 240, TFT_WHITE);
+  frame.drawLine(360, 80, 479, 80, TFT_WHITE);
+  frame.drawLine(0, 240, 479, 240, TFT_WHITE);
+  for (int x : {120, 240, 360}) frame.drawLine(x, 240, x, 319, TFT_WHITE);
+  frame.setFont(&fonts::Font0);
+  frame.setTextColor(TFT_WHITE, TFT_BLACK);
+  frame.setTextSize(3);
+  frame.drawChar('3', 51, 28);
+  frame.drawChar('2', 51, 108);
+  frame.drawChar('1', 51, 188);
+  frame.drawString("pt", 438, 121);
+  frame.drawString("s", 438, 174);
+}
+
+void draw_screen_layout(const DisplaySnapshot& snapshot) {
+  if (preparing_screen(snapshot)) draw_preparing_layout(frame);
+  else if (display_screen(snapshot) == DisplayScreen::Finished) draw_result_layout(frame, false);
+  else if (display_screen(snapshot) == DisplayScreen::Preview) draw_result_layout(frame, true);
+  else draw_static_layout();
+}
+
+bool initialize_display(bool startup = true) {
+  if (!lcd_init()) return false;
+  if (!frame.begin() || !presenter.begin()) {
+    lcd.setTextSize(2);
+    lcd.drawString("Framebuffer allocation failed", 8, 244);
+    return false;
   }
+  if (startup) startup_animation();
+  presenter.calibrate();
+  draw_static_layout();
+  return true;
+}
 
-  if (!drawn || remaining != previousRemaining) {
-    draw_info_number(remaining, 174);
-    previousRemaining = remaining;
+void render_snapshot(const DisplaySnapshot& snapshot, const DisplayChanges& changes) {
+  frame.setTextDatum(lgfx::textdatum_t::top_left);
+  frame.setTextPadding(0);
+  if (display_screen(snapshot) == DisplayScreen::Finished || display_screen(snapshot) == DisplayScreen::Preview) {
+    if (changes.self) draw_button(360, 0, snapshot.selfId, false);
+    if (display_screen(snapshot) == DisplayScreen::Preview) {
+      if (changes.previewBody) render_preview(frame, snapshot);
+    } else render_finished(frame, snapshot, changes);
+    return;
   }
+  if (preparing_screen(snapshot)) {
+    if (changes.self) draw_button(360, 0, snapshot.selfId, false);
+    render_preparing(frame, snapshot, changes);
+    return;
+  }
+  packetRenderer.draw(displayed_cards(snapshot), changes.cards);
+  if (changes.self) draw_button(360, 0, snapshot.selfId, false);
+  draw_neighbor_buttons(snapshot.selfId, snapshot.pressedMask, changes.buttons);
+  if (changes.label) draw_game_status(snapshot);
+  draw_info(snapshot.status, changes);
+}
 
-  lcd.endWrite();
-  drawn = true;
+DisplayFrameStats draw_snapshot(const DisplaySnapshot& snapshot) {
+  const uint32_t started = micros();
+  const auto changes = display_changes(previousDisplay, snapshot, !displayDrawn);
+  DisplayFrameStats stats;
+  if (changes.any()) {
+    const uint32_t scanStarted = micros();
+    presenter.sample_scan();
+    const uint32_t scanUs = micros() - scanStarted;
+    const uint32_t drawStarted = micros();
+    // backは2フレーム前の場合がある。表示済み状態とは別の基準で描き直す。
+    const auto redraw = display_changes(previousBackDisplay, snapshot, !backDisplayDrawn);
+    if (!backDisplayDrawn || redraw.full) draw_screen_layout(snapshot);
+    render_snapshot(snapshot, redraw);
+    const auto damage = display_damage(changes, !displayDrawn);
+    const uint32_t drawUs = micros() - drawStarted;
+    stats = presenter.present(damage);
+    stats.scanReadUs = scanUs;
+    stats.drawUs = drawUs;
+    previousBackDisplay = previousDisplay;
+    backDisplayDrawn = displayDrawn;
+  }
+  previousDisplay = snapshot;
+  displayDrawn = true;
+  stats.frameUs = micros() - started;
+  return stats;
 }
 
 void display_task(void* argument) {
   const auto& context = *static_cast<const DrawingTaskContext*>(argument);
-  if (!lcd_init()) {
+  if (!initialize_display()) {
     vTaskDelete(nullptr);
     return;
   }
-  startup_animation();
-
-  lcd.drawLine(360,   0, 360, 240, TFT_WHITE);
-  lcd.drawLine(360,  80, 479,  80, TFT_WHITE);
-  lcd.drawLine(  0, 240, 479, 240, TFT_WHITE);
-  lcd.drawLine(120, 240, 120, 319, TFT_WHITE);
-  lcd.drawLine(240, 240, 240, 319, TFT_WHITE);
-  lcd.drawLine(360, 240, 360, 319, TFT_WHITE);
-
-  lcd.setTextColor(TFT_WHITE, TFT_BLACK);
-  lcd.setTextSize(3);
-  lcd.drawChar('3', 51,  28);
-  lcd.drawChar('2', 51, 108);
-  lcd.drawChar('1', 51, 188);
-
-  packetRenderer.begin();
-
   bool readyNotified = false;
-  NodeId previousSelfId = NodeId::None;
-  uint8_t previousPressedMask = 0;
   for (;;) {
     DisplaySnapshot snapshot;
     if (xQueueReceive(context.snapshots, &snapshot, portMAX_DELAY) != pdTRUE) continue;
-    if (snapshot.selfId != previousSelfId) {
-      draw_button(360, 0, snapshot.selfId);
-      draw_neighbor_buttons(snapshot.selfId, snapshot.pressedMask);
-      previousSelfId = snapshot.selfId;
-    } else if (snapshot.pressedMask != previousPressedMask) {
-      draw_neighbor_buttons(snapshot.selfId, snapshot.pressedMask,
-                            snapshot.pressedMask ^ previousPressedMask);
-    }
-    previousPressedMask = snapshot.pressedMask;
-    draw_info(snapshot.score, snapshot.remaining);
-    packetRenderer.draw(snapshot.cards);
+    draw_snapshot(snapshot);
     if (!readyNotified) {
       xTaskNotifyGive(context.readyTask);
       readyNotified = true;

@@ -3,15 +3,11 @@
 
 #include <Arduino.h>
 #include <LovyanGFX.hpp>
-
-constexpr int ANIMATION_X = 120;
-constexpr int ANIMATION_Y = 0;
-constexpr int ANIMATION_WIDTH = 200;
-constexpr int ANIMATION_HEIGHT = 240;
+#include "display_layout.hpp"
 
 class ColumnPanel : public lgfx::Panel_ST7796 {
 public:
-  // MADCTLのパラメータMV(Row/Column Exchange)を切り替え、MV=1ならcolumn優先
+  // 横向き(rotation=1)ではMV=0にすると画面のY方向が先に進む。
   void setColumnOrder(bool enabled) {
     uint8_t mode = getMadCtl(_internal_rotation);
     if (enabled) mode &= ~MAD_MV;
@@ -78,24 +74,13 @@ public:
 };
 
 Display lcd;
-lgfx::LGFX_Sprite sprite(&lcd);
 
 bool lcd_init() {
-  lcd.init();
+  if (!lcd.init()) return false;
   lcd.setRotation(1);  // 横向き480×320
   lcd.setColorDepth(16);
   lcd.fillScreen(TFT_BLACK);
 
-  sprite.setColorDepth(16);
-  // 合成用の96KBはPSRAMに置き、内部RAMはDMA転送・USB受信へ残す。
-  sprite.setPsram(true);
-  if (!sprite.createSprite(ANIMATION_WIDTH, ANIMATION_HEIGHT)) {
-    lcd.fillRect(0, 240, 480, 80, TFT_BLACK);
-    lcd.drawString("Sprite allocation failed", 8, 244);
-    return false;
-  }
-  sprite.setTextColor(TFT_WHITE, TFT_BLACK);
-  sprite.setTextSize(2);
   return true;
 }
 

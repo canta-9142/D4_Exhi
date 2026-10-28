@@ -11,10 +11,15 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
+	"slices"
+	"strings"
+	"sync"
 	"syscall"
 	"time"
 
 	"github.com/canta-9142/d4-exhi/internal/app"
+	"github.com/canta-9142/d4-exhi/internal/serial"
 	"github.com/canta-9142/d4-exhi/internal/web"
 )
 
@@ -35,6 +40,23 @@ func run(ctx context.Context, args []string, output io.Writer) error {
 	levelName := flags.String("log-level", "info", "log level: debug, info, warn, error")
 	// All interfaces by default: the admin connects from a laptop over the LAN.
 	httpAddr := flags.String("http-addr", ":8080", "listen address of the admin HTTP server")
+	devicesFile := flags.String("devices-file", "data/devices.json", "device assignment JSON file")
+	listPorts := flags.Bool("list-serial-ports", false, "list USB serial port candidates and exit")
+	var ports []string
+	flags.Func("serial-port", "USB CDC port path (repeat for multiple ports)", func(value string) error {
+		if strings.TrimSpace(value) == "" {
+			return fmt.Errorf("serial port path must not be empty")
+		}
+		name, err := filepath.Abs(value)
+		if err != nil {
+			return err
+		}
+		if slices.Contains(ports, name) {
+			return fmt.Errorf("serial port specified more than once: %s", name)
+		}
+		ports = append(ports, name)
+		return nil
+	})
 	if err := flags.Parse(args); err != nil {
 		if err == flag.ErrHelp {
 			return nil
@@ -48,13 +70,42 @@ func run(ctx context.Context, args []string, output io.Writer) error {
 	if err := level.UnmarshalText([]byte(*levelName)); err != nil {
 		return err
 	}
+	if *listPorts {
+		names, err := serial.ListPorts()
+		if err != nil {
+			return err
+		}
+		for _, name := range names {
+			if _, err := fmt.Fprintln(output, name); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
 	logger := slog.New(slog.NewTextHandler(output, &slog.HandlerOptions{Level: level}))
+	if strings.TrimSpace(*devicesFile) == "" {
+		return errors.New("device assignment file path must not be empty")
+	}
+	store := &app.DeviceStore{Path: *devicesFile}
+	devices, err := store.Load()
+	if err != nil {
+		logger.Error("cannot load device assignments", "path", *devicesFile, "error", err)
+		return fmt.Errorf("load device assignments: %w", err)
+	}
 	// Listen before starting app so that a port in use is a startup error.
 	listener, err := net.Listen("tcp", *httpAddr)
 	if err != nil {
 		return fmt.Errorf("http listen: %w", err)
 	}
-	application := app.New(app.Options{Logger: logger})
+	transport := serial.New(logger)
+	application := app.New(app.Options{
+		Logger: logger, Send: transport.Send, Close: transport.Close, Devices: devices,
+		SaveDevices: store.Save,
+	})
+	return serve(ctx, application, listener, logger, transport, ports)
+}
+
+func serve(ctx context.Context, application *app.App, listener net.Listener, logger *slog.Logger, transport *serial.Transport, ports []string) error {
 	server := &http.Server{
 		Handler:           web.New(application, logger),
 		ReadHeaderTimeout: 5 * time.Second,
@@ -64,16 +115,30 @@ func run(ctx context.Context, args []string, output io.Writer) error {
 		MaxHeaderBytes:    64 << 10,
 		ErrorLog:          slog.NewLogLogger(logger.Handler(), slog.LevelWarn),
 	}
-	logger.Info("server starting", "phase", app.Preparing, "http_addr", listener.Addr().String(), "transports", "not configured")
+	logger.Info("server starting", "phase", app.Preparing, "http_addr", listener.Addr().String(), "serial_ports", ports)
 
 	// app outlives ctx until HTTP has shut down, so in-flight requests can
 	// still reach it.
 	appCtx, stopApp := context.WithCancel(context.WithoutCancel(ctx))
 	defer stopApp()
 	appDone := make(chan error, 1)
-	go func() { appDone <- application.Run(appCtx) }()
+	portsCtx, stopPorts := context.WithCancel(ctx)
+	defer stopPorts()
+	go func() {
+		err := application.Run(appCtx)
+		if err != nil {
+			stopPorts()
+			server.Close()
+		}
+		appDone <- err
+	}()
 	httpDone := make(chan error, 1)
 	go func() { httpDone <- server.Serve(listener) }()
+	var workers sync.WaitGroup
+	for _, name := range ports {
+		workers.Add(1)
+		go func() { defer workers.Done(); transport.RunPort(portsCtx, application, name) }()
+	}
 
 	var appErr, httpErr error
 	appRunning, httpRunning := true, true
@@ -81,15 +146,20 @@ func run(ctx context.Context, args []string, output io.Writer) error {
 	case <-ctx.Done():
 	case appErr = <-appDone:
 		appRunning = false
-		if appErr == nil {
+		if appErr == nil && ctx.Err() == nil {
 			appErr = errors.New("stopped unexpectedly")
 		}
 	case httpErr = <-httpDone:
 		httpRunning = false
+		if errors.Is(httpErr, http.ErrServerClosed) {
+			httpErr = nil
+		}
 	}
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()
-	if err := server.Shutdown(shutdownCtx); err != nil {
+	if appErr != nil {
+		server.Close()
+	} else if err := server.Shutdown(shutdownCtx); err != nil {
 		logger.Warn("http shutdown timed out; closing connections", "error", err)
 		server.Close()
 	}
@@ -98,6 +168,9 @@ func run(ctx context.Context, args []string, output io.Writer) error {
 			httpErr = err
 		}
 	}
+	// Keep app running until every serial session has delivered Disconnected.
+	stopPorts()
+	workers.Wait()
 	stopApp()
 	if appRunning {
 		appErr = <-appDone

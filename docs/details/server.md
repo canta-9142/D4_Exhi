@@ -10,22 +10,46 @@
 ```sh
 nix develop -c go -C server run ./cmd/server
 nix develop -c go -C server run ./cmd/server -log-level debug
+nix develop -c go -C server run ./cmd/server -devices-file data/devices.json
 nix develop -c go -C server run ./cmd/server -http-addr 127.0.0.1:8080
+nix develop -c go -C server run ./cmd/server -list-serial-ports
+nix develop -c go -C server run ./cmd/server -serial-port /dev/ttyACM0 -serial-port /dev/ttyACM1
 nix develop -c go -C server test -race ./...
 nix develop -c go -C server vet ./...
 ```
 
-`main`はログ設定を読み込み、標準出力へのログと`app`を初期化する。
-`-http-addr`（既定値`:8080`）で管理画面のHTTPを待ち受け、`app`と並行して実行する。
-既定値は全インターフェースで待ち受け、管理用ノートPCからLAN経由で接続できるようにする。
-ポート使用中などで待ち受けられない場合は起動エラーとし、起動ログに待受アドレスを出す。
-SIGINT・SIGTERMではHTTPを最大5秒待って停止してから`app`を終了する。
-`app`とHTTPのどちらかが異常終了した場合は、もう一方も止めてエラーを返す。
-`app`は終了時に有効なセッションを閉じる。
+`main`はログ設定を読み込み、標準出力へのログ、Transport、`app`を初期化する。
+指定ポートごとにUSB CDC接続を管理するgoroutineを起動する。
+HTTPは`-http-addr`（既定`:8080`）で待ち受け、管理APIと並行してserialを処理する。
+SIGINT・SIGTERMではHTTPを最大5秒待って停止し、ポートの再接続処理を停止する。
+有効な接続のI/O終了と`Disconnected`の通知を待ってから`app`を終了する。
 
-現時点では`serial`が未実装のため、USB接続は受け付けない。`web`はルーティング、
-エラー応答の形式、埋め込みの仮の管理画面だけを実装している。
-`/api/state`・`/api/commands`は`503 unavailable`を返し、`app`をまだ呼び出さない。
+USB CDCの接続先ホストはLinuxを前提とする。`-list-serial-ports`は
+`/dev/ttyACM*`・`/dev/ttyUSB*`の候補を昇順で表示して終了し、ポートは開かない。
+候補なしの場合は何も表示しない。VID/PIDによる機器種別判定や自動接続は行わず、
+接続対象を繰り返し指定可能な`-serial-port`で選ぶ。同じパスの重複指定と空の指定は拒否する。
+ポート未指定でも起動でき、その場合はMCU未接続のPreparingで待機する。
+
+指定したポートが起動時に存在しない場合や、接続終了・オープン失敗時は1秒後に再試行する。
+USBの抜き差しで`ttyACM`等の番号が変わる環境では、`/dev/serial/by-id/...`などの
+安定したパスも指定できる。開いたポートのパスとSession IDはログへ記録する。
+受信形式と有効なHELLOからプレイヤー／LEDを識別し、再接続でもゲームや割当の正本を維持する。
+
+`web`の`/api/state`・`/api/commands`は`app`へ接続済み。管理画面から状態取得と管理操作を行える。
+
+### Linuxのポート設定と検証範囲
+
+`serial.OpenPort`はTTYを115200bps・8N1・フロー制御なしのrawモードへ設定する。
+制御線を持つTTYではDTRを有効、RTSを無効にする。排他オープンとファイルロックで、
+同じTTYの別名を含む二重接続を防ぐ。再オープンのため、終了時に排他指定を解除する。
+非ブロッキングのファイル記述子を`os.File`へ渡し、GoのpollerにRead・Writeの待機を任せる。
+Closeで両方の待機を解除できることを確認したポートだけを使用する。
+OS設定には`golang.org/x/sys/unix`を使用する。
+
+Linuxの疑似TTYでraw設定、改行を変換しない送受信、別名での二重接続拒否、
+再オープン、Read・Writeの待機解除を検証する。`main`からのプレイヤー・LED同時接続と
+終了処理、ポート不在時の再試行と切断後の再接続も自動テストの対象とする。
+実機のUSB抜き差し、DTR/RTSによる基板の挙動、およびRadxa上での動作は未確認。
 
 ## appの呼び出し
 
@@ -77,6 +101,53 @@ Startの拒否では先頭の理由を使用し、`not_preparing`は`phase_confl
 プレイヤーの`config.preview`とLEDの`CONFIG NODE PREVIEW`は通常false、確認中だけtrueを明記する。
 `Options.Close`には物理セッションを閉じる関数を渡す。
 
+### セッション管理と送信キュー
+
+`serial.New(logger)`でTransportを生成し、`Send`・`Close`を`app`のコールバックへ渡す。
+開いた通信路ごとに`Serve(ctx, application, port)`を別goroutineで実行する。
+Linuxの実ポートには`RunPort(ctx, application, name)`を使うと、オープンと再試行も管理する。
+
+```go
+transport := serial.New(logger)
+application := app.New(app.Options{
+    Logger: logger,
+    Send:   transport.Send,
+    Close:  transport.Close,
+})
+go application.Run(ctx)
+err := transport.Serve(ctx, application, port)
+```
+
+`port`は`io.ReadWriteCloser`を満たし、ReadとWriteを並行実行でき、Closeによって
+両方の待機を解除できるものを渡す。`Serve`は通信路の所有権を引き受け、終了時に閉じる。
+Session IDはTransportの再生成や再接続でも再利用しないプロセス共通の連番とする。
+
+`Send`は`MarshalLine()`の結果にLFを付け、接続ごとに最大64行のFIFOへ登録する。
+書込中の1行はこの件数に含めない。キューには確定したバイト列を格納し、後から
+元のMessageのデータを変更しても送信内容を変えない。成功は登録完了だけを表す。
+行長超過・エンコード失敗・キュー溢れではerrorを返してセッションを無効化する。
+書込失敗・短い書込・受信の異常でも終了し、未送信のキューは再接続へ引き継がない。
+
+`Close`は冪等で、セッションを直ちに無効化する。Send・CloseはI/Oや`app`への通知を待たず、
+物理ポートのCloseと待機中のRead・Writeの終了は別goroutineで行う。
+受信したバイト列は時刻付きでReceiverへ渡し、受信順に`MessageReceived`を呼ぶ。
+`Connected`の処理が完了してからReadと受信メッセージの通知を開始し、
+登録待ちの時間を受信停止として扱わない。
+
+受信の組み立て・検証・部分行のタイムアウト監視は、`app`への通知を待たずに進める。
+検証済みの入力を接続ごとに最大64件のFIFOへ登録し、別goroutineから受信順に通知する。
+`app`が処理中の1件はキュー件数に含めない。`app`の処理待ちを受信停止と判定せず、
+処理待ちの間でも実際に部分行の受信が1秒途絶えればセッションを終了する。
+入力キューが溢れた場合は`ErrReceiveQueueFull`で終了し、無通信タイムアウトとは区別する。
+終了時は未通知の入力を破棄し、進行中の通知処理が戻ってから`Disconnected`を通知する。
+
+`Serve`はポートのCloseとI/O処理の終了後に`Disconnected`を一度通知してから戻り、
+最初の終了理由をerrorで返す。接続単位のcontextをキャンセルした場合も、
+まだ動作中の`app`への切断通知は取り消さない。終了したSession IDへの追加送信は拒否する。
+`app.Run`はServe開始前に起動し、Serve終了まで動作させるか、終了処理を完了させる。
+
+### コールバックの制約
+
 コールバックから`app`のメソッドを同期的に呼び出してはならない。
 `Send`はMCUの受信やシリアル書込の完了を待たずに戻る必要がある。
 送信登録の失敗時は`app`も当該セッションを無効化し、プレイヤーを自動操作へ切り替える。
@@ -89,9 +160,53 @@ Startの拒否では先頭の理由を使用し、`not_preparing`は`phase_confl
 識別前はプレイヤーのJSON `hello`とLEDの`HELLO UID`の両形式を判定し、
 どちらも`Type="hello"`として、`Kind=PlayerDevice`または`Kind=LEDDevice`を設定する。
 両種別のUIDを大文字16進12桁として検証する。
+LEDのHELLO候補はASCII・96バイト上限・スペース／タブの区切りを検証し、
+LED識別後はその接続の行長上限を96バイトに保つ。
+`IncomingMessage.Identification`は読取開始時の識別世代とし、
+`app`は現在の識別世代と異なる入力を適用時にも無視する。
 セッションIDは再接続を含めてプロセス内で再利用しない。
 識別前の旧入力破棄、HELLO再受信時の要求ID履歴維持、同期世代の更新とSENDの重複排除は
 `app`が担当する。同期世代には暗号学的乱数による128bitの識別子を使う。
+
+### serialの受信処理
+
+`serial.Receiver`をセッションごとに生成する。ゼロ値はHELLO待ちで、
+`Feed(data, now, handle)`に受信バイト列と受信時刻を渡す。
+LF・CRLFで行を区切り、検証した`IncomingMessage`を受信順に`handle`へ渡す。
+未定義の追加JSONフィールドは無視し、必須フィールドの欠落・null・型変換は許容しない。
+ゲーム上の受理条件や要求IDの重複排除は行わない。
+
+HELLO待ちでは不正な行とHELLO以外を無視する。プロトコルの上限を超えた行や、
+受信が1秒途絶えた部分行はLFまで破棄する。有効なHELLOから機器種別を記録し、
+以後の不正入力・別種別の通信形式はerrorを返す。
+無通信中も`CheckTimeout(now)`を呼ぶ。期限があるのは行途中だけで、行間の無通信は許容する。
+
+`app`は新たにHELLO待ちへ移る`identify`だけ、送信要求の`BeginIdentification`をtrueにし、
+セッション内の識別世代`Identification`を1から昇順に発行する。待機中の再送では
+フラグをfalseにして同じ世代を使う。世代が上限に達したセッションは終了し、周回させない。
+フラグと識別世代は内部用で、MCUへ送るJSONには含めない。
+`serial`はフラグがtrueの送信要求をキューへ登録する際だけ、追加の入力を処理する前に
+`WaitHello(message.Identification)`を呼ぶ。これにより受信途中の旧行をLFまで破棄する。
+再送では受信中のHELLOや既存の破棄状態を変更しない。同じ世代や過去の世代を渡した場合も
+Receiverの状態は巻き戻さない。
+Read開始前に識別世代を固定し、解析した入力にもその世代を引き継ぐ。
+世代の切り替えをまたぐReadの結果は旧世代として破棄する。そのReadに新しい応答が
+含まれていた場合も、同じ世代を使う1秒周期の`identify`再送で再取得する。
+再識別前に受信済みの古いバイト列は、改行の境界を維持しながら破棄する。
+新しい識別世代を、配信待ちの古いHELLOへ付け直さない。
+この世代はFIFO同期の`sync`とは独立し、ゲームResetや通常の再同期では更新しない。
+受信側での解析と`app`でのHELLO受理の間に再送されても、識別状態を巻き戻さない。
+`Feed`と`CheckTimeout`は受信側の同じgoroutineから直列に呼ぶ。
+`WaitHello`は別goroutineの`app.Options.Send`からも呼べる。要求された世代を記録して直ちに戻り、
+状態変更は受信側が次の入力・タイムアウト確認の前に適用する。
+`handle`を呼ぶ間にReceiverのロックを保持する必要はない。
+
+識別前の不正な入力・行長超過・部分行のタイムアウトは、破棄時に`Logger`へ記録する。
+受信開始前にセッションID付きの`slog.Logger`を設定でき、未設定時は標準出力へ記録する。
+LFまでの破棄中に同じ原因を繰り返し記録せず、正常な旧SEND等の無視は異常として記録しない。
+ReceiverはシリアルI/Oや`app`への通知を行わない。`Feed`・`CheckTimeout`または`handle`のerrorは
+終端状態として保持し、物理切断・`Disconnected`の通知はTransportで行う。
+再接続時は新しいReceiverを使い、旧接続の部分行を引き継がない。
 
 ## 準備完了と表示通知
 
@@ -153,4 +268,41 @@ LEDの通常設定は`CONFIG NODE false` → Bot用なら現在件数の`BUFFER`
 `preview.go`は確認表示と復旧を担当する。
 ゲームの転送処理は状態を確定し、通知する出来事を戻り値で返す。
 手動SENDではRESULTを先に送信し、その後で返された通知を処理する。
-実際のUSB接続・受信パーサー・HTTP API、およびスコア・対応表の外部保存は未実装とする。
+serial接続・受信パーサー・HTTP API・対応表の保存は実装済みで、疑似TTYとHTTPで検証する。
+実機検証、管理画面の本実装、スコアの外部保存は未実施・未実装である。
+
+## デバイス対応表の保存・復元
+
+保存先は`-devices-file`で指定し、既定値は作業ディレクトリ基準の`data/devices.json`とする。
+`main`はHTTPの待ち受け前に`DeviceStore.Load()`で保存先を一度解決し、ファイル全体を検証する。
+シンボリックリンクを解決してから絶対パスを固定し、以後の読込・保存で同じパスを使う。
+初回起動で保存先がなければ、既存の親までを解決する。この時点ではディレクトリを作成しない。
+ファイル不存在だけを空の対応表として扱い、空ファイル・不正な内容・未対応バージョン・
+読込失敗ではログを記録して起動を中止する。部分的な復元やファイルの上書きは行わない。
+
+`Options.Devices`へ検証済みの`[]app.SavedDevice`を渡し、
+保存先ごとに`app.DeviceStore{Path: path}`を1つ作り、その`Save`メソッドを`Options.SaveDevices`へ設定する。
+保存処理は`Run`内で同期的に実行するため、`app`へ再入してはならない。
+`SaveDevices`がnilの場合はメモリ内のみで動作するため、永続化が必要な起動では必ず設定する。
+
+保存するのはUID・機器種別・割当先・自動仮割当の対象外フラグだけとする。
+割当済みまたは対象外の機器をUID順で保存し、未割当かつ対象外でない機器は保存しない。
+復元機器は未接続で公開し、割当先を予約する。接続後はUIDと機器種別を照合して通常の同期を行う。
+ゲームはPreparing・全プレイヤーauto・未準備で開始し、確認表示や同期世代は復元しない。
+
+割当・解除・交換・付け替えと自動仮割当は、候補全体の保存成功後に一括確定する。
+同じ割当への要求ではMCUを再設定せず、保存内容も同一ならファイルを書き込まない。
+対象外フラグだけの変更も保存し、明示的な再割当では対象外フラグを消去しない。
+同じディレクトリの一時ファイルへ書込・fsync・クローズ後、原子的に置換し、親ディレクトリをfsyncする。
+新規作成したディレクトリの親だけを同期し、失敗した親は同じStoreで記憶して次回に再試行する。
+既存の全祖先は同期せず、残った一時ファイルは復元に使用しない。
+
+置換前または置換自体の失敗では、その操作に伴う対応表・対象外フラグ・操作モード・準備完了状態・
+確認表示とMCU通知を変更しない。管理操作には通常のerrorを返し、Web側で`500 internal_error`とする。
+自動仮割当は識別・接続状態を維持して待機し、フェーズ遷移や空きの発生で再試行する。
+後続の自動仮割当の失敗で、既に保存・確定した管理操作や他UIDの割当を取り消さない。
+
+置換後の親ディレクトリ同期失敗は`ErrSaveUncertain`で区別する。
+ファイルを旧内容へ戻さず、候補の反映・以後の入力処理・送信要求を停止して全セッションを閉じ、
+`Run`がエラーを返す。`main`はHTTPも終了し、プロセスを異常終了する。
+保存完了後のMCUへの送信失敗では、保存済みの対応表を戻さない。
