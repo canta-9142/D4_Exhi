@@ -12,6 +12,15 @@ void expect_greeting_first() {
   assert(!controller.ready() && outputCount == 0 && Serial.position == 0);
 }
 
+void expect_tower(uint8_t r, uint8_t g, uint8_t b) {
+  assert(retainedPixels[0].size() == 8 * 3);
+  for (size_t i = 0; i < 8; ++i) {
+    assert(retainedPixels[0][i * 3] == r);
+    assert(retainedPixels[0][i * 3 + 1] == g);
+    assert(retainedPixels[0][i * 3 + 2] == b);
+  }
+}
+
 int main() {
   const std::string hello = "HELLO 001122334455\n";
   const std::string identify = R"({"type":"identify","data":{}})" "\n";
@@ -44,7 +53,7 @@ int main() {
   Serial.output.clear();
   receive("CONFIG B1 false\nBUFFER 4\n");
   assert(controller.ready() && outputCount == 7 && Serial.output.empty());
-  assert(retainedPixels[0] == std::vector<uint8_t>({255, 0, 0}));
+  expect_tower(255, 0, 0);
 
   // 点灯中のidentify・不正CONFIG・受信異常は、全出力の消灯後にHELLOを返す。
   const std::string invalid[] = {
@@ -123,7 +132,7 @@ int main() {
   assert(controller.ready() && Serial.output.empty());
   testMillis += led::FRAME_MS;
   loop();
-  assert(retainedPixels[0] == std::vector<uint8_t>({0, 255, 0}));
+  expect_tower(0, 255, 0);
 
   // 切断確定では、CDC内の旧CONFIG・identify・部分行を全て捨てる。
   Serial.input = std::string(2048, '\n') + "CONFIG B2 true\n" + identify + "CONF";

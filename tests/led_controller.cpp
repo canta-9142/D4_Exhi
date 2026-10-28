@@ -102,15 +102,19 @@ int main() {
   receive("LIGHT P1 P1 outgoing\nBUFFER 4\nCONFIG P2 false\n");
   assert(!controller.ready());
 
-  // 全制御ノードのGPIOと仮のLED数。
+  // 全制御ノードのGPIOとLED数。
   const char* nodes[] = {"B1", "B2", "B3", "P1", "P3", "P5", "P7"};
   const std::string pins[] = {"0134567", "013456", "012345", "01", "01", "01", "01"};
+  const uint16_t counts[][7] = {
+    {8, 26, 26, 39, 42, 42, 39}, {8, 39, 30, 24, 32, 44},
+    {8, 39, 44, 32, 24, 30}, {24, 24}, {24, 24}, {24, 24}, {24, 24},
+  };
   for (size_t n = 0; n < 7; ++n) {
     assert(receive(std::string("CONFIG ") + nodes[n] + " false\n"));
     assert(controller.strip_count() == pins[n].size());
     for (size_t i = 0; i < controller.strip_count(); ++i) {
       assert(controller.route(i).pin == pins[n][i] - '0');
-      assert(controller.route(i).count == 1);
+      assert(controller.route(i).count == counts[n][i]);
     }
   }
 
@@ -144,7 +148,11 @@ int main() {
   expect(pixel(0), 255, 0, 0);
 
   // 同方向・逆方向の加算、RGB各成分の飽和、10msごとの減衰。
-  receive("LIGHT P1 P1 outgoing\nLIGHT P1 P1 outgoing\nLIGHT P1 P6 incoming\n");
+  receive("LIGHT P1 P6 incoming\n");
+  expect(controller.pixel(1, 25, now), 0, 0, 255);
+  expect(pixel(), 0, 0, 0);
+  now += 250; // 26個のテープを逆向きに進み、先頭へ到達。
+  receive("LIGHT P1 P1 outgoing\nLIGHT P1 P1 outgoing\n");
   expect(pixel(), 255, 0, 255);
   expect(pixel(2), 0, 0, 0);
   now += 10;
@@ -440,7 +448,7 @@ int main() {
   receive("LIGHT P8 P6 outgoing\n");
   expect(pixel(0), 255, 0, 0);
   expect(pixel(1), 0, 0, 0);
-  now += 100;
+  now += 330;
   receive("LIGHT P8 P6 outgoing\n");
   expect(pixel(0), 0, 0, 0);
   expect(pixel(1), 0, 0, 255);
@@ -458,6 +466,9 @@ int main() {
   for (size_t i = 0; i < led::Controller::MAX_LIGHTS; ++i) receive("LIGHT P1 P1 outgoing\n");
   receive("BUFFER 2\nCLEAR\nLIGHT P2 P6 incoming\n");
   expect(pixel(0), 0, 0, 0);
+  expect(pixel(2), 0, 0, 0);
+  expect(controller.pixel(2, 25, now), 0, 0, 255);
+  now += 250;
   expect(pixel(2), 0, 0, 255);
 
   // 短いCDC未接続判定は許容し、100ms継続したら行破棄状態も初期化。
@@ -500,7 +511,7 @@ int main() {
   poll();
   expect(pixel(0), 128, 0, 0);
 
-  // 将来LED数を増やした際の移動・尾・逆方向も実際の描画関数で確認。
+  // 移動・尾・逆方向も実際の描画関数で確認。
   const led::Color red{255, 0, 0};
   expect(led::pulse_pixel(red, false, 4, 0, 0), 255, 0, 0);
   expect(led::pulse_pixel(red, false, 4, 1, 0), 0, 0, 0);
