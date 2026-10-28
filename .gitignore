@@ -3,3 +3,5 @@ result/
 .go/
 /data/
 /server/data/
+**/data/devices.json
+**/data/.devices.json-*

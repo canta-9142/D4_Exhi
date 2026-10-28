@@ -2,7 +2,9 @@ package app
 
 import (
 	"errors"
+	"fmt"
 	"slices"
+	"strings"
 )
 
 var ledNodes = []NodeID{1, 3, 5, 7, 9, 10, 11}
@@ -41,7 +43,7 @@ func (a *App) hello(id SessionID, message IncomingMessage) error {
 	}
 	if d.node != 0 {
 		a.syncDevice(id, true)
-	} else if !a.autoAssign(s.uid) && wasPreview {
+	} else if !a.autoAssign(s.uid) && wasPreview && a.fatalErr == nil {
 		a.restoreUnassigned(s.uid)
 	}
 	return nil
@@ -81,7 +83,7 @@ func (a *App) assigned(kind DeviceKind, node NodeID, except string) bool {
 
 func (a *App) autoAssign(uid string) bool {
 	d := a.devices[uid]
-	if a.game.phase == Playing || d.node != 0 || d.noAuto || d.session == "" {
+	if a.fatalErr != nil || a.game.phase == Playing || d.node != 0 || d.noAuto || d.session == "" {
 		return false
 	}
 	if s := a.sessions[d.session]; s == nil || s.failed || s.waitingHello {
@@ -100,19 +102,20 @@ func (a *App) autoAssign(uid string) bool {
 }
 
 func (a *App) autoAssignPending() {
-	if a.game.phase == Playing || a.fatal != nil {
+	if a.fatalErr != nil || a.game.phase == Playing || !a.assignPending {
 		return
 	}
+	a.assignPending = false
 	uids := make([]string, 0, len(a.devices))
 	for uid := range a.devices {
 		uids = append(uids, uid)
 	}
 	slices.Sort(uids)
 	for _, uid := range uids {
-		if a.fatal != nil {
+		a.autoAssign(uid)
+		if a.fatalErr != nil {
 			return
 		}
-		a.autoAssign(uid)
 	}
 }
 
@@ -169,17 +172,16 @@ func (a *App) changeAssignments(c Command) error {
 	return nil
 }
 
-// Validate first, then commit the complete mapping before notifying any MCU.
+// Save the complete candidate before changing any state or notifying an MCU.
 func (a *App) applyAssignments(updates map[string]NodeID, explicit bool) error {
-	if a.fatal != nil {
-		return a.fatal
-	}
-	candidate := a.assignmentCandidate(updates, explicit)
-	if !slices.Equal(candidate, a.assignmentCandidate(nil, false)) && a.options.SaveDevices != nil {
-		if err := a.options.SaveDevices(candidate); err != nil {
-			a.options.Logger.Error("cannot save device assignments", "error", err)
+	before := a.assignmentCandidate(nil, false)
+	after := a.assignmentCandidate(updates, explicit)
+	if a.options.SaveDevices != nil && !slices.Equal(before, after) {
+		if err := a.options.SaveDevices(after); err != nil {
+			err = fmt.Errorf("save device assignments: %w", err)
+			a.options.Logger.Error("device assignments not committed", "error", err)
 			if errors.Is(err, ErrSaveUncertain) {
-				a.fatal = err
+				a.fatalErr = err
 			}
 			return err
 		}
@@ -192,6 +194,11 @@ func (a *App) applyAssignments(updates map[string]NodeID, explicit bool) error {
 		}
 		if d.node != node {
 			changed = append(changed, uid)
+			if d.node != 0 && !slices.ContainsFunc(after, func(next SavedDevice) bool {
+				return next.Kind == d.kind && next.Node == d.node
+			}) {
+				a.assignPending = true
+			}
 		}
 	}
 	slices.Sort(changed)
@@ -224,4 +231,20 @@ func (a *App) applyAssignments(updates map[string]NodeID, explicit bool) error {
 		}
 	}
 	return nil
+}
+
+func (a *App) assignmentCandidate(updates map[string]NodeID, explicit bool) []SavedDevice {
+	result := make([]SavedDevice, 0, len(a.devices))
+	for uid, d := range a.devices {
+		node, excluded := d.node, d.noAuto
+		if next, ok := updates[uid]; ok {
+			node = next
+			excluded = excluded || (explicit && next == 0)
+		}
+		if node != 0 || excluded {
+			result = append(result, SavedDevice{uid, d.kind, node, excluded})
+		}
+	}
+	slices.SortFunc(result, func(a, b SavedDevice) int { return strings.Compare(a.DeviceID, b.DeviceID) })
+	return result
 }

@@ -4,6 +4,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
@@ -15,6 +18,7 @@ import (
 	"time"
 
 	"github.com/canta-9142/d4-exhi/internal/app"
+	"github.com/canta-9142/d4-exhi/internal/serial"
 )
 
 // Tests listen on an ephemeral loopback port instead of the default :8080.
@@ -87,7 +91,8 @@ func TestRunServesHTTP(t *testing.T) {
 	defer cancel()
 	var output syncBuffer
 	devicesFile := filepath.Join(t.TempDir(), "devices.json")
-	if err := app.SaveDevices(devicesFile, []app.SavedDevice{{DeviceID: "AABBCCDDEEFF", Kind: app.PlayerDevice, Node: 1}}); err != nil {
+	store := &app.DeviceStore{Path: devicesFile}
+	if err := store.Save([]app.SavedDevice{{DeviceID: "AABBCCDDEEFF", Kind: app.PlayerDevice, Node: 1}}); err != nil {
 		t.Fatal(err)
 	}
 	done := make(chan error, 1)
@@ -163,5 +168,90 @@ func TestRunRejectsInvalidDeviceFileBeforeListening(t *testing.T) {
 	data, _ := os.ReadFile(path)
 	if string(data) != `{"version":99,"devices":[]}` {
 		t.Fatal("invalid file was replaced during startup")
+	}
+}
+
+func TestRunLoadsDeviceFileBeforeListening(t *testing.T) {
+	listener, err := net.Listen("tcp", testAddr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	path := filepath.Join(t.TempDir(), "devices.json")
+	invalid := []byte(`{"version":2,"devices":[]}`)
+	if err := os.WriteFile(path, invalid, 0600); err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	// The occupied address must not mask the earlier file validation error.
+	err = run(context.Background(), []string{"-http-addr", listener.Addr().String(), "-devices-file", path}, &output)
+	if err == nil || !strings.Contains(err.Error(), "load device assignments") || !strings.Contains(output.String(), "cannot load device assignments") || strings.Contains(output.String(), "server starting") {
+		t.Fatalf("bad file reached network startup: %v, logs %s", err, output.String())
+	}
+	if body, err := os.ReadFile(path); err != nil || !bytes.Equal(body, invalid) {
+		t.Fatalf("startup overwrote invalid file: %s, %v", body, err)
+	}
+	if err := os.WriteFile(path, []byte(`{"version":1,"devices":[{"deviceId":"001122AABBCC","kind":"player","nodeId":"P1","autoAssignExcluded":true}]}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := run(ctx, []string{"-http-addr", testAddr, "-devices-file", path}, io.Discard); err != nil {
+		t.Fatalf("valid saved assignments prevented startup: %v", err)
+	}
+}
+
+func TestFatalPersistenceFailureClosesHTTPAndReturnsError(t *testing.T) {
+	listener, err := net.Listen("tcp", testAddr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	application := app.New(app.Options{
+		Logger:      slog.New(slog.DiscardHandler),
+		Send:        func(app.SessionID, app.Message) error { return nil },
+		SaveDevices: func([]app.SavedDevice) error { return app.ErrSaveUncertain },
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		done <- serve(ctx, application, listener, slog.New(slog.DiscardHandler), serial.New(slog.New(slog.DiscardHandler)), nil)
+	}()
+	// Leave a partially received HTTP request open to exercise active connections.
+	conn, err := net.Dial("tcp", listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	if _, err := io.WriteString(conn, "GET / HTTP/1.1\r\nHost: localhost\r\n"); err != nil {
+		t.Fatal(err)
+	}
+	if err := application.Connected(ctx, "player"); err != nil {
+		t.Fatal(err)
+	}
+	if err := application.MessageReceived(ctx, "player", app.IncomingMessage{Type: "hello", UID: "001122AABBCC", Kind: app.PlayerDevice, Identification: 1}); err == nil {
+		t.Fatal("uncertain automatic assignment returned success")
+	}
+	select {
+	case err := <-done:
+		if !errors.Is(err, app.ErrSaveUncertain) {
+			t.Fatalf("fatal persistence error lost: %v", err)
+		}
+	case <-ctx.Done():
+		t.Fatal("HTTP did not stop promptly after fatal persistence failure")
+	}
+	if err := conn.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	var b [1]byte
+	if _, err := conn.Read(b[:]); err == nil {
+		t.Fatal("HTTP connection remained open")
+	} else if timeout, ok := err.(net.Error); ok && timeout.Timeout() {
+		t.Fatal("HTTP connection was not closed")
+	}
+	if conn, err := net.DialTimeout("tcp", listener.Addr().String(), time.Second); err == nil {
+		conn.Close()
+		t.Fatal("HTTP listener remained open")
 	}
 }

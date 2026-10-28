@@ -86,7 +86,8 @@ func run(ctx context.Context, args []string, output io.Writer) error {
 	if strings.TrimSpace(*devicesFile) == "" {
 		return errors.New("device assignment file path must not be empty")
 	}
-	devices, err := app.LoadDevices(*devicesFile)
+	store := &app.DeviceStore{Path: *devicesFile}
+	devices, err := store.Load()
 	if err != nil {
 		logger.Error("cannot load device assignments", "path", *devicesFile, "error", err)
 		return fmt.Errorf("load device assignments: %w", err)
@@ -99,8 +100,12 @@ func run(ctx context.Context, args []string, output io.Writer) error {
 	transport := serial.New(logger)
 	application := app.New(app.Options{
 		Logger: logger, Send: transport.Send, Close: transport.Close, Devices: devices,
-		SaveDevices: func(candidate []app.SavedDevice) error { return app.SaveDevices(*devicesFile, candidate) },
+		SaveDevices: store.Save,
 	})
+	return serve(ctx, application, listener, logger, transport, ports)
+}
+
+func serve(ctx context.Context, application *app.App, listener net.Listener, logger *slog.Logger, transport *serial.Transport, ports []string) error {
 	server := &http.Server{
 		Handler:           web.New(application, logger),
 		ReadHeaderTimeout: 5 * time.Second,
@@ -117,11 +122,18 @@ func run(ctx context.Context, args []string, output io.Writer) error {
 	appCtx, stopApp := context.WithCancel(context.WithoutCancel(ctx))
 	defer stopApp()
 	appDone := make(chan error, 1)
-	go func() { appDone <- application.Run(appCtx) }()
-	httpDone := make(chan error, 1)
-	go func() { httpDone <- server.Serve(listener) }()
 	portsCtx, stopPorts := context.WithCancel(ctx)
 	defer stopPorts()
+	go func() {
+		err := application.Run(appCtx)
+		if err != nil {
+			stopPorts()
+			server.Close()
+		}
+		appDone <- err
+	}()
+	httpDone := make(chan error, 1)
+	go func() { httpDone <- server.Serve(listener) }()
 	var workers sync.WaitGroup
 	for _, name := range ports {
 		workers.Add(1)
@@ -134,15 +146,20 @@ func run(ctx context.Context, args []string, output io.Writer) error {
 	case <-ctx.Done():
 	case appErr = <-appDone:
 		appRunning = false
-		if appErr == nil {
+		if appErr == nil && ctx.Err() == nil {
 			appErr = errors.New("stopped unexpectedly")
 		}
 	case httpErr = <-httpDone:
 		httpRunning = false
+		if errors.Is(httpErr, http.ErrServerClosed) {
+			httpErr = nil
+		}
 	}
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()
-	if err := server.Shutdown(shutdownCtx); err != nil {
+	if appErr != nil {
+		server.Close()
+	} else if err := server.Shutdown(shutdownCtx); err != nil {
 		logger.Warn("http shutdown timed out; closing connections", "error", err)
 		server.Close()
 	}

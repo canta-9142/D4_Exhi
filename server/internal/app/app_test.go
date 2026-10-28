@@ -35,35 +35,39 @@ type harness struct {
 	closed          []SessionID
 	failType        string
 	generation      map[SessionID]string
+	wantRunError    error
 	identifications map[SessionID]uint64
 }
 
 func newHarness(t *testing.T) *harness {
+	return newHarnessWithOptions(t, Options{})
+}
+
+func newHarnessWithOptions(t *testing.T, options Options) *harness {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	h := &harness{t: t, ctx: ctx, cancel: cancel, finished: make(chan error, 1), ticks: make(chan time.Time), generation: make(map[SessionID]string), identifications: make(map[SessionID]uint64)}
-	h.a = New(Options{
-		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
-		Send: func(id SessionID, message Message) error {
-			h.mu.Lock()
-			defer h.mu.Unlock()
-			if h.failType == message.Type {
-				return errors.New("write queue full")
-			}
-			if _, err := message.MarshalLine(); err != nil {
-				return err
-			}
-			if message.Type == "reset" {
-				h.generation[id] = message.Data.(ResetData).Sync
-			}
-			if message.Type == "identify" {
-				h.identifications[id] = message.Identification
-			}
-			h.sent = append(h.sent, sentMessage{id, message})
-			return nil
-		},
-		Close: func(id SessionID) { h.mu.Lock(); defer h.mu.Unlock(); h.closed = append(h.closed, id) },
-	})
+	options.Logger = slog.New(slog.NewTextHandler(io.Discard, nil))
+	options.Send = func(id SessionID, message Message) error {
+		h.mu.Lock()
+		defer h.mu.Unlock()
+		if h.failType == message.Type {
+			return errors.New("write queue full")
+		}
+		if _, err := message.MarshalLine(); err != nil {
+			return err
+		}
+		if message.Type == "reset" {
+			h.generation[id] = message.Data.(ResetData).Sync
+		}
+		if message.Type == "identify" {
+			h.identifications[id] = message.Identification
+		}
+		h.sent = append(h.sent, sentMessage{id, message})
+		return nil
+	}
+	options.Close = func(id SessionID) { h.mu.Lock(); defer h.mu.Unlock(); h.closed = append(h.closed, id) }
+	h.a = New(options)
 	h.a.now = func() time.Time { return epoch.Add(time.Duration(h.clock.Load())) }
 	h.a.ticks = h.ticks
 	h.a.game.random = func(int) int { return 0 }
@@ -72,8 +76,8 @@ func newHarness(t *testing.T) *harness {
 		cancel()
 		select {
 		case err := <-h.finished:
-			if err != nil {
-				t.Error(err)
+			if !errors.Is(err, h.wantRunError) {
+				t.Errorf("Run returned %v, want %v", err, h.wantRunError)
 			}
 		case <-time.After(time.Second):
 			t.Error("app did not stop")

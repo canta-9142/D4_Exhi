@@ -20,9 +20,10 @@ type Options struct {
 	Send   func(SessionID, Message) error
 	Close  func(SessionID)
 	Logger *slog.Logger
-	// Devices must have passed LoadDevices validation. SaveDevices is called
-	// from Run before assignment changes become observable.
-	Devices     []SavedDevice
+	// Devices must have passed LoadDevices validation.
+	Devices []SavedDevice
+	// SaveDevices synchronously persists the complete candidate before commit.
+	// Nil allows in-memory operation. It must not call back into app.
 	SaveDevices func([]SavedDevice) error
 }
 
@@ -57,19 +58,20 @@ type request struct {
 
 // App owns all state in Run's goroutine. Use its methods from web and serial.
 type App struct {
-	game      game
-	sessions  map[SessionID]*session
-	devices   map[string]*device
-	preview   *preview
-	options   Options
-	requests  chan request
-	done      chan struct{}
-	running   atomic.Bool
-	now       func() time.Time
-	ticks     <-chan time.Time
-	eventNow  time.Time
-	advancing bool
-	fatal     error
+	game          game
+	sessions      map[SessionID]*session
+	devices       map[string]*device
+	preview       *preview
+	options       Options
+	requests      chan request
+	done          chan struct{}
+	running       atomic.Bool
+	now           func() time.Time
+	ticks         <-chan time.Time
+	eventNow      time.Time
+	advancing     bool
+	fatalErr      error
+	assignPending bool
 }
 
 func New(options Options) *App {
@@ -87,14 +89,21 @@ func New(options Options) *App {
 	return a
 }
 
-// Run blocks until ctx is canceled. An App can be run only once.
+// Run blocks until ctx is canceled or persistence becomes uncertain.
+// An App can be run only once.
 func (a *App) Run(ctx context.Context) error {
 	if !a.running.CompareAndSwap(false, true) {
 		return errors.New("app can only run once")
 	}
 	defer func() {
 		for id := range a.sessions {
-			a.closeSession(id)
+			if a.fatalErr != nil {
+				if !a.sessions[id].failed && a.options.Close != nil {
+					a.options.Close(id)
+				}
+			} else {
+				a.closeSession(id)
+			}
 		}
 		close(a.done)
 	}()
@@ -113,27 +122,33 @@ func (a *App) Run(ctx context.Context) error {
 			if req.advance {
 				a.advance(a.eventNow)
 			}
-			if a.fatal != nil {
-				return a.fatal
+			if a.fatalErr != nil {
+				return a.fatalErr
 			}
 			err := req.apply(a.eventNow)
+			if a.fatalErr != nil {
+				return a.fatalErr
+			}
 			if req.advance {
 				a.autoAssignPending()
+				if a.fatalErr != nil {
+					return a.fatalErr
+				}
 				a.flushPlayerUpdates()
-			}
-			if a.fatal != nil {
-				return a.fatal
 			}
 			req.reply <- err
 		case <-ticks:
 			a.eventNow = a.now()
 			a.advance(a.eventNow)
+			if a.fatalErr != nil {
+				return a.fatalErr
+			}
 			a.autoAssignPending()
+			if a.fatalErr != nil {
+				return a.fatalErr
+			}
 			a.identifyPending(a.eventNow)
 			a.flushPlayerUpdates()
-			if a.fatal != nil {
-				return a.fatal
-			}
 		}
 	}
 }
@@ -144,6 +159,9 @@ func (a *App) advance(now time.Time) {
 	a.advancing = true
 	a.game.advance(now)
 	a.advancing = false
+	if a.fatalErr != nil {
+		return
+	}
 	for id, s := range a.sessions {
 		if s.failed {
 			a.disconnect(id)
@@ -410,7 +428,7 @@ func (a *App) closeSession(id SessionID) {
 }
 
 func (a *App) send(id SessionID, message Message) bool {
-	if a.fatal != nil {
+	if a.fatalErr != nil {
 		return false
 	}
 	if s := a.sessions[id]; s == nil || s.failed {

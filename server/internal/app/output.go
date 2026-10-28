@@ -156,6 +156,9 @@ func (a *App) restoreUnassigned(uid string) {
 }
 
 func (a *App) notify(c change) {
+	if a.fatalErr != nil {
+		return
+	}
 	switch c.kind {
 	case "phase":
 		for node := NodeID(1); node <= PlayerCount; node++ {
@@ -163,6 +166,7 @@ func (a *App) notify(c change) {
 				a.phase(id)
 			}
 		}
+		a.assignPending = true
 		a.autoAssignPending()
 	case "reset":
 		a.notifyReset()
@@ -222,6 +226,7 @@ func (a *App) notifyReset() {
 	if p != nil && a.devices[p.uid].node == 0 {
 		a.restoreUnassigned(p.uid)
 	}
+	a.assignPending = true
 	a.autoAssignPending()
 }
 
