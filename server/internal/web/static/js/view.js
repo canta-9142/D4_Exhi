@@ -110,13 +110,17 @@ export function renderDevices(els, devices, preview) {
 }
 
 // previewLabel describes the node a previewed device shows. device is
-// undefined when the snapshot does not list the previewed device.
+// undefined when the snapshot does not list the previewed device; then it is
+// unknown whether the node is the device's assignment or a temporary one.
 function previewLabel(device, preview) {
-  const prefix = device?.kind === "led" ? "LED " : "";
-  if (device && device.assignment === null) {
+  if (!device) {
+    return `確認用 ${preview.nodeId}（機器一覧にない機器）`;
+  }
+  const prefix = device.kind === "led" ? "LED " : "";
+  if (device.assignment === null) {
     return `確認用 ${prefix}${preview.nodeId}（一時）`;
   }
-  const node = device?.kind === "player" ? nodeLabel(preview.nodeId) : `${prefix}${preview.nodeId}`;
+  const node = device.kind === "player" ? nodeLabel(preview.nodeId) : `${prefix}${preview.nodeId}`;
   return `確認表示中 ${node}`;
 }
 
