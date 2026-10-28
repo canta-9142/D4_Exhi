@@ -37,7 +37,8 @@ export function setText(element, text) {
   }
 }
 
-// renderGame fills the game section. els holds the elements of index.html.
+// renderGame fills the game section except the start blockers. els holds
+// the elements of index.html.
 export function renderGame(els, game) {
   els.phase.dataset.phase = game.phase;
   setText(els.phase, phaseLabels[game.phase] ?? game.phase);
@@ -45,7 +46,10 @@ export function renderGame(els, game) {
   setText(els.duration, `/ ${game.durationSeconds} 秒`);
   els.canStart.dataset.canStart = String(game.canStart);
   setText(els.canStart, game.canStart ? "開始できます" : "開始できません");
-  els.blockers.replaceChildren(...game.startBlockers.map((blocker) => {
+}
+
+export function renderBlockers(list, blockers) {
+  list.replaceChildren(...blockers.map((blocker) => {
     const label = blockerLabels[blocker.code];
     return element("li", label ? label(blocker) : `開始できない理由（${blocker.code}）`);
   }));

@@ -5,7 +5,7 @@
 
 import { postCommand } from "./api.js";
 import { Poller } from "./poller.js";
-import { renderBots, renderDevices, renderGame, renderPlayers, setText } from "./view.js";
+import { renderBlockers, renderBots, renderDevices, renderGame, renderPlayers, setText } from "./view.js";
 
 const ui = {
   connection: document.getElementById("connection"),
@@ -20,8 +20,8 @@ const ui = {
     remaining: document.getElementById("game-remaining"),
     duration: document.getElementById("game-duration"),
     canStart: document.getElementById("game-can-start"),
-    blockers: document.getElementById("game-blockers"),
   },
+  blockers: document.getElementById("game-blockers"),
   players: document.getElementById("players-rows"),
   bots: document.getElementById("bots-rows"),
   devices: {
@@ -90,6 +90,10 @@ function canOperate() {
 
 function showSnapshot(snapshot) {
   showSection("game", snapshot.game, () => renderGame(ui.game, snapshot.game));
+  // The blockers are a section of their own, since the game values change
+  // every second while Playing.
+  showSection("blockers", snapshot.game.startBlockers,
+    () => renderBlockers(ui.blockers, snapshot.game.startBlockers));
   showSection("players", snapshot.players, () => renderPlayers(ui.players, snapshot.players));
   showSection("bots", snapshot.bots, () => renderBots(ui.bots, snapshot.bots));
   showSection("devices", { devices: snapshot.devices, preview: snapshot.preview },
