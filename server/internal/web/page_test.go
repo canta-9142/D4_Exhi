@@ -7,8 +7,9 @@ import (
 	"testing"
 )
 
-// elementRef matches the element lookups of the admin page modules.
-var elementRef = regexp.MustCompile(`getElementById\("([^"]*)"\)`)
+// elementRef matches the element lookups of the admin page modules, in
+// either quotes. RE2 has no backreferences, so each quote has its own group.
+var elementRef = regexp.MustCompile(`getElementById\((?:"([^"]*)"|'([^']*)')\)`)
 
 // TestElementIDs checks that every element the modules look up exists in the
 // admin page, so that a renamed id cannot leave a section blank silently.
@@ -39,8 +40,8 @@ func TestElementIDs(t *testing.T) {
 		}
 		for _, m := range elementRef.FindAllSubmatch(src, -1) {
 			found++
-			if !ids[string(m[1])] {
-				t.Errorf("%s looks up #%s, which index.html does not have", name, m[1])
+			if id := string(m[1]) + string(m[2]); !ids[id] {
+				t.Errorf("%s looks up #%s, which index.html does not have", name, id)
 			}
 		}
 		return nil
