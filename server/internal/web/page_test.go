@@ -53,3 +53,26 @@ func TestElementIDs(t *testing.T) {
 		t.Error("no element lookups found in the admin page modules")
 	}
 }
+
+// TestErrorTexts checks that labels.js has the wording of every error code,
+// so that a code added to errors.go is not shown without a wording
+// (admin-ui.md 13).
+func TestErrorTexts(t *testing.T) {
+	src, err := fs.ReadFile(embedded, "static/js/labels.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	block := regexp.MustCompile(`(?s)export const errorTexts = \{(.*?)\n\};`).FindSubmatch(src)
+	if block == nil {
+		t.Fatal("labels.js has no errorTexts")
+	}
+	keys := map[string]bool{}
+	for _, m := range regexp.MustCompile(`(?m)^\s*(\w+):`).FindAllSubmatch(block[1], -1) {
+		keys[string(m[1])] = true
+	}
+	for code := range errorMessages {
+		if !keys[string(code)] {
+			t.Errorf("labels.js errorTexts has no wording for %s", code)
+		}
+	}
+}
