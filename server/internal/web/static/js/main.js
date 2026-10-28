@@ -36,7 +36,7 @@ const page = {
   snapshot: null,
   fetchedAt: null,
   // The Device ID of a selected device that left the list, reported in the
-  // panel until another device is selected.
+  // panel until another device is selected or it is listed again.
   missing: null,
 };
 
@@ -97,6 +97,10 @@ function showSnapshot() {
   const missing = renderDevices(snapshot);
   if (missing !== null) {
     page.missing = missing;
+  } else if (snapshot.devices.some((d) => d.deviceId === page.missing)) {
+    // The panel would say that a listed device is not listed. The selection
+    // stays dropped, as admin-ui.md 5.7 says.
+    page.missing = null;
   }
   showSelection();
   updateDialog(snapshot);
