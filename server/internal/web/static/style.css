@@ -14,6 +14,8 @@
   --bad-bg: #fdecea;
   --warn: #8a5a00;
   --warn-bg: #fff4d6;
+  --accent: #2554c7;
+  --accent-bg: #e6edfc;
   --mono: ui-monospace, "SFMono-Regular", Consolas, monospace;
 }
 
@@ -30,6 +32,8 @@
     --bad-bg: #3a2224;
     --warn: #f5b942;
     --warn-bg: #3a3326;
+    --accent: #7aa2ff;
+    --accent-bg: #1f2a44;
   }
 }
 
@@ -150,17 +154,188 @@ h2 {
   font-size: 1rem;
 }
 
-.json {
-  flex: 1;
-  min-height: 0;
+.stale {
+  flex: 1 0 100%;
   margin: 0;
-  overflow: auto;
-  font: 12px/1.4 var(--mono);
+  padding: 4px 12px;
+  border-radius: 6px;
+  color: var(--bad);
+  background: var(--bad-bg);
+  font-weight: 700;
 }
 
 /* The values are the last ones fetched before the connection was lost. */
-[data-connection="offline"] .json {
+[data-connection="offline"] .section {
+  border-style: dashed;
+}
+
+[data-connection="offline"] .section > :not(h2) {
   opacity: 0.55;
+}
+
+.fields {
+  display: grid;
+  gap: 8px;
+  margin: 0 0 8px;
+}
+
+.fields > div {
+  display: grid;
+  grid-template-columns: 5.5rem minmax(0, 1fr);
+  align-items: baseline;
+}
+
+.fields dt {
+  color: var(--muted);
+}
+
+.fields dd {
+  margin: 0;
+}
+
+.phase {
+  font-size: 1.25rem;
+  font-weight: 700;
+}
+
+.phase[data-phase="Playing"] {
+  color: var(--ok);
+}
+
+.remaining {
+  font-size: 1.75rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.can-start {
+  font-weight: 700;
+}
+
+.can-start[data-can-start="true"] {
+  color: var(--ok);
+}
+
+.can-start[data-can-start="false"] {
+  color: var(--bad);
+}
+
+.blockers {
+  margin: 0;
+  padding-left: 1.25rem;
+  overflow: auto;
+}
+
+.table {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+th,
+td {
+  padding: 3px 8px;
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+  white-space: nowrap;
+}
+
+thead th {
+  position: sticky;
+  top: 0;
+  background: var(--panel);
+  color: var(--muted);
+  font-weight: 400;
+}
+
+.num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+tbody th {
+  font-weight: 400;
+}
+
+.name {
+  display: inline-block;
+  min-width: 1.25em;
+  font-weight: 700;
+}
+
+.node-id,
+.muted,
+.placeholder {
+  color: var(--muted);
+}
+
+.ok {
+  color: var(--ok);
+}
+
+.bad {
+  color: var(--bad);
+}
+
+.warn {
+  color: var(--warn);
+  font-weight: 700;
+}
+
+.fifo {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.meter {
+  display: inline-flex;
+  gap: 2px;
+}
+
+.slot {
+  width: 12px;
+  height: 12px;
+  border: 1px solid var(--muted);
+  border-radius: 2px;
+}
+
+.slot.filled {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.device-id {
+  font-family: var(--mono);
+}
+
+.unassigned {
+  color: var(--warn);
+  font-weight: 700;
+}
+
+.preview-summary {
+  margin: 0 0 4px;
+  color: var(--muted);
+}
+
+.preview-summary[data-active="true"] {
+  color: var(--accent);
+  font-weight: 700;
+}
+
+tr.preview td {
+  background: var(--accent-bg);
+}
+
+tr.preview .preview-cell {
+  color: var(--accent);
+  font-weight: 700;
 }
 
 @media (max-width: 960px) {
@@ -174,7 +349,7 @@ h2 {
     grid-template-areas: "game" "players" "bots" "devices";
   }
 
-  .json {
+  .table {
     max-height: 60vh;
   }
 }

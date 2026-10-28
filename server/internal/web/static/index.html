@@ -20,24 +20,67 @@
     <span id="busy" class="busy" hidden>処理中</span>
   </div>
   <p id="notice" class="notice" role="status" hidden></p>
+  <p id="stale" class="stale" hidden>通信途絶中です。表示は最終取得時点の値のままで、更新されていません。</p>
 </header>
 <!-- Disabling the fieldset disables every operation control inside it. -->
 <fieldset id="operations" class="sections" disabled>
   <section class="section game" aria-labelledby="game-title">
     <h2 id="game-title">ゲーム</h2>
-    <pre id="game-json" class="json"></pre>
+    <dl class="fields">
+      <div>
+        <dt>フェーズ</dt>
+        <dd id="game-phase" class="phase">未取得</dd>
+      </div>
+      <div>
+        <dt>残り時間</dt>
+        <dd><span id="game-remaining" class="remaining">—</span> <span id="game-duration" class="detail"></span></dd>
+      </div>
+      <div>
+        <dt>開始</dt>
+        <dd id="game-can-start" class="can-start">—</dd>
+      </div>
+    </dl>
+    <ul id="game-blockers" class="blockers"></ul>
   </section>
   <section class="section players" aria-labelledby="players-title">
     <h2 id="players-title">プレイヤー</h2>
-    <pre id="players-json" class="json"></pre>
+    <div class="table">
+      <table>
+        <thead>
+          <tr><th scope="col">プレイヤー</th><th scope="col">操作</th><th scope="col">準備</th><th scope="col" class="num">FIFO</th><th scope="col" class="num">スコア</th><th scope="col">ランキング</th></tr>
+        </thead>
+        <tbody id="players-rows">
+          <tr><td class="placeholder" colspan="6">未取得</td></tr>
+        </tbody>
+      </table>
+    </div>
   </section>
   <section class="section bots" aria-labelledby="bots-title">
     <h2 id="bots-title">Bot</h2>
-    <pre id="bots-json" class="json"></pre>
+    <div class="table">
+      <table>
+        <thead>
+          <tr><th scope="col">Bot</th><th scope="col">FIFO</th><th scope="col" class="num">処理速度</th></tr>
+        </thead>
+        <tbody id="bots-rows">
+          <tr><td class="placeholder" colspan="3">未取得</td></tr>
+        </tbody>
+      </table>
+    </div>
   </section>
   <section class="section devices" aria-labelledby="devices-title">
     <h2 id="devices-title">機器</h2>
-    <pre id="devices-json" class="json"></pre>
+    <p id="preview-summary" class="preview-summary">確認表示: 未取得</p>
+    <div class="table">
+      <table>
+        <thead>
+          <tr><th scope="col">Device ID</th><th scope="col">種別</th><th scope="col">接続</th><th scope="col">割当</th><th scope="col">確認表示</th></tr>
+        </thead>
+        <tbody id="devices-rows">
+          <tr><td class="placeholder" colspan="5">未取得</td></tr>
+        </tbody>
+      </table>
+    </div>
   </section>
 </fieldset>
 </body>

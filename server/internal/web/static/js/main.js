@@ -5,6 +5,7 @@
 
 import { postCommand } from "./api.js";
 import { Poller } from "./poller.js";
+import { renderBots, renderDevices, renderGame, renderPlayers, setText } from "./view.js";
 
 const ui = {
   connection: document.getElementById("connection"),
@@ -12,11 +13,21 @@ const ui = {
   updated: document.getElementById("updated"),
   busy: document.getElementById("busy"),
   notice: document.getElementById("notice"),
+  stale: document.getElementById("stale"),
   operations: document.getElementById("operations"),
-  game: document.getElementById("game-json"),
-  players: document.getElementById("players-json"),
-  bots: document.getElementById("bots-json"),
-  devices: document.getElementById("devices-json"),
+  game: {
+    phase: document.getElementById("game-phase"),
+    remaining: document.getElementById("game-remaining"),
+    duration: document.getElementById("game-duration"),
+    canStart: document.getElementById("game-can-start"),
+    blockers: document.getElementById("game-blockers"),
+  },
+  players: document.getElementById("players-rows"),
+  bots: document.getElementById("bots-rows"),
+  devices: {
+    preview: document.getElementById("preview-summary"),
+    tbody: document.getElementById("devices-rows"),
+  },
 };
 
 const page = {
@@ -24,6 +35,9 @@ const page = {
   connection: "connecting",
   failure: null,
   busy: false,
+  // The JSON of the values each section shows, or undefined before the first
+  // snapshot.
+  shown: {},
 };
 
 const poller = new Poller({
@@ -75,15 +89,22 @@ function canOperate() {
 }
 
 function showSnapshot(snapshot) {
-  setText(ui.game, toJSON(snapshot.game));
-  setText(ui.players, toJSON(snapshot.players));
-  setText(ui.bots, toJSON(snapshot.bots));
-  setText(ui.devices, toJSON({ devices: snapshot.devices, preview: snapshot.preview }));
+  showSection("game", snapshot.game, () => renderGame(ui.game, snapshot.game));
+  showSection("players", snapshot.players, () => renderPlayers(ui.players, snapshot.players));
+  showSection("bots", snapshot.bots, () => renderBots(ui.bots, snapshot.bots));
+  showSection("devices", { devices: snapshot.devices, preview: snapshot.preview },
+    () => renderDevices(ui.devices, snapshot.devices, snapshot.preview));
   ui.updated.textContent = `最終取得 ${new Date().toLocaleTimeString("ja-JP")}`;
 }
 
-function toJSON(value) {
-  return JSON.stringify(value, null, 2);
+// showSection renders a section only when its values changed, so that a
+// selection in a table, such as a Device ID being copied, survives the polls.
+function showSection(name, values, render) {
+  const json = JSON.stringify(values);
+  if (page.shown[name] !== json) {
+    render();
+    page.shown[name] = json;
+  }
 }
 
 const connectionLabels = { connecting: "接続中", online: "正常", offline: "通信途絶" };
@@ -92,17 +113,11 @@ function renderStatus() {
   document.body.dataset.connection = page.connection;
   setText(ui.connection, connectionLabels[page.connection]);
   setText(ui.connectionDetail, page.failure ? describeFailure(page.failure) : "");
+  // Until the first snapshot, the sections say that nothing is fetched yet.
+  ui.stale.hidden = page.connection !== "offline" || page.shown.game === undefined;
   ui.busy.hidden = !page.busy;
   ui.operations.disabled = !canOperate();
   ui.operations.setAttribute("aria-busy", String(page.busy));
-}
-
-// setText leaves equal text alone, so that the live region announces only
-// changes and a selection in an unchanged section survives the next poll.
-function setText(element, text) {
-  if (element.textContent !== text) {
-    element.textContent = text;
-  }
 }
 
 const failureReasons = {
