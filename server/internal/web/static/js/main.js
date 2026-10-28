@@ -45,6 +45,7 @@ const poller = new Poller({
 // disabled until a GET sent after the result has updated the page. The
 // operation is never resent: after a timeout, a network failure, 500 or 503
 // its result is unknown, and the administrator decides from the new state.
+// An exception in the page is rethrown after the same refetch.
 export async function runCommand(command) {
   if (!canOperate()) {
     return null;
@@ -56,6 +57,10 @@ export async function runCommand(command) {
     const result = await postCommand(command);
     showResult(command, result);
     return result;
+  } catch (err) {
+    // The POST may have been sent before the exception.
+    showNotice("unknown", `操作の結果は不明です（画面の処理でエラーが起きました）。${unknownAdvice}`);
+    throw err;
   } finally {
     // Even after an exception, the operations are enabled again only once
     // the refetch has updated the page, since the POST may have been sent.
@@ -118,6 +123,8 @@ function describeFailure(result) {
 // 6). 503, for example, also comes when app stops after receiving it.
 const unknownStatuses = [500, 503];
 
+const unknownAdvice = "自動では再送しません。再取得した状態を確認し、必要なら操作し直してください。";
+
 // showResult shows the outcome of a POST until the next operation. Only the
 // code and the status decide the outcome; the message is just displayed.
 function showResult(command, result) {
@@ -127,8 +134,7 @@ function showResult(command, result) {
   } else if (result.kind === "error" && !unknownStatuses.includes(result.status)) {
     showNotice("rejected", `${name}は拒否されました: ${describeFailure(result)}`);
   } else {
-    showNotice("unknown", `${name}の結果は不明です（${describeFailure(result)}）。` +
-      "自動では再送しません。再取得した状態を確認し、必要なら操作し直してください。");
+    showNotice("unknown", `${name}の結果は不明です（${describeFailure(result)}）。${unknownAdvice}`);
   }
 }
 
