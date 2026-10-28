@@ -50,14 +50,19 @@ export async function runCommand(command) {
     return null;
   }
   page.busy = true;
-  showNotice("pending", `「${command.type}」を送信しています。`);
-  renderStatus();
-  const result = await postCommand(command);
-  showResult(command, result);
-  await poller.refresh();
-  page.busy = false;
-  renderStatus();
-  return result;
+  try {
+    showNotice("pending", `「${command.type}」を送信しています。`);
+    renderStatus();
+    const result = await postCommand(command);
+    showResult(command, result);
+    return result;
+  } finally {
+    // Even after an exception, the operations are enabled again only once
+    // the refetch has updated the page, since the POST may have been sent.
+    await poller.refresh();
+    page.busy = false;
+    renderStatus();
+  }
 }
 
 function canOperate() {
