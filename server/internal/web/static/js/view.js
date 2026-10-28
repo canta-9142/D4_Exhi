@@ -150,14 +150,16 @@ function updatePlayerRow(row, player, phase, devices) {
   }
   setText(fifoCell, String(player.fifoLength));
   setCell(scoreCell, String(player.score), phase === "Playing" || phase === "Finished" ? "num strong" : "num");
-  // The rank needs a Snapshot field that web.md does not have yet
-  // (admin-ui.md 14), so an eligible player has no rank to show.
   if (player.rankingEligible === null) {
     setCell(rankCell, "—", "muted");
   } else if (!player.rankingEligible) {
     setCell(rankCell, "対象外", "warn");
+  } else if (phase !== "Finished") {
+    setCell(rankCell, "対象", "");
+  } else if (player.rank === null) {
+    setCell(rankCell, "—", "muted");
   } else {
-    setCell(rankCell, phase === "Finished" ? "—" : "対象", "");
+    setCell(rankCell, `${player.rank}位`, player.rank === 1 ? "strong" : "");
   }
 }
 

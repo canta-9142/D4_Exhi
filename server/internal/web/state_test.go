@@ -112,14 +112,14 @@ func TestStateExample(t *testing.T) {
     ]
   },
   "players": [
-    {"nodeId": "P1", "mode": "manual", "ready": false, "fifoLength": 0, "score": 0, "rankingEligible": null},
-    {"nodeId": "P2", "mode": "auto", "ready": false, "fifoLength": 0, "score": 0, "rankingEligible": null},
-    {"nodeId": "P3", "mode": "auto", "ready": false, "fifoLength": 0, "score": 0, "rankingEligible": null},
-    {"nodeId": "P4", "mode": "auto", "ready": false, "fifoLength": 0, "score": 0, "rankingEligible": null},
-    {"nodeId": "P5", "mode": "auto", "ready": false, "fifoLength": 0, "score": 0, "rankingEligible": null},
-    {"nodeId": "P6", "mode": "auto", "ready": false, "fifoLength": 0, "score": 0, "rankingEligible": null},
-    {"nodeId": "P7", "mode": "auto", "ready": false, "fifoLength": 0, "score": 0, "rankingEligible": null},
-    {"nodeId": "P8", "mode": "auto", "ready": false, "fifoLength": 0, "score": 0, "rankingEligible": null}
+    {"nodeId": "P1", "mode": "manual", "ready": false, "fifoLength": 0, "score": 0, "rankingEligible": null, "rank": null},
+    {"nodeId": "P2", "mode": "auto", "ready": false, "fifoLength": 0, "score": 0, "rankingEligible": null, "rank": null},
+    {"nodeId": "P3", "mode": "auto", "ready": false, "fifoLength": 0, "score": 0, "rankingEligible": null, "rank": null},
+    {"nodeId": "P4", "mode": "auto", "ready": false, "fifoLength": 0, "score": 0, "rankingEligible": null, "rank": null},
+    {"nodeId": "P5", "mode": "auto", "ready": false, "fifoLength": 0, "score": 0, "rankingEligible": null, "rank": null},
+    {"nodeId": "P6", "mode": "auto", "ready": false, "fifoLength": 0, "score": 0, "rankingEligible": null, "rank": null},
+    {"nodeId": "P7", "mode": "auto", "ready": false, "fifoLength": 0, "score": 0, "rankingEligible": null, "rank": null},
+    {"nodeId": "P8", "mode": "auto", "ready": false, "fifoLength": 0, "score": 0, "rankingEligible": null, "rank": null}
   ],
   "bots": [
     {"nodeId": "B1", "fifoLength": 0, "ratePps": 1},
@@ -150,7 +150,7 @@ func TestStatePlaying(t *testing.T) {
 	if got := compact(t, string(mustField(t, w, "game"))); got != wantGame {
 		t.Errorf("game = %s, want %s", got, wantGame)
 	}
-	wantP3 := `{"nodeId":"P3","mode":"manual","ready":true,"fifoLength":5,"score":2147483647,"rankingEligible":true}`
+	wantP3 := `{"nodeId":"P3","mode":"manual","ready":true,"fifoLength":5,"score":2147483647,"rankingEligible":true,"rank":null}`
 	if got := compact(t, string(mustField(t, w, "players", 2))); got != wantP3 {
 		t.Errorf("players[2] = %s, want %s", got, wantP3)
 	}
@@ -199,6 +199,58 @@ func TestStateEmpty(t *testing.T) {
 			}
 			if got := string(body.Game["startBlockers"]); got != "[]" {
 				t.Errorf("startBlockers = %s, want []", got)
+			}
+		})
+	}
+}
+
+func TestStateRank(t *testing.T) {
+	rank := func(n int) *int { return &n }
+	// Scores 300, 300, 100 and an ineligible 900: app gives the three ranked
+	// players 1, 1 and 3 and leaves the fourth without a rank.
+	finished := func() app.Snapshot {
+		s := baseSnapshot()
+		s.Phase = app.Finished
+		scores := []int{300, 300, 100, 900}
+		ranks := []*int{rank(1), rank(1), rank(3), nil}
+		for i, score := range scores {
+			s.Nodes[i].Score, s.Nodes[i].RankingEligible, s.Nodes[i].Rank = score, ranks[i] != nil, ranks[i]
+		}
+		return s
+	}
+	for _, tc := range []struct {
+		name string
+		s    app.Snapshot
+		want []string
+	}{
+		{"Preparing", func() app.Snapshot { s := baseSnapshot(); s.Phase = app.Preparing; return s }(),
+			[]string{"null", "null", "null", "null"}},
+		{"Playing", func() app.Snapshot {
+			s := baseSnapshot()
+			s.Phase = app.Playing
+			for i := range s.Nodes {
+				s.Nodes[i].RankingEligible = true
+			}
+			return s
+		}(), []string{"null", "null", "null", "null"}},
+		{"Finished", finished(), []string{"1", "1", "3", "null"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w, body := getState(t, tc.s)
+			if len(body.Players) != app.PlayerCount {
+				t.Fatalf("got %d players, want %d", len(body.Players), app.PlayerCount)
+			}
+			for i, p := range body.Players {
+				raw, ok := p["rank"]
+				if !ok {
+					t.Fatalf("players[%d] has no rank: %s", i, mustField(t, w, "players", i))
+				}
+				if i < len(tc.want) && string(raw) != tc.want[i] {
+					t.Errorf("players[%d].rank = %s, want %s", i, raw, tc.want[i])
+				}
+				if i >= len(tc.want) && string(raw) != "null" {
+					t.Errorf("players[%d].rank = %s, want null", i, raw)
+				}
 			}
 		})
 	}

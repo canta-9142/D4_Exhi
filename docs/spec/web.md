@@ -58,7 +58,8 @@ JSONはUTF-8とし、APIが生成する応答のContent-Typeは`application/json
       "ready": false,
       "fifoLength": 0,
       "score": 0,
-      "rankingEligible": null
+      "rankingEligible": null,
+      "rank": null
     }
   ],
   "bots": [
@@ -105,8 +106,11 @@ JSONはUTF-8とし、APIが生成する応答のContent-Typeは`application/json
 | fifoLength | 正本FIFOの件数を表す非負整数。確認表示中も正本の件数を返す |
 | score | 現在スコアの整数。0〜2147483647 |
 | rankingEligible | Preparingでは未確定を表すnull。Playing・Finishedでは当該ゲームのランキング資格を表す真偽値 |
+| rank | Finishedのランキング対象者は最終順位を表す1〜8の整数。Preparing・Playing、およびFinishedのランキング対象外はnull |
 
 `rankingEligible`はStartで設定した資格とゲーム中の失効を反映し、Finishedでは確定した結果を保持する。Finishedでのモード・割当変更から再計算しない。Reset後はPreparingの`null`へ戻す。
+
+`rank`は`app`がFinishedへの遷移時に確定した順位をそのまま返す。順位の決め方は[ゲームのルール](../rules.md#最終順位)に従い、同点の対象者は同順位とする。`rankingEligible`と同じく、Finishedでのモード・割当変更から再計算しない。Reset後はPreparingの`null`へ戻す。Playing中は途中の順位を返さず、常にnullとする。Finishedでは、この値はプレイヤーの`summary`の`rank`と同じであり、`rank`が整数であることと`rankingEligible`が`true`であることは同値となる。
 
 | botsの各要素 | 型と意味 |
 |---|---|

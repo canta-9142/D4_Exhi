@@ -77,7 +77,8 @@ function isSnapshot(s) {
       (b.nodeIds === undefined || (Array.isArray(b.nodeIds) && b.nodeIds.every(isString)))) &&
     isListOf(players, (p) => isString(p.nodeId) && isString(p.mode) && typeof p.ready === "boolean" &&
       Number.isInteger(p.fifoLength) && Number.isInteger(p.score) &&
-      (p.rankingEligible === null || typeof p.rankingEligible === "boolean")) &&
+      (p.rankingEligible === null || typeof p.rankingEligible === "boolean") &&
+      (p.rank === null || Number.isInteger(p.rank))) &&
     isListOf(bots, (b) => isString(b.nodeId) && Number.isInteger(b.fifoLength) && Number.isFinite(b.ratePps)) &&
     isListOf(devices, (d) => isString(d.deviceId) && isString(d.kind) && typeof d.connected === "boolean" &&
       (d.assignment === null || isNode(d.assignment))) &&
