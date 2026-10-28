@@ -174,13 +174,13 @@ func (a *App) changeAssignments(c Command) error {
 
 // Save the complete candidate before changing any state or notifying an MCU.
 func (a *App) applyAssignments(updates map[string]NodeID, explicit bool) error {
-	before := a.deviceAssignments(nil, false)
-	after := a.deviceAssignments(updates, explicit)
+	before := a.assignmentCandidate(nil, false)
+	after := a.assignmentCandidate(updates, explicit)
 	if a.options.SaveDevices != nil && !slices.Equal(before, after) {
 		if err := a.options.SaveDevices(after); err != nil {
 			err = fmt.Errorf("save device assignments: %w", err)
 			a.options.Logger.Error("device assignments not committed", "error", err)
-			if errors.Is(err, ErrDeviceSaveUncertain) {
+			if errors.Is(err, ErrSaveUncertain) {
 				a.fatalErr = err
 			}
 			return err
@@ -194,7 +194,7 @@ func (a *App) applyAssignments(updates map[string]NodeID, explicit bool) error {
 		}
 		if d.node != node {
 			changed = append(changed, uid)
-			if d.node != 0 && !slices.ContainsFunc(after, func(next DeviceAssignment) bool {
+			if d.node != 0 && !slices.ContainsFunc(after, func(next SavedDevice) bool {
 				return next.Kind == d.kind && next.Node == d.node
 			}) {
 				a.assignPending = true
@@ -233,8 +233,8 @@ func (a *App) applyAssignments(updates map[string]NodeID, explicit bool) error {
 	return nil
 }
 
-func (a *App) deviceAssignments(updates map[string]NodeID, explicit bool) []DeviceAssignment {
-	result := make([]DeviceAssignment, 0, len(a.devices))
+func (a *App) assignmentCandidate(updates map[string]NodeID, explicit bool) []SavedDevice {
+	result := make([]SavedDevice, 0, len(a.devices))
 	for uid, d := range a.devices {
 		node, excluded := d.node, d.noAuto
 		if next, ok := updates[uid]; ok {
@@ -242,9 +242,9 @@ func (a *App) deviceAssignments(updates map[string]NodeID, explicit bool) []Devi
 			excluded = excluded || (explicit && next == 0)
 		}
 		if node != 0 || excluded {
-			result = append(result, DeviceAssignment{uid, d.kind, node, excluded})
+			result = append(result, SavedDevice{uid, d.kind, node, excluded})
 		}
 	}
-	slices.SortFunc(result, func(a, b DeviceAssignment) int { return strings.Compare(a.DeviceID, b.DeviceID) })
+	slices.SortFunc(result, func(a, b SavedDevice) int { return strings.Compare(a.DeviceID, b.DeviceID) })
 	return result
 }

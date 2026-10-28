@@ -20,17 +20,18 @@ type Options struct {
 	Send   func(SessionID, Message) error
 	Close  func(SessionID)
 	Logger *slog.Logger
-	// InitialDevices must have passed LoadDeviceAssignments validation.
-	InitialDevices []DeviceAssignment
+	// Devices must have passed LoadDevices validation.
+	Devices []SavedDevice
 	// SaveDevices synchronously persists the complete candidate before commit.
 	// Nil allows in-memory operation. It must not call back into app.
-	SaveDevices func([]DeviceAssignment) error
+	SaveDevices func([]SavedDevice) error
 }
 
 type session struct {
 	uid            string
 	failed         bool
 	waitingHello   bool
+	identification uint64
 	sync           string
 	lastRID        uint32
 	hasRID         bool
@@ -82,7 +83,7 @@ func New(options Options) *App {
 		options: options, requests: make(chan request), done: make(chan struct{}), now: time.Now,
 	}
 	a.game = newGame(a.notify)
-	for _, d := range options.InitialDevices {
+	for _, d := range options.Devices {
 		a.devices[d.DeviceID] = &device{kind: d.Kind, node: d.Node, noAuto: d.AutoAssignExcluded}
 	}
 	return a
@@ -310,7 +311,7 @@ func (a *App) Disconnected(ctx context.Context, id SessionID) error {
 func (a *App) MessageReceived(ctx context.Context, id SessionID, message IncomingMessage) error {
 	return a.submit(ctx, true, func(time.Time) error {
 		s := a.sessions[id]
-		if s == nil {
+		if s == nil || message.Identification == 0 || message.Identification != s.identification {
 			return nil
 		}
 		validHello := message.Type == "hello" && validIdentity(message.Kind, message.UID)
@@ -450,9 +451,18 @@ func (a *App) identify(id SessionID, now time.Time) {
 	if s == nil {
 		return
 	}
+	begin := !s.waitingHello
+	if begin {
+		if s.identification == ^uint64(0) {
+			a.options.Logger.Error("identification generations exhausted", "session", id)
+			a.closeSession(id)
+			return
+		}
+		s.identification++
+	}
 	s.waitingHello, s.lastIdentify, s.sync, s.hasStatus = true, now, "", false
 	s.phasePending, s.summaryPending, s.forceStatus = false, false, false
-	a.send(id, Message{Type: "identify", Data: struct{}{}})
+	a.send(id, Message{Type: "identify", Data: struct{}{}, BeginIdentification: begin, Identification: s.identification})
 }
 
 func (a *App) identifyPending(now time.Time) {

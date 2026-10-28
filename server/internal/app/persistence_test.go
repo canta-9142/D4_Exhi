@@ -4,14 +4,18 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"log/slog"
+	"os"
 	"path/filepath"
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 )
 
-func (h *harness) setSaveDevices(save func([]DeviceAssignment) error) {
+func (h *harness) setSaveDevices(save func([]SavedDevice) error) {
 	h.t.Helper()
 	h.must(h.a.submit(h.ctx, false, func(time.Time) error {
 		h.a.options.SaveDevices = save
@@ -19,10 +23,10 @@ func (h *harness) setSaveDevices(save func([]DeviceAssignment) error) {
 	}))
 }
 
-func reservedPlayers() []DeviceAssignment {
-	devices := make([]DeviceAssignment, 0, PlayerCount)
+func reservedPlayers() []SavedDevice {
+	devices := make([]SavedDevice, 0, PlayerCount)
 	for node := NodeID(1); node <= PlayerCount; node++ {
-		devices = append(devices, DeviceAssignment{DeviceID: fmt.Sprintf("F%011X", node), Kind: PlayerDevice, Node: node})
+		devices = append(devices, SavedDevice{DeviceID: fmt.Sprintf("F%011X", node), Kind: PlayerDevice, Node: node})
 	}
 	return devices
 }
@@ -31,7 +35,7 @@ func TestAssignmentsPersistAndRestoreAcrossRestart(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "devices.json")
 	store := &DeviceStore{Path: path}
 	saves := 0
-	save := func(devices []DeviceAssignment) error {
+	save := func(devices []SavedDevice) error {
 		saves++
 		return store.Save(devices)
 	}
@@ -51,12 +55,12 @@ func TestAssignmentsPersistAndRestoreAcrossRestart(t *testing.T) {
 	if saves != before+1 {
 		t.Fatalf("replacement was not one save: %d -> %d", before, saves)
 	}
-	want := []DeviceAssignment{
+	want := []SavedDevice{
 		{testUID, PlayerDevice, 0, true},
 		{replacement, PlayerDevice, 2, false},
 		{led, LEDDevice, 9, false},
 	}
-	devices, err := LoadDeviceAssignments(path)
+	devices, err := LoadDevices(path)
 	h.must(err)
 	if !reflect.DeepEqual(devices, want) {
 		t.Fatalf("persisted mapping: %v, want %v", devices, want)
@@ -69,7 +73,7 @@ func TestAssignmentsPersistAndRestoreAcrossRestart(t *testing.T) {
 	if saves != before {
 		t.Fatal("preview, Reset or disconnect persisted temporary state")
 	}
-	restored := newHarnessWithOptions(t, Options{InitialDevices: devices, SaveDevices: save})
+	restored := newHarnessWithOptions(t, Options{Devices: devices, SaveDevices: save})
 	snapshot := restored.state()
 	if snapshot.Phase != Preparing || snapshot.Preview != nil || len(snapshot.Devices) != len(want) {
 		t.Fatalf("bad restored state: %+v", snapshot)
@@ -105,7 +109,7 @@ func TestAssignmentsPersistAndRestoreAcrossRestart(t *testing.T) {
 		t.Fatalf("bad restored synchronization: %v", messages)
 	}
 	restored.must(restored.a.Connected(restored.ctx, "wrong-kind"))
-	if err := restored.a.MessageReceived(restored.ctx, "wrong-kind", IncomingMessage{Type: "hello", Kind: LEDDevice, UID: replacement}); err == nil {
+	if err := restored.a.MessageReceived(restored.ctx, "wrong-kind", IncomingMessage{Type: "hello", Kind: LEDDevice, UID: replacement, Identification: restored.identification("wrong-kind")}); err == nil {
 		t.Fatal("restored kind mismatch accepted")
 	}
 	if d := restored.device(replacement); d.Kind != PlayerDevice || d.Node != 2 || d.Session != "replacement" {
@@ -128,12 +132,12 @@ func TestFailedAssignmentSaveLeavesStateAndNotificationsUnchanged(t *testing.T) 
 			h.ready("other")
 			h.execute(Command{Operation: SetDevicePreview, DeviceID: testUID})
 			before := h.state()
-			beforeAssignments := h.a.deviceAssignments(nil, false)
+			beforeAssignments := h.a.assignmentCandidate(nil, false)
 			failure := errors.New("disk full")
 			calls := 0
-			h.setSaveDevices(func(candidate []DeviceAssignment) error {
+			h.setSaveDevices(func(candidate []SavedDevice) error {
 				calls++
-				if !slices.Equal(h.a.deviceAssignments(nil, false), beforeAssignments) || h.a.preview == nil || !h.a.game.nodes[2].ready {
+				if !slices.Equal(h.a.assignmentCandidate(nil, false), beforeAssignments) || h.a.preview == nil || !h.a.game.nodes[2].ready {
 					t.Error("state changed before saving")
 				}
 				return failure
@@ -142,7 +146,7 @@ func TestFailedAssignmentSaveLeavesStateAndNotificationsUnchanged(t *testing.T) 
 			if err := h.a.Execute(h.ctx, command); !errors.Is(err, failure) {
 				t.Fatalf("save error lost: %v", err)
 			}
-			if calls != 1 || !reflect.DeepEqual(h.state(), before) || !slices.Equal(h.a.deviceAssignments(nil, false), beforeAssignments) || len(h.messages()) != 0 {
+			if calls != 1 || !reflect.DeepEqual(h.state(), before) || !slices.Equal(h.a.assignmentCandidate(nil, false), beforeAssignments) || len(h.messages()) != 0 {
 				t.Fatal("failed save changed assignment, exclusion, mode, ready, preview or notifications")
 			}
 		})
@@ -158,9 +162,9 @@ func TestNotificationFailureKeepsDurableAssignment(t *testing.T) {
 	h.failType = "config"
 	h.mu.Unlock()
 	h.execute(Command{Operation: SetDeviceAssignment, DeviceID: testUID, Node: 2})
-	devices, err := LoadDeviceAssignments(path)
+	devices, err := LoadDevices(path)
 	h.must(err)
-	if !slices.Equal(devices, []DeviceAssignment{{testUID, PlayerDevice, 2, false}}) {
+	if !slices.Equal(devices, []SavedDevice{{testUID, PlayerDevice, 2, false}}) {
 		t.Fatalf("send failure rolled back file: %v", devices)
 	}
 	if d := h.device(testUID); d.Connected || d.Node != 2 {
@@ -169,7 +173,7 @@ func TestNotificationFailureKeepsDurableAssignment(t *testing.T) {
 }
 
 func TestExclusionOnlyChangeIsPersistedAndIdenticalRequestsDoNotWrite(t *testing.T) {
-	h := newHarnessWithOptions(t, Options{InitialDevices: reservedPlayers()})
+	h := newHarnessWithOptions(t, Options{Devices: reservedPlayers()})
 	h.must(h.a.Connected(h.ctx, "spare"))
 	h.message("spare", IncomingMessage{Type: "hello", UID: testUID})
 	if h.device(testUID).Node != 0 {
@@ -178,7 +182,7 @@ func TestExclusionOnlyChangeIsPersistedAndIdenticalRequestsDoNotWrite(t *testing
 	saves := 0
 	failed := true
 	failure := errors.New("disk full")
-	h.setSaveDevices(func(devices []DeviceAssignment) error {
+	h.setSaveDevices(func(devices []SavedDevice) error {
 		saves++
 		if devices[0].DeviceID != testUID || !devices[0].AutoAssignExcluded || devices[0].Node != 0 {
 			t.Errorf("missing exclusion-only candidate: %v", devices)
@@ -204,7 +208,7 @@ func TestExclusionOnlyChangeIsPersistedAndIdenticalRequestsDoNotWrite(t *testing
 func TestAutomaticSaveFailurePreservesConnectionAndRetriesOnTrigger(t *testing.T) {
 	saves := 0
 	failed := true
-	h := newHarnessWithOptions(t, Options{SaveDevices: func([]DeviceAssignment) error {
+	h := newHarnessWithOptions(t, Options{SaveDevices: func([]SavedDevice) error {
 		saves++
 		if failed {
 			return errors.New("disk full")
@@ -230,12 +234,12 @@ func TestAutomaticSaveFailurePreservesConnectionAndRetriesOnTrigger(t *testing.T
 
 func TestFollowUpAutomaticSaveFailureDoesNotUndoSuccessfulOperation(t *testing.T) {
 	devices := reservedPlayers()
-	h := newHarnessWithOptions(t, Options{InitialDevices: devices})
+	h := newHarnessWithOptions(t, Options{Devices: devices})
 	h.must(h.a.Connected(h.ctx, "spare"))
 	h.message("spare", IncomingMessage{Type: "hello", UID: testUID})
-	var committed []DeviceAssignment
+	var committed []SavedDevice
 	calls := 0
-	h.setSaveDevices(func(candidate []DeviceAssignment) error {
+	h.setSaveDevices(func(candidate []SavedDevice) error {
 		calls++
 		if calls == 2 {
 			return errors.New("disk full")
@@ -244,7 +248,7 @@ func TestFollowUpAutomaticSaveFailureDoesNotUndoSuccessfulOperation(t *testing.T
 		return nil
 	})
 	h.execute(Command{Operation: SetDeviceAssignment, DeviceID: devices[0].DeviceID})
-	if calls != 2 || h.device(devices[0].DeviceID).Node != 0 || !h.a.devices[devices[0].DeviceID].noAuto || h.device(testUID).Node != 0 || !slices.Equal(committed, h.a.deviceAssignments(nil, false)) {
+	if calls != 2 || h.device(devices[0].DeviceID).Node != 0 || !h.a.devices[devices[0].DeviceID].noAuto || h.device(testUID).Node != 0 || !slices.Equal(committed, h.a.assignmentCandidate(nil, false)) {
 		t.Fatal("follow-up save failure undid successful unassignment")
 	}
 	h.execute(Command{Operation: Reset})
@@ -269,7 +273,7 @@ func TestAssignmentRetryRequiresNewlyFreedRole(t *testing.T) {
 			h.connect("first", testUID, 1)
 			h.connect("second", testUID2, 2)
 			writes := 0
-			h.setSaveDevices(func(candidate []DeviceAssignment) error {
+			h.setSaveDevices(func(candidate []SavedDevice) error {
 				writes++
 				if len(candidate) == 3 {
 					return errors.New("automatic save failed")
@@ -303,14 +307,14 @@ func TestUncertainSaveStopsAppWithoutCommitOrFurtherNotifications(t *testing.T) 
 			if automatic {
 				h.must(h.a.Connected(h.ctx, "new"))
 			}
-			beforeAssignments := h.a.deviceAssignments(nil, false)
+			beforeAssignments := h.a.assignmentCandidate(nil, false)
 			beforeNodes, beforePreview := h.a.game.nodes, *h.a.preview
-			h.wantRunError = ErrDeviceSaveUncertain
-			h.setSaveDevices(func([]DeviceAssignment) error { return fmt.Errorf("directory sync: %w", ErrDeviceSaveUncertain) })
+			h.wantRunError = ErrSaveUncertain
+			h.setSaveDevices(func([]SavedDevice) error { return fmt.Errorf("directory sync: %w", ErrSaveUncertain) })
 			h.clear()
 			var err error
 			if automatic {
-				err = h.a.MessageReceived(h.ctx, "new", IncomingMessage{Type: "hello", UID: "223344AABBCC", Kind: PlayerDevice})
+				err = h.a.MessageReceived(h.ctx, "new", IncomingMessage{Type: "hello", UID: "223344AABBCC", Kind: PlayerDevice, Identification: h.identification("new")})
 			} else {
 				err = h.a.Execute(h.ctx, Command{Operation: SwapDeviceAssignments, DeviceID: testUID, OtherDeviceID: testUID2})
 			}
@@ -322,7 +326,7 @@ func TestUncertainSaveStopsAppWithoutCommitOrFurtherNotifications(t *testing.T) 
 			case <-h.ctx.Done():
 				t.Fatal("uncertain save did not stop app")
 			}
-			if !slices.Equal(h.a.deviceAssignments(nil, false), beforeAssignments) || !reflect.DeepEqual(h.a.game.nodes, beforeNodes) || h.a.preview == nil || *h.a.preview != beforePreview {
+			if !slices.Equal(h.a.assignmentCandidate(nil, false), beforeAssignments) || !reflect.DeepEqual(h.a.game.nodes, beforeNodes) || h.a.preview == nil || *h.a.preview != beforePreview {
 				t.Fatal("uncertain save committed candidate or changed game/preview state")
 			}
 			if len(h.messages()) != 0 || len(h.closed) != len(h.a.sessions) {
@@ -340,11 +344,11 @@ func TestUncertainAutomaticSaveDuringCatchUpStopsBeforeRequestedCommand(t *testi
 	h.start()
 	h.must(h.a.Connected(h.ctx, "pending"))
 	h.message("pending", IncomingMessage{Type: "hello", UID: testUID})
-	h.wantRunError = ErrDeviceSaveUncertain
+	h.wantRunError = ErrSaveUncertain
 	var sentAtFailure int
-	h.setSaveDevices(func([]DeviceAssignment) error {
+	h.setSaveDevices(func([]SavedDevice) error {
 		sentAtFailure = len(h.messages())
-		return ErrDeviceSaveUncertain
+		return ErrSaveUncertain
 	})
 	h.clock.Store(int64(GameDuration))
 	if err := h.a.Execute(h.ctx, Command{Operation: Reset}); err == nil {
@@ -354,4 +358,239 @@ func TestUncertainAutomaticSaveDuringCatchUpStopsBeforeRequestedCommand(t *testi
 	if h.a.game.phase != Finished || h.a.devices[testUID].node != 0 || len(h.messages()) != sentAtFailure {
 		t.Fatal("processed command or sent notifications after fatal catch-up failure")
 	}
+}
+
+func TestDeviceFileRoundTripAndValidation(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "new", "nested", "devices.json")
+	if devices, err := LoadDevices(path); err != nil || len(devices) != 0 {
+		t.Fatalf("missing file: %v, %v", devices, err)
+	}
+	input := []SavedDevice{
+		{"AABBCCDDEEFF", PlayerDevice, 1, false},
+		{"001122334455", LEDDevice, 1, false}, // Same node, different kind.
+		{"112233445566", PlayerDevice, 0, true},
+		{"FFFFFFFFFFFF", LEDDevice, 0, false}, // Not saved.
+	}
+	if err := saveDeviceFixture(path, input); err != nil {
+		t.Fatal(err)
+	}
+	want := []SavedDevice{input[1], input[2], input[0]}
+	got, err := LoadDevices(path)
+	if err != nil || !reflect.DeepEqual(got, want) {
+		t.Fatalf("round trip: %+v, %v; want %+v", got, err, want)
+	}
+	if err := saveDeviceFixture(path, nil); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := os.ReadFile(path)
+	if !strings.Contains(string(data), `"devices": []`) {
+		t.Fatalf("empty table is not an array: %s", data)
+	}
+
+	const entry = `{"deviceId":"AABBCCDDEEFF","kind":"player","nodeId":"P1","autoAssignExcluded":false}`
+	file := func(entries string) string { return `{"version":1,"devices":[` + entries + `]}` }
+	invalid := []string{
+		"", "null", "{}", `{"version":2,"devices":[]}`, `{"version":"1","devices":[]}`,
+		`{"version":1,"devices":null}`, `{"devices":[]}`, `{"version":1}`,
+		`{"Version":1,"devices":[]}`, file(strings.Replace(entry, "deviceId", "DeviceId", 1)),
+		file("null"), file(strings.Replace(entry, `"deviceId":"AABBCCDDEEFF",`, "", 1)),
+		file(strings.Replace(entry, `"kind":"player",`, "", 1)),
+		file(strings.Replace(entry, `"nodeId":"P1",`, "", 1)),
+		file(strings.Replace(entry, `false`, `null`, 1)),
+		file(strings.Replace(entry, `false`, `0`, 1)),
+		file(strings.Replace(entry, `AABBCCDDEEFF`, `aabbccddeeff`, 1)),
+		file(strings.Replace(entry, `"player"`, `"unknown"`, 1)),
+		file(strings.Replace(entry, `"P1"`, `"B1"`, 1)),
+		file(strings.Replace(entry, `"P1"`, `1`, 1)),
+		file(entry + "," + entry),
+		file(entry + "," + strings.Replace(entry, "AABBCCDDEEFF", "112233445566", 1)),
+		file(entry) + "{}", string([]byte{0xff}),
+	}
+	for _, text := range invalid {
+		if err := os.WriteFile(path, []byte(text), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if devices, err := LoadDevices(path); err == nil || devices != nil {
+			t.Errorf("invalid file accepted/partially restored: %q => %+v, %v", text, devices, err)
+		}
+	}
+	if _, err := LoadDevices(filepath.Dir(path)); err == nil {
+		t.Fatal("directory accepted as a device file")
+	}
+}
+
+func TestDeviceFileFailuresBeforeAndAfterRename(t *testing.T) {
+	devices := []SavedDevice{{testUID, PlayerDevice, 1, false}}
+	for _, afterRename := range []bool{false, true} {
+		t.Run(map[bool]string{false: "before-rename", true: "after-rename"}[afterRename], func(t *testing.T) {
+			root := t.TempDir()
+			path := filepath.Join(root, "new", "devices.json")
+			if afterRename {
+				if err := saveDeviceFixture(path, nil); err != nil {
+					t.Fatal(err)
+				}
+			}
+			failure := errors.New("directory sync failed")
+			store := &DeviceStore{Path: path}
+			err := store.save(devices, func(dir string) error {
+				if !afterRename || dir == filepath.Dir(path) {
+					return failure
+				}
+				return nil
+			})
+			if !errors.Is(err, failure) || errors.Is(err, ErrSaveUncertain) != afterRename {
+				t.Fatalf("save failure classification: %v", err)
+			}
+			got, err := LoadDevices(path)
+			if err != nil || (afterRename && !reflect.DeepEqual(got, devices)) || (!afterRename && len(got) != 0) {
+				t.Fatalf("unexpected file after failure: %+v, %v", got, err)
+			}
+			leftovers, err := filepath.Glob(filepath.Join(filepath.Dir(path), ".devices-*"))
+			if err != nil || len(leftovers) != 0 {
+				t.Fatalf("temporary files left behind: %v, %v", leftovers, err)
+			}
+		})
+	}
+	// A failed rename must leave the existing target intact, including when it
+	// is not a file. No temporary file can become the restore source.
+	path := filepath.Join(t.TempDir(), "devices.json")
+	if err := os.Mkdir(path, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := saveDeviceFixture(path, devices); err == nil || errors.Is(err, ErrSaveUncertain) {
+		t.Fatalf("rename onto directory: %v", err)
+	}
+	if info, err := os.Stat(path); err != nil || !info.IsDir() {
+		t.Fatalf("failed rename changed target: %v", err)
+	}
+}
+
+func setSave(t *testing.T, h *harness, save func([]SavedDevice) error) {
+	t.Helper()
+	h.must(h.a.submit(h.ctx, false, func(time.Time) error { h.a.options.SaveDevices = save; return nil }))
+}
+
+func TestAssignmentsAreSavedBeforeAnyObservableChange(t *testing.T) {
+	h := newHarness(t)
+	h.connect("p1", testUID, 1)
+	h.connect("p2", "112233445566", 2)
+	h.execute(Command{Operation: SetNodeEnabled, Node: 1, Enabled: true})
+	h.ready("p1")
+	h.execute(Command{Operation: SetDevicePreview, DeviceID: "112233445566"})
+	before := h.state()
+	h.clear()
+	failure := errors.New("disk write failed")
+	setSave(t, h, func([]SavedDevice) error { return failure })
+	swap := Command{Operation: SwapDeviceAssignments, DeviceID: testUID, OtherDeviceID: "112233445566"}
+	if err := h.a.Execute(h.ctx, swap); !errors.Is(err, failure) {
+		t.Fatalf("failed swap: %v", err)
+	}
+	if got := h.state(); !reflect.DeepEqual(got, before) || len(h.messages()) != 0 {
+		t.Fatal("save failure changed assignments, manual/ready, preview or MCU output")
+	}
+	path := filepath.Join(t.TempDir(), "devices.json")
+	writes := 0
+	setSave(t, h, func(candidate []SavedDevice) error {
+		writes++
+		if h.a.devices[testUID].node != 1 || h.a.preview == nil || !h.a.game.nodes[1].manual || !h.a.game.nodes[1].ready {
+			t.Error("assignment side effects occurred before save")
+		}
+		return saveDeviceFixture(path, candidate)
+	})
+	h.execute(swap)
+	if writes != 1 || h.state().Preview != nil {
+		t.Fatal("swap did not save exactly once and clear affected preview")
+	}
+	setSave(t, h, func(candidate []SavedDevice) error { writes++; return saveDeviceFixture(path, candidate) })
+	h.execute(Command{Operation: SetDeviceAssignment, DeviceID: testUID, Kind: PlayerDevice, Node: 2})
+	if writes != 1 {
+		t.Fatal("same assignment unnecessarily saved")
+	}
+	h.execute(Command{Operation: SetDeviceAssignment, DeviceID: testUID})
+	h.execute(Command{Operation: SetDeviceAssignment, DeviceID: testUID, Node: 2})
+	devices, err := LoadDevices(path)
+	if err != nil || len(devices) != 2 || !devices[0].AutoAssignExcluded {
+		t.Fatalf("exclusion was lost after explicit reassignment: %+v, %v", devices, err)
+	}
+	restored := New(Options{Devices: devices})
+	if restored.devices[testUID].session != "" || restored.devices[testUID].node != 2 || restored.game.nodes[2].manual || restored.game.nodes[2].ready || restored.preview != nil {
+		t.Fatal("restoration included transient connection/game/display state")
+	}
+}
+
+func TestAutomaticAssignmentRetriesAfterSaveFailureOnReset(t *testing.T) {
+	h := newHarness(t)
+	setSave(t, h, func([]SavedDevice) error { return errors.New("disk full") })
+	h.must(h.a.Connected(h.ctx, "p1"))
+	h.clear()
+	h.message("p1", IncomingMessage{Type: "hello", UID: testUID})
+	device := h.state().Devices[0]
+	if !device.Connected || device.Node != 0 || len(h.messages()) != 0 {
+		t.Fatal("failed automatic assignment was applied or device disconnected")
+	}
+	writes := 0
+	setSave(t, h, func([]SavedDevice) error { writes++; return nil })
+	h.execute(Command{Operation: Reset})
+	if writes != 1 || h.state().Devices[0].Node != 1 {
+		t.Fatal("automatic assignment did not retry after storage recovered")
+	}
+}
+
+func TestUncertainSaveStopsAppWithoutApplyingOrSending(t *testing.T) {
+	for _, automatic := range []bool{false, true} {
+		t.Run(map[bool]string{false: "manual", true: "automatic"}[automatic], func(t *testing.T) {
+			var sent []Message
+			closed := 0
+			devices := []SavedDevice{{testUID, PlayerDevice, 1, false}}
+			if automatic {
+				devices = nil
+			}
+			a := New(Options{
+				Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), Devices: devices,
+				Send:        func(_ SessionID, m Message) error { sent = append(sent, m); return nil },
+				Close:       func(SessionID) { closed++ },
+				SaveDevices: func([]SavedDevice) error { return ErrSaveUncertain },
+			})
+			a.ticks = make(chan time.Time)
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			done := make(chan error, 1)
+			go func() { done <- a.Run(ctx) }()
+			if err := a.Connected(ctx, "p1"); err != nil {
+				t.Fatal(err)
+			}
+			err := a.MessageReceived(ctx, "p1", IncomingMessage{Type: "hello", Kind: PlayerDevice, UID: testUID, Identification: 1})
+			before := 1 // Only the initial identify is sent on automatic failure.
+			if !automatic {
+				if err != nil {
+					t.Fatal(err)
+				}
+				before = len(sent)
+				err = a.Execute(ctx, Command{Operation: SetDeviceAssignment, DeviceID: testUID})
+			}
+			if !errors.Is(err, ErrStopped) {
+				t.Fatalf("uncertain operation returned %v; want app stopped", err)
+			}
+			select {
+			case err := <-done:
+				if !errors.Is(err, ErrSaveUncertain) {
+					t.Fatalf("Run did not report storage failure: %v", err)
+				}
+			case <-ctx.Done():
+				t.Fatal("app did not stop on uncertain save")
+			}
+			wantNode := NodeID(1)
+			if automatic {
+				wantNode = 0
+			}
+			if a.devices[testUID].node != wantNode || a.devices[testUID].noAuto || len(sent) != before || closed != 1 {
+				t.Fatal("uncertain save applied candidate, sent more messages or failed to close")
+			}
+		})
+	}
+}
+
+func saveDeviceFixture(path string, devices []SavedDevice) error {
+	store := &DeviceStore{Path: path}
+	return store.Save(devices)
 }

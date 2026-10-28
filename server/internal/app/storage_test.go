@@ -13,19 +13,19 @@ import (
 func TestDeviceFileRoundTrip(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "new", "nested", "devices.json")
 	store := &DeviceStore{Path: path}
-	if devices, err := LoadDeviceAssignments(path); err != nil || len(devices) != 0 {
+	if devices, err := LoadDevices(path); err != nil || len(devices) != 0 {
 		t.Fatalf("missing file: %v, %v", devices, err)
 	}
-	want := []DeviceAssignment{
+	want := []SavedDevice{
 		{"001122334455", LEDDevice, 9, false},
 		{"112233445566", PlayerDevice, 0, true},
 		{"AABBCCDDEEFF", PlayerDevice, 1, true},
 	}
-	input := []DeviceAssignment{want[2], want[0], want[1], {"FFFFFFFFFFFF", PlayerDevice, 0, false}}
+	input := []SavedDevice{want[2], want[0], want[1], {"FFFFFFFFFFFF", PlayerDevice, 0, false}}
 	if err := store.Save(input); err != nil {
 		t.Fatal(err)
 	}
-	got, err := LoadDeviceAssignments(path)
+	got, err := LoadDevices(path)
 	if err != nil || !reflect.DeepEqual(got, want) {
 		t.Fatalf("round trip: %v, %v", got, err)
 	}
@@ -47,13 +47,13 @@ func TestDeviceFileRoundTrip(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(filepath.Dir(path), ".devices.json-crash"), []byte("broken"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := LoadDeviceAssignments(path); err != nil {
+	if _, err := LoadDevices(path); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.Save(nil); err != nil {
 		t.Fatal(err)
 	}
-	if devices, err := LoadDeviceAssignments(path); err != nil || devices == nil || len(devices) != 0 {
+	if devices, err := LoadDevices(path); err != nil || devices == nil || len(devices) != 0 {
 		t.Fatalf("empty mapping: %v, %v", devices, err)
 	}
 }
@@ -96,7 +96,7 @@ func TestDeviceFileRejectsInvalidDocumentsWithoutPartialRestoration(t *testing.T
 		if err := os.WriteFile(path, []byte(body), 0600); err != nil {
 			t.Fatal(err)
 		}
-		if got, err := LoadDeviceAssignments(path); err == nil || got != nil {
+		if got, err := LoadDevices(path); err == nil || got != nil {
 			t.Errorf("accepted %q: %v, %v", body, got, err)
 		}
 		after, err := os.ReadFile(path)
@@ -104,7 +104,7 @@ func TestDeviceFileRejectsInvalidDocumentsWithoutPartialRestoration(t *testing.T
 			t.Fatalf("load modified invalid document: %s, %v", after, err)
 		}
 	}
-	if _, err := LoadDeviceAssignments(filepath.Dir(path)); err == nil {
+	if _, err := LoadDevices(filepath.Dir(path)); err == nil {
 		t.Fatal("directory treated as missing file")
 	}
 	// The same role is allowed once for each kind, but never twice per kind.
@@ -112,7 +112,7 @@ func TestDeviceFileRejectsInvalidDocumentsWithoutPartialRestoration(t *testing.T
 	if err := os.WriteFile(path, []byte(document(valid+","+otherKind)), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := LoadDeviceAssignments(path); err != nil {
+	if _, err := LoadDevices(path); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -138,7 +138,7 @@ func TestDeviceFileFailureBeforeAndAfterReplacement(t *testing.T) {
 				}
 				return syncDeviceDirectory(syncPath)
 			})
-			if !errors.Is(err, failure) || errors.Is(err, ErrDeviceSaveUncertain) != afterRename {
+			if !errors.Is(err, failure) || errors.Is(err, ErrSaveUncertain) != afterRename {
 				t.Fatalf("wrong failure classification: %v", err)
 			}
 			body, err := os.ReadFile(path)
@@ -185,7 +185,7 @@ func TestDeviceFileDirectoryDurabilityAndRenameFailure(t *testing.T) {
 	}
 	targetStore := &DeviceStore{Path: target}
 	err := targetStore.writeDeviceFile([]byte("new"), syncDeviceDirectory)
-	if err == nil || errors.Is(err, ErrDeviceSaveUncertain) {
+	if err == nil || errors.Is(err, ErrSaveUncertain) {
 		t.Fatalf("rename failure: %v", err)
 	}
 	if stat, err := os.Stat(target); err != nil || !stat.IsDir() {
@@ -241,7 +241,7 @@ func TestFailedDirectoryCreationSyncIsRetried(t *testing.T) {
 				}
 				return syncDeviceDirectory(path)
 			})
-			if !errors.Is(err, failure) || errors.Is(err, ErrDeviceSaveUncertain) {
+			if !errors.Is(err, failure) || errors.Is(err, ErrSaveUncertain) {
 				t.Fatalf("creation sync failure misclassified: %v", err)
 			}
 			if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
@@ -294,9 +294,9 @@ func TestDeviceStoreLoadAndSaveUseSameResolvedPath(t *testing.T) {
 			}
 			path := root + "/link/../" + tc.suffix
 			target := filepath.Join(actual, tc.suffix)
-			initial := []DeviceAssignment{}
+			initial := []SavedDevice{}
 			if tc.existing {
-				initial = append(initial, DeviceAssignment{DeviceID: testUID, Kind: PlayerDevice, Node: 1})
+				initial = append(initial, SavedDevice{DeviceID: testUID, Kind: PlayerDevice, Node: 1})
 				seed := &DeviceStore{Path: target}
 				if err := seed.Save(initial); err != nil {
 					t.Fatal(err)
@@ -312,7 +312,7 @@ func TestDeviceStoreLoadAndSaveUseSameResolvedPath(t *testing.T) {
 					t.Fatalf("Load created missing parents: %v", err)
 				}
 			}
-			want := []DeviceAssignment{{DeviceID: testUID, Kind: PlayerDevice, Node: 2}}
+			want := []SavedDevice{{DeviceID: testUID, Kind: PlayerDevice, Node: 2}}
 			if err := store.Save(want); err != nil {
 				t.Fatal(err)
 			}
@@ -321,7 +321,7 @@ func TestDeviceStoreLoadAndSaveUseSameResolvedPath(t *testing.T) {
 			if err != nil || !reflect.DeepEqual(got, want) {
 				t.Fatalf("successful save lost after restart: %v, %v", got, err)
 			}
-			got, err = LoadDeviceAssignments(target)
+			got, err = LoadDevices(target)
 			if err != nil || !reflect.DeepEqual(got, want) {
 				t.Fatalf("save missed original filesystem target: %v, %v", got, err)
 			}
@@ -343,7 +343,7 @@ func TestDeviceStoreResolvesRelativePathFromSymlinkedWorkingDirectory(t *testing
 		t.Fatal(err)
 	}
 	seed := &DeviceStore{Path: filepath.Join(actual, "devices.json")}
-	want := []DeviceAssignment{{DeviceID: testUID, Kind: PlayerDevice, Node: 1}}
+	want := []SavedDevice{{DeviceID: testUID, Kind: PlayerDevice, Node: 1}}
 	if err := seed.Save(want); err != nil {
 		t.Fatal(err)
 	}
@@ -372,11 +372,11 @@ func TestDeviceStoreKeepsTargetWhenWorkingDirectoryChanges(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Chdir(other)
-	want := []DeviceAssignment{{DeviceID: testUID, Kind: PlayerDevice, Node: 1}}
+	want := []SavedDevice{{DeviceID: testUID, Kind: PlayerDevice, Node: 1}}
 	if err := store.Save(want); err != nil {
 		t.Fatal(err)
 	}
-	got, err := LoadDeviceAssignments(filepath.Join(root, "new", "devices.json"))
+	got, err := LoadDevices(filepath.Join(root, "new", "devices.json"))
 	if err != nil || !reflect.DeepEqual(got, want) {
 		t.Fatalf("save followed changed working directory: %v, %v", got, err)
 	}
@@ -395,14 +395,14 @@ func TestDeviceStoreFollowsFileSymlinkWithMissingTarget(t *testing.T) {
 	if _, err := store.Load(); err != nil {
 		t.Fatal(err)
 	}
-	want := []DeviceAssignment{{DeviceID: testUID, Kind: PlayerDevice, Node: 1}}
+	want := []SavedDevice{{DeviceID: testUID, Kind: PlayerDevice, Node: 1}}
 	if err := store.Save(want); err != nil {
 		t.Fatal(err)
 	}
 	if info, err := os.Lstat(path); err != nil || info.Mode()&os.ModeSymlink == 0 {
 		t.Fatalf("save replaced the file symlink: %v, %v", info, err)
 	}
-	got, err := LoadDeviceAssignments(path)
+	got, err := LoadDevices(path)
 	if err != nil || !reflect.DeepEqual(got, want) {
 		t.Fatalf("save missed symlink target: %v, %v", got, err)
 	}

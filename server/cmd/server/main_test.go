@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
@@ -17,13 +18,13 @@ import (
 	"time"
 
 	"github.com/canta-9142/d4-exhi/internal/app"
+	"github.com/canta-9142/d4-exhi/internal/serial"
 )
 
 // Tests listen on an ephemeral loopback port instead of the default :8080.
 const testAddr = "127.0.0.1:0"
 
 func TestRun(t *testing.T) {
-	t.Chdir(t.TempDir())
 	for _, tc := range []struct {
 		name      string
 		args      []string
@@ -34,13 +35,18 @@ func TestRun(t *testing.T) {
 		{"help", []string{"-h"}, false}, {"invalid level", []string{"-log-level", "invalid"}, true},
 		{"unknown option", []string{"-unknown"}, true}, {"positional argument", []string{"extra"}, true},
 		{"invalid address", []string{"-http-addr", "127.0.0.1:invalid"}, true},
-		{"empty device path", []string{"-devices-file", ""}, true},
+		{"serial port", []string{"-http-addr", testAddr, "-serial-port", "/dev/ttyACM0"}, false},
+		{"multiple serial ports", []string{"-http-addr", testAddr, "-serial-port", "/dev/ttyACM0", "-serial-port", "/dev/ttyACM1"}, false},
+		{"empty serial port", []string{"-serial-port", " "}, true},
+		{"duplicate serial port", []string{"-serial-port", "/dev/ttyACM0", "-serial-port", "/dev/./ttyACM0"}, true},
+		{"list ports", []string{"-list-serial-ports"}, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
 			cancel()
 			var output bytes.Buffer
-			err := run(ctx, tc.args, &output)
+			args := append(append([]string(nil), tc.args...), "-devices-file", filepath.Join(t.TempDir(), "devices.json"))
+			err := run(ctx, args, &output)
 			if (err != nil) != tc.wantError {
 				t.Fatalf("run returned %v", err)
 			}
@@ -52,14 +58,13 @@ func TestRun(t *testing.T) {
 }
 
 func TestRunPortInUse(t *testing.T) {
-	t.Chdir(t.TempDir())
 	l, err := net.Listen("tcp", testAddr)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer l.Close()
 	var output bytes.Buffer
-	if err := run(context.Background(), []string{"-http-addr", l.Addr().String()}, &output); err == nil {
+	if err := run(context.Background(), []string{"-http-addr", l.Addr().String(), "-devices-file", filepath.Join(t.TempDir(), "devices.json")}, &output); err == nil {
 		t.Fatal("run succeeded on a port in use")
 	}
 }
@@ -82,12 +87,16 @@ func (b *syncBuffer) String() string {
 }
 
 func TestRunServesHTTP(t *testing.T) {
-	t.Chdir(t.TempDir())
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	var output syncBuffer
+	devicesFile := filepath.Join(t.TempDir(), "devices.json")
+	store := &app.DeviceStore{Path: devicesFile}
+	if err := store.Save([]app.SavedDevice{{DeviceID: "AABBCCDDEEFF", Kind: app.PlayerDevice, Node: 1}}); err != nil {
+		t.Fatal(err)
+	}
 	done := make(chan error, 1)
-	go func() { done <- run(ctx, []string{"-http-addr", testAddr}, &output) }()
+	go func() { done <- run(ctx, []string{"-http-addr", testAddr, "-devices-file", devicesFile}, &output) }()
 
 	addrPattern := regexp.MustCompile(`http_addr=(\S+)`)
 	var addr string
@@ -110,6 +119,22 @@ func TestRunServesHTTP(t *testing.T) {
 			t.Errorf("GET %s: status = %d, want %d", path, resp.StatusCode, want)
 		}
 	}
+	resp, err := http.Get("http://" + addr + "/api/state")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var state struct {
+		Devices []struct {
+			DeviceID   string
+			Connected  bool
+			Assignment struct{ NodeID string }
+		}
+	}
+	err = json.NewDecoder(resp.Body).Decode(&state)
+	resp.Body.Close()
+	if err != nil || resp.StatusCode != http.StatusOK || len(state.Devices) != 1 || state.Devices[0].DeviceID != "AABBCCDDEEFF" || state.Devices[0].Connected || state.Devices[0].Assignment.NodeID != "P1" {
+		t.Fatalf("restored devices not exposed as disconnected: %+v, %v", state, err)
+	}
 
 	cancel()
 	select {
@@ -125,6 +150,24 @@ func TestRunServesHTTP(t *testing.T) {
 	}
 	if _, err := net.DialTimeout("tcp", addr, time.Second); err == nil {
 		t.Error("listener still open after run returned")
+	}
+}
+
+func TestRunRejectsInvalidDeviceFileBeforeListening(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "devices.json")
+	if err := os.WriteFile(path, []byte(`{"version":99,"devices":[]}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	// The invalid address would fail independently; the device file must be
+	// validated first, before HTTP or serial can accept an event.
+	err := run(context.Background(), []string{"-http-addr", "invalid", "-devices-file", path}, &output)
+	if err == nil || !strings.Contains(err.Error(), "load device assignments") || !strings.Contains(output.String(), "cannot load device assignments") || strings.Contains(output.String(), "server starting") {
+		t.Fatalf("invalid device file did not prevent startup: %v, %s", err, output.String())
+	}
+	data, _ := os.ReadFile(path)
+	if string(data) != `{"version":99,"devices":[]}` {
+		t.Fatal("invalid file was replaced during startup")
 	}
 }
 
@@ -167,12 +210,14 @@ func TestFatalPersistenceFailureClosesHTTPAndReturnsError(t *testing.T) {
 	application := app.New(app.Options{
 		Logger:      slog.New(slog.DiscardHandler),
 		Send:        func(app.SessionID, app.Message) error { return nil },
-		SaveDevices: func([]app.DeviceAssignment) error { return app.ErrDeviceSaveUncertain },
+		SaveDevices: func([]app.SavedDevice) error { return app.ErrSaveUncertain },
 	})
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	done := make(chan error, 1)
-	go func() { done <- serve(ctx, application, listener, slog.New(slog.DiscardHandler)) }()
+	go func() {
+		done <- serve(ctx, application, listener, slog.New(slog.DiscardHandler), serial.New(slog.New(slog.DiscardHandler)), nil)
+	}()
 	// Leave a partially received HTTP request open to exercise active connections.
 	conn, err := net.Dial("tcp", listener.Addr().String())
 	if err != nil {
@@ -185,12 +230,12 @@ func TestFatalPersistenceFailureClosesHTTPAndReturnsError(t *testing.T) {
 	if err := application.Connected(ctx, "player"); err != nil {
 		t.Fatal(err)
 	}
-	if err := application.MessageReceived(ctx, "player", app.IncomingMessage{Type: "hello", UID: "001122AABBCC", Kind: app.PlayerDevice}); err == nil {
+	if err := application.MessageReceived(ctx, "player", app.IncomingMessage{Type: "hello", UID: "001122AABBCC", Kind: app.PlayerDevice, Identification: 1}); err == nil {
 		t.Fatal("uncertain automatic assignment returned success")
 	}
 	select {
 	case err := <-done:
-		if !errors.Is(err, app.ErrDeviceSaveUncertain) {
+		if !errors.Is(err, app.ErrSaveUncertain) {
 			t.Fatalf("fatal persistence error lost: %v", err)
 		}
 	case <-ctx.Done():

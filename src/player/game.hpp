@@ -19,9 +19,6 @@
 #include "packet_animation.hpp"
 #include "drawing.hpp"
 
-int score = 0;
-int remaining = 0;
-
 PacketQueue packetQueue;
 PacketAnimation packetAnimation;
 #ifdef PLAYER_PACKET_DEMO
@@ -29,6 +26,7 @@ PacketDemo packetDemo;
 #else
 ServerLink serverLink;
 char nodeUid[13]{};
+FinishedAnimation finishedAnimation;
 #endif
 
 NodeId selfId = NodeId::None;
@@ -41,7 +39,33 @@ constexpr uint32_t DISPLAY_FRAME_MS = 16;
 constexpr BaseType_t DISPLAY_CORE = 1 - ARDUINO_RUNNING_CORE;
 
 void publish_display_snapshot() {
-  const DisplaySnapshot snapshot{packetAnimation.snapshot(), score, remaining, selfId, pswPressedMask};
+#ifdef PLAYER_PACKET_DEMO
+  const GamePhase phase = GamePhase::Playing;
+  const bool synced = true;
+  const ControlMode mode = ControlMode::Manual;
+  const PlayerStatus status{0, 0, false, true};
+  const bool awaitingStatus = false;
+  const uint16_t readyHoldMs = 0;
+  const bool readyPending = false;
+#else
+  const GamePhase phase = serverLink.phase();
+  const bool synced = serverLink.fifo_synced();
+  const ControlMode mode = serverLink.mode();
+  const PlayerStatus status = serverLink.status();
+  const bool awaitingStatus = serverLink.awaiting_status();
+  const uint16_t readyHoldMs = serverLink.ready_progress_ms();
+  const bool readyPending = serverLink.ready_pending();
+#endif
+  DisplaySnapshot snapshot{packetAnimation.snapshot(), status, selfId,
+                                 pswPressedMask, phase, mode, synced, awaitingStatus, readyHoldMs, readyPending};
+#ifndef PLAYER_PACKET_DEMO
+  snapshot.preview = serverLink.preview();
+  snapshot.summary = serverLink.summary();
+  snapshot.finishedProgress = finishedAnimation.update(snapshot.summary,
+      !snapshot.preview && snapshot.phase == GamePhase::Finished &&
+      finished_state(snapshot) == FinishedState::Ready, millis());
+  snapshot.previewLit = millis() / 500 % 2 == 0;
+#endif
   xQueueOverwrite(displayQueue, &snapshot);
 }
 
@@ -107,6 +131,7 @@ void loop() {
   if (serverLink.poll(Serial, nodeUid, packetQueue, selfId, nowMs)) {
     packetAnimation = PacketAnimation{};
   }
+  serverLink.update_ready(Serial, pswPressedMask, nowMs);
 #endif
   if (pressedEdges && packetQueue.size() != 0) {
     for (int i = 0; i < 4; ++i) {
