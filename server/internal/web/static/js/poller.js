@@ -78,9 +78,12 @@ export class Poller {
         this.#onFailure(result);
         return;
       }
+      // A refresh() from onSnapshot adds a waiter for the next GET, which
+      // this response must not resolve.
+      const waiting = this.#waiters.length;
       this.#onSnapshot(result.body);
       delay = POLL_MS;
-      for (const resolve of this.#waiters.splice(0)) {
+      for (const resolve of this.#waiters.splice(0, waiting)) {
         resolve();
       }
     } finally {
