@@ -1,3 +1,5 @@
 result/
 .direnv/
 .go/
+**/data/devices.json
+**/data/.devices.json-*

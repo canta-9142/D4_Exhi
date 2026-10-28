@@ -11,6 +11,7 @@
 nix develop -c go -C server run ./cmd/server
 nix develop -c go -C server run ./cmd/server -log-level debug
 nix develop -c go -C server run ./cmd/server -http-addr 127.0.0.1:8080
+nix develop -c go -C server run ./cmd/server -devices-file data/devices.json
 nix develop -c go -C server test -race ./...
 nix develop -c go -C server vet ./...
 ```
@@ -21,6 +22,7 @@ nix develop -c go -C server vet ./...
 ポート使用中などで待ち受けられない場合は起動エラーとし、起動ログに待受アドレスを出す。
 SIGINT・SIGTERMではHTTPを最大5秒待って停止してから`app`を終了する。
 `app`とHTTPのどちらかが異常終了した場合は、もう一方も止めてエラーを返す。
+対応表の保存結果が不明になった場合は、HTTPの処理中の接続も直ちに閉じる。
 `app`は終了時に有効なセッションを閉じる。
 
 現時点では`serial`が未実装のため、USB接続は受け付けない。`web`はルーティング、
@@ -67,6 +69,42 @@ Startの拒否では先頭の理由を使用し、`not_preparing`は`phase_confl
 `web`はこの内部Snapshotを[Web管理API](../spec/web.md)の公開JSONへ変換する。
 ノードIDの文字列表記、時間単位、Preparingの`rankingEligible:null`、エラーのHTTPステータスと
 `details.nodeIds`への変換は`web`が担当する。
+
+## デバイス対応表の保存・復元
+
+保存先は`-devices-file`で指定し、既定値は作業ディレクトリ基準の`data/devices.json`とする。
+`main`はHTTPの待ち受け前に`DeviceStore.Load()`で保存先を一度解決し、ファイル全体を検証する。
+シンボリックリンクを解決してから絶対パスを固定し、以後の読込・保存で同じパスを使う。
+初回起動で保存先がなければ、既存の親までを解決する。この時点ではディレクトリを作成しない。
+ファイル不存在だけを空の対応表として扱い、空ファイル・不正な内容・未対応バージョン・
+読込失敗ではログを記録して起動を中止する。部分的な復元やファイルの上書きは行わない。
+
+`Options.InitialDevices`へ検証済みの`[]app.DeviceAssignment`を渡し、
+保存先ごとに`app.DeviceStore{Path: path}`を1つ作り、その`Save`メソッドを`Options.SaveDevices`へ設定する。
+保存処理は`Run`内で同期的に実行するため、`app`へ再入してはならない。
+`SaveDevices`がnilの場合はメモリ内のみで動作するため、永続化が必要な起動では必ず設定する。
+
+保存するのはUID・機器種別・割当先・自動仮割当の対象外フラグだけとする。
+割当済みまたは対象外の機器をUID順で保存し、未割当かつ対象外でない機器は保存しない。
+復元機器は未接続で公開し、割当先を予約する。接続後はUIDと機器種別を照合して通常の同期を行う。
+ゲームはPreparing・全プレイヤーauto・未準備で開始し、確認表示や同期世代は復元しない。
+
+割当・解除・交換・付け替えと自動仮割当は、候補全体の保存成功後に一括確定する。
+同じ割当への要求ではMCUを再設定せず、保存内容も同一ならファイルを書き込まない。
+対象外フラグだけの変更も保存し、明示的な再割当では対象外フラグを消去しない。
+同じディレクトリの一時ファイルへ書込・fsync・クローズ後、原子的に置換し、親ディレクトリをfsyncする。
+新規作成したディレクトリの親だけを同期し、失敗した親は同じStoreで記憶して次回に再試行する。
+既存の全祖先は同期せず、残った一時ファイルは復元に使用しない。
+
+置換前または置換自体の失敗では、その操作に伴う対応表・対象外フラグ・操作モード・準備完了状態・
+確認表示とMCU通知を変更しない。管理操作には通常のerrorを返し、Web側で`500 internal_error`とする。
+自動仮割当は識別・接続状態を維持して待機し、フェーズ遷移や空きの発生で再試行する。
+後続の自動仮割当の失敗で、既に保存・確定した管理操作や他UIDの割当を取り消さない。
+
+置換後の親ディレクトリ同期失敗は`ErrDeviceSaveUncertain`で区別する。
+ファイルを旧内容へ戻さず、候補の反映・以後の入力処理・送信要求を停止して全セッションを閉じ、
+`Run`がエラーを返す。`main`はHTTPも終了し、プロセスを異常終了する。
+保存完了後のMCUへの送信失敗では、保存済みの対応表を戻さない。
 
 ## serialとの接続口
 
