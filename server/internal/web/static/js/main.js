@@ -94,7 +94,8 @@ function showSnapshot(snapshot) {
   // every second while Playing.
   showSection("blockers", snapshot.game.startBlockers,
     () => renderBlockers(ui.blockers, snapshot.game.startBlockers));
-  showSection("players", snapshot.players, () => renderPlayers(ui.players, snapshot.players));
+  showSection("players", { players: snapshot.players, phase: snapshot.game.phase },
+    () => renderPlayers(ui.players, snapshot.players, snapshot.game.phase));
   showSection("bots", snapshot.bots, () => renderBots(ui.bots, snapshot.bots));
   showSection("devices", { devices: snapshot.devices, preview: snapshot.preview },
     () => renderDevices(ui.devices, snapshot.devices, snapshot.preview));

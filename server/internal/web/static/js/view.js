@@ -55,14 +55,14 @@ export function renderBlockers(list, blockers) {
   }));
 }
 
-export function renderPlayers(tbody, players) {
+export function renderPlayers(tbody, players, phase) {
   tbody.replaceChildren(...players.map((player) => {
     const row = element("tr");
     row.dataset.mode = player.mode;
     row.append(
       nameCell(player.nodeId),
       element("td", modeLabels[player.mode] ?? player.mode),
-      readyCell(player),
+      readyCell(player, phase),
       element("td", String(player.fifoLength), "num"),
       element("td", String(player.score), "num"),
       eligibleCell(player.rankingEligible),
@@ -128,13 +128,20 @@ function nameCell(nodeId) {
 }
 
 // ready means something only for manual players; auto ones are always false.
-function readyCell(player) {
+// It is a start condition only in Preparing, so it is highlighted only there.
+function readyCell(player, phase) {
   if (player.mode !== "manual") {
     const cell = element("td", "—", "muted");
     cell.title = "自動操作では使用しません";
     return cell;
   }
-  return player.ready ? element("td", "準備完了", "ok") : element("td", "未準備", "warn");
+  const text = player.ready ? "準備完了" : "未準備";
+  if (phase !== "Preparing") {
+    const cell = element("td", text, "muted");
+    cell.title = "開始の条件になるのは準備中だけです";
+    return cell;
+  }
+  return element("td", text, player.ready ? "ok" : "warn");
 }
 
 function eligibleCell(eligible) {
