@@ -8,12 +8,19 @@
 //   {kind: "unknown", reason, status?}
 //       no API response, so the server may or may not have processed the
 //       request. reason is "timeout", "network", or "bad_response" for a
-//       response that is not the API's JSON.
+//       response that is not the API's JSON, or for getState, not a Snapshot.
 
 export const TIMEOUT_MS = 5000;
 
-export function getState() {
-  return request("/api/state", { method: "GET", cache: "no-store" });
+// getState resolves to a success only when the body is a Snapshot of web.md
+// 3.2; any other 2xx body is a bad_response, so that the page reports a
+// failed GET instead of throwing while it renders the body.
+export async function getState() {
+  const result = await request("/api/state", { method: "GET", cache: "no-store" });
+  if (result.kind === "success" && !isSnapshot(result.body)) {
+    return { kind: "unknown", reason: "bad_response", status: result.status };
+  }
+  return result;
 }
 
 export function postCommand(command) {
@@ -56,4 +63,35 @@ async function request(url, init) {
 
 function isObject(v) {
   return typeof v === "object" && v !== null && !Array.isArray(v);
+}
+
+// isSnapshot checks the types of the fields the page shows (web.md 3.2). It
+// does not check the ranges or the number of nodes, which the page shows as
+// they are.
+function isSnapshot(s) {
+  const { game, players, bots, devices, preview } = s;
+  return isObject(game) && typeof game.phase === "string" &&
+    Number.isInteger(game.durationSeconds) && Number.isInteger(game.remainingSeconds) &&
+    typeof game.canStart === "boolean" &&
+    isListOf(game.startBlockers, (b) => typeof b.code === "string" &&
+      (b.nodeIds === undefined || (Array.isArray(b.nodeIds) && b.nodeIds.every(isString)))) &&
+    isListOf(players, (p) => isString(p.nodeId) && isString(p.mode) && typeof p.ready === "boolean" &&
+      Number.isInteger(p.fifoLength) && Number.isInteger(p.score) &&
+      (p.rankingEligible === null || typeof p.rankingEligible === "boolean")) &&
+    isListOf(bots, (b) => isString(b.nodeId) && Number.isInteger(b.fifoLength) && Number.isFinite(b.ratePps)) &&
+    isListOf(devices, (d) => isString(d.deviceId) && isString(d.kind) && typeof d.connected === "boolean" &&
+      (d.assignment === null || isNode(d.assignment))) &&
+    (preview === null || (isObject(preview) && isString(preview.deviceId) && isString(preview.nodeId)));
+}
+
+function isListOf(v, check) {
+  return Array.isArray(v) && v.every((e) => isObject(e) && check(e));
+}
+
+function isNode(v) {
+  return isObject(v) && isString(v.kind) && isString(v.nodeId);
+}
+
+function isString(v) {
+  return typeof v === "string";
 }

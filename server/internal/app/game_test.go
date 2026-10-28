@@ -133,14 +133,13 @@ func TestDeliveryAndLoss(t *testing.T) {
 	}
 }
 
-func TestResetRetainsSettingsAndPID(t *testing.T) {
+func TestResetRetainsSettings(t *testing.T) {
 	g := startedGame(t)
 	g.setManual(1, true)
 	g.nodes[9].rate = 3
 	g.advance(epoch.Add(time.Second))
-	nextPID := g.nextPID
 	g.reset()
-	if g.nextPID != nextPID || !g.nodes[1].manual || g.nodes[9].rate != 3 {
+	if !g.nodes[1].manual || g.nodes[9].rate != 3 {
 		t.Fatal("Reset discarded retained state")
 	}
 	for id := NodeID(1); id <= NodeCount; id++ {
@@ -149,24 +148,64 @@ func TestResetRetainsSettingsAndPID(t *testing.T) {
 			t.Fatal("Reset left game state")
 		}
 	}
+}
+
+func TestResetRestartsPIDFromZero(t *testing.T) {
+	g := startedGame(t)
+	g.setManual(1, true)
+	g.advance(epoch.Add(time.Second))
+	if g.nextPID == 0 || g.nodes[1].fifo[0].PID != 0 {
+		t.Fatalf("first game did not issue PIDs from 0: next=%d", g.nextPID)
+	}
+	g.reset()
+	if g.nextPID != 0 {
+		t.Fatalf("Reset left the PID counter at %d", g.nextPID)
+	}
 	g.nodes[1].ready = true
 	if err := g.start(epoch); err != nil {
 		t.Fatal(err)
 	}
 	g.advance(epoch.Add(time.Second))
-	if g.nodes[1].fifo[0].PID != uint16(nextPID) {
-		t.Fatal("PID was reused")
+	if got := g.nodes[1].fifo[0].PID; got != 0 {
+		t.Fatalf("first packet after Reset has PID %d, want 0", got)
 	}
-	_ = g.finish()
-	g.reset()
+	// PIDs within one game are still never reused.
+	seen := map[uint16]bool{}
+	for id := NodeID(1); id <= NodeCount; id++ {
+		for _, p := range g.nodes[id].fifo {
+			if seen[p.PID] {
+				t.Fatalf("PID %d issued twice in one game", p.PID)
+			}
+			seen[p.PID] = true
+		}
+	}
+}
+
+func TestStartRequiresUnissuedPIDs(t *testing.T) {
+	g := newGame(func(change) {})
 	g.nextPID = 65536 - maxGamePackets + 1
 	if err := g.start(epoch); err == nil {
 		t.Fatal("Start accepted insufficient PID capacity")
 	}
 	g.nextPID = 65536 - maxGamePackets
-	g.nodes[1].ready = true
 	if err := g.start(epoch); err != nil {
 		t.Fatalf("exactly 1000 free PIDs rejected: %v", err)
+	}
+}
+
+func TestResetRecoversFromPIDExhaustion(t *testing.T) {
+	g := startedGame(t)
+	_ = g.finish()
+	g.nextPID = 65536 - maxGamePackets + 1
+	if blockers := g.startBlockers(); len(blockers) != 2 || blockers[1].Code != CodePIDExhausted {
+		t.Fatalf("exhausted PIDs not reported: %v", blockers)
+	}
+	g.reset()
+	if blockers := g.startBlockers(); len(blockers) != 0 {
+		t.Fatalf("Reset did not clear the blockers: %v", blockers)
+	}
+	if err := g.start(epoch); err != nil {
+		t.Fatalf("Start rejected after Reset: %v", err)
 	}
 }
 
