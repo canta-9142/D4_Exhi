@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/canta-9142/d4-exhi/internal/app"
+	"github.com/canta-9142/d4-exhi/internal/records"
 	"github.com/canta-9142/d4-exhi/internal/serial"
 )
 
@@ -45,7 +46,8 @@ func TestRun(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
 			cancel()
 			var output bytes.Buffer
-			args := append(append([]string(nil), tc.args...), "-devices-file", filepath.Join(t.TempDir(), "devices.json"))
+			dir := t.TempDir()
+			args := append(append([]string(nil), tc.args...), "-devices-file", filepath.Join(dir, "devices.json"), "-records-file", filepath.Join(dir, "records.sqlite3"))
 			err := run(ctx, args, &output)
 			if (err != nil) != tc.wantError {
 				t.Fatalf("run returned %v", err)
@@ -64,8 +66,172 @@ func TestRunPortInUse(t *testing.T) {
 	}
 	defer l.Close()
 	var output bytes.Buffer
-	if err := run(context.Background(), []string{"-http-addr", l.Addr().String(), "-devices-file", filepath.Join(t.TempDir(), "devices.json")}, &output); err == nil {
+	dir := t.TempDir()
+	if err := run(context.Background(), []string{"-http-addr", l.Addr().String(), "-devices-file", filepath.Join(dir, "devices.json"), "-records-file", filepath.Join(dir, "records.sqlite3")}, &output); err == nil {
 		t.Fatal("run succeeded on a port in use")
+	}
+	if entries, err := os.ReadDir(dir); err != nil || len(entries) != 0 {
+		t.Fatalf("failed startup created %v, %v", entries, err)
+	}
+}
+
+// An empty path is a records file that cannot be opened (server.md 3.5.3).
+func TestRunContinuesWithEmptyRecordsFilePath(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	var output bytes.Buffer
+	if err := run(ctx, []string{"-http-addr", testAddr, "-devices-file", filepath.Join(t.TempDir(), "devices.json"), "-records-file", " "}, &output); err != nil {
+		t.Fatalf("empty records path stopped startup: %v", err)
+	}
+	if !strings.Contains(output.String(), "cannot use game records") {
+		t.Fatalf("empty records path not logged: %s", output.String())
+	}
+}
+
+func postCommand(t *testing.T, addr, body string) {
+	t.Helper()
+	resp, err := http.Post("http://"+addr+"/api/commands", "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("POST %s: status %d", body, resp.StatusCode)
+	}
+}
+
+func TestRunSavesFinishedGames(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "records.sqlite3")
+	var output syncBuffer
+	done := make(chan error, 1)
+	go func() {
+		done <- run(ctx, []string{"-http-addr", testAddr, "-devices-file", filepath.Join(dir, "devices.json"), "-records-file", path}, &output)
+	}()
+	addr := listenAddr(t, &output)
+	// Without manual players the game starts at once; Finish ends it during
+	// the countdown.
+	postCommand(t, addr, `{"type":"start","data":{}}`)
+	postCommand(t, addr, `{"type":"finish","data":{}}`)
+	if records := getRecords(t, addr); !records.Available || records.SaveFailed {
+		t.Fatalf("records after Finish: %+v", records)
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("run returned %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("run did not stop")
+	}
+	store, err := records.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	past, err := store.Load()
+	if err != nil || len(past) != 1 || past[0].Reason != app.FinishManual || len(past[0].Results) != app.PlayerCount {
+		t.Fatalf("saved games: %+v, %v", past, err)
+	}
+}
+
+// listenAddr waits for run to log its HTTP address.
+func listenAddr(t *testing.T, output *syncBuffer) string {
+	t.Helper()
+	addrPattern := regexp.MustCompile(`http_addr=(\S+)`)
+	for deadline := time.Now().Add(5 * time.Second); ; {
+		if m := addrPattern.FindStringSubmatch(output.String()); m != nil {
+			return m[1]
+		} else if time.Now().After(deadline) {
+			t.Fatalf("listen address not logged: %s", output.String())
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// stateRecords is the records object of GET /api/state.
+type stateRecords struct {
+	GameBest          json.RawMessage
+	HourlyBests       []json.RawMessage
+	AllTimeBest       json.RawMessage
+	Available         bool
+	UnavailableReason *string
+	SaveFailed        bool
+}
+
+func getRecords(t *testing.T, addr string) stateRecords {
+	t.Helper()
+	resp, err := http.Get("http://" + addr + "/api/state")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var state struct{ Records *stateRecords }
+	if err := json.NewDecoder(resp.Body).Decode(&state); err != nil || resp.StatusCode != http.StatusOK || state.Records == nil {
+		t.Fatalf("GET /api/state: %d %v", resp.StatusCode, err)
+	}
+	return *state.Records
+}
+
+func TestRunContinuesWithUnusableRecordsFile(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "records.sqlite3")
+	broken := bytes.Repeat([]byte("not a database\n"), 512)
+	if err := os.WriteFile(path, broken, 0600); err != nil {
+		t.Fatal(err)
+	}
+	var output syncBuffer
+	done := make(chan error, 1)
+	go func() {
+		done <- run(ctx, []string{"-http-addr", testAddr, "-devices-file", filepath.Join(dir, "devices.json"), "-records-file", path}, &output)
+	}()
+	records := getRecords(t, listenAddr(t, &output))
+	if records.Available || records.UnavailableReason == nil || !strings.Contains(*records.UnavailableReason, "not a database") || records.SaveFailed {
+		t.Fatalf("records = %+v", records)
+	}
+	if !strings.Contains(output.String(), "cannot use game records") {
+		t.Fatalf("reason not logged: %s", output.String())
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("run returned %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("run did not stop")
+	}
+	if after, err := os.ReadFile(path); err != nil || !bytes.Equal(after, broken) {
+		t.Fatalf("startup changed the unusable records file: %v", err)
+	}
+	if entries, err := os.ReadDir(dir); err != nil || len(entries) != 1 {
+		t.Fatalf("startup created files beside the records file: %v %v", entries, err)
+	}
+}
+
+func TestRunCreatesMissingRecordsFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "data", "records.sqlite3")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	var output bytes.Buffer
+	if err := run(ctx, []string{"-http-addr", testAddr, "-devices-file", filepath.Join(t.TempDir(), "devices.json"), "-records-file", path}, &output); err != nil {
+		t.Fatalf("run returned %v", err)
+	}
+	if !strings.Contains(output.String(), "game records loaded") {
+		t.Fatalf("records not loaded: %s", output.String())
+	}
+	store, err := records.Open(path)
+	if err != nil {
+		t.Fatalf("created records file cannot be opened: %v", err)
+	}
+	defer store.Close()
+	if past, err := store.Load(); err != nil || len(past) != 0 {
+		t.Fatalf("created records file: %v, %v", past, err)
 	}
 }
 
@@ -96,19 +262,12 @@ func TestRunServesHTTP(t *testing.T) {
 		t.Fatal(err)
 	}
 	done := make(chan error, 1)
-	go func() { done <- run(ctx, []string{"-http-addr", testAddr, "-devices-file", devicesFile}, &output) }()
+	recordsFile := filepath.Join(t.TempDir(), "records.sqlite3")
+	go func() {
+		done <- run(ctx, []string{"-http-addr", testAddr, "-devices-file", devicesFile, "-records-file", recordsFile}, &output)
+	}()
 
-	addrPattern := regexp.MustCompile(`http_addr=(\S+)`)
-	var addr string
-	for deadline := time.Now().Add(5 * time.Second); addr == ""; {
-		if m := addrPattern.FindStringSubmatch(output.String()); m != nil {
-			addr = m[1]
-		} else if time.Now().After(deadline) {
-			t.Fatalf("listen address not logged: %s", output.String())
-		} else {
-			time.Sleep(10 * time.Millisecond)
-		}
-	}
+	addr := listenAddr(t, &output)
 	for path, want := range map[string]int{"/": http.StatusOK, "/api/unknown": http.StatusNotFound} {
 		resp, err := http.Get("http://" + addr + path)
 		if err != nil {
@@ -134,6 +293,9 @@ func TestRunServesHTTP(t *testing.T) {
 	resp.Body.Close()
 	if err != nil || resp.StatusCode != http.StatusOK || len(state.Devices) != 1 || state.Devices[0].DeviceID != "AABBCCDDEEFF" || state.Devices[0].Connected || state.Devices[0].Assignment.NodeID != "P1" {
 		t.Fatalf("restored devices not exposed as disconnected: %+v, %v", state, err)
+	}
+	if records := getRecords(t, addr); !records.Available || records.UnavailableReason != nil || len(records.HourlyBests) != 0 || string(records.AllTimeBest) != "null" {
+		t.Fatalf("records of a new file: %+v", records)
 	}
 
 	cancel()
@@ -161,7 +323,7 @@ func TestRunRejectsInvalidDeviceFileBeforeListening(t *testing.T) {
 	var output bytes.Buffer
 	// The invalid address would fail independently; the device file must be
 	// validated first, before HTTP or serial can accept an event.
-	err := run(context.Background(), []string{"-http-addr", "invalid", "-devices-file", path}, &output)
+	err := run(context.Background(), []string{"-http-addr", "invalid", "-devices-file", path, "-records-file", filepath.Join(filepath.Dir(path), "records.sqlite3")}, &output)
 	if err == nil || !strings.Contains(err.Error(), "load device assignments") || !strings.Contains(output.String(), "cannot load device assignments") || strings.Contains(output.String(), "server starting") {
 		t.Fatalf("invalid device file did not prevent startup: %v, %s", err, output.String())
 	}
@@ -184,7 +346,7 @@ func TestRunLoadsDeviceFileBeforeListening(t *testing.T) {
 	}
 	var output bytes.Buffer
 	// The occupied address must not mask the earlier file validation error.
-	err = run(context.Background(), []string{"-http-addr", listener.Addr().String(), "-devices-file", path}, &output)
+	err = run(context.Background(), []string{"-http-addr", listener.Addr().String(), "-devices-file", path, "-records-file", filepath.Join(filepath.Dir(path), "records.sqlite3")}, &output)
 	if err == nil || !strings.Contains(err.Error(), "load device assignments") || !strings.Contains(output.String(), "cannot load device assignments") || strings.Contains(output.String(), "server starting") {
 		t.Fatalf("bad file reached network startup: %v, logs %s", err, output.String())
 	}
@@ -196,7 +358,7 @@ func TestRunLoadsDeviceFileBeforeListening(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if err := run(ctx, []string{"-http-addr", testAddr, "-devices-file", path}, io.Discard); err != nil {
+	if err := run(ctx, []string{"-http-addr", testAddr, "-devices-file", path, "-records-file", filepath.Join(filepath.Dir(path), "records.sqlite3")}, io.Discard); err != nil {
 		t.Fatalf("valid saved assignments prevented startup: %v", err)
 	}
 }

@@ -92,7 +92,7 @@ func TestRunWithPlayerAndLEDPorts(t *testing.T) {
 	done := make(chan error, 1)
 	devicesFile := filepath.Join(t.TempDir(), "devices.json")
 	go func() {
-		done <- run(ctx, []string{"-http-addr", testAddr, "-devices-file", devicesFile, "-serial-port", playerPath, "-serial-port", ledPath}, &output)
+		done <- run(ctx, []string{"-http-addr", testAddr, "-devices-file", devicesFile, "-records-file", filepath.Join(t.TempDir(), "records.sqlite3"), "-serial-port", playerPath, "-serial-port", ledPath}, &output)
 	}()
 	finished := false
 	t.Cleanup(func() {

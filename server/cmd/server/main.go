@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/canta-9142/d4-exhi/internal/app"
+	"github.com/canta-9142/d4-exhi/internal/records"
 	"github.com/canta-9142/d4-exhi/internal/serial"
 	"github.com/canta-9142/d4-exhi/internal/web"
 )
@@ -41,6 +42,7 @@ func run(ctx context.Context, args []string, output io.Writer) error {
 	// All interfaces by default: the admin connects from a laptop over the LAN.
 	httpAddr := flags.String("http-addr", ":8080", "listen address of the admin HTTP server")
 	devicesFile := flags.String("devices-file", "data/devices.json", "device assignment JSON file")
+	recordsFile := flags.String("records-file", "data/records.sqlite3", "game record SQLite file")
 	listPorts := flags.Bool("list-serial-ports", false, "list USB serial port candidates and exit")
 	var ports []string
 	flags.Func("serial-port", "USB CDC port path (repeat for multiple ports)", func(value string) error {
@@ -98,11 +100,42 @@ func run(ctx context.Context, args []string, output io.Writer) error {
 		return fmt.Errorf("http listen: %w", err)
 	}
 	transport := serial.New(logger)
-	application := app.New(app.Options{
+	options := app.Options{
 		Logger: logger, Send: transport.Send, Close: transport.Close, Devices: devices,
 		SaveDevices: store.Save,
-	})
-	return serve(ctx, application, listener, logger, transport, ports)
+	}
+	// Records open after Listen, so that a failed startup creates no file, and
+	// before serve accepts any request. Unlike device assignments they are not
+	// needed to run a game: keep the exhibit going without saving, and leave
+	// the file as it is.
+	recordStore, past, err := openRecords(*recordsFile)
+	if err != nil {
+		logger.Error("cannot use game records; this run saves no results", "path", *recordsFile, "error", err)
+		options.RecordsUnavailable = err.Error()
+	} else {
+		defer func() {
+			if err := recordStore.Close(); err != nil {
+				logger.Warn("cannot close game records", "path", *recordsFile, "error", err)
+			}
+		}()
+		logger.Info("game records loaded", "path", *recordsFile, "games", len(past))
+		options.Records, options.SaveGame = past, recordStore.SaveGame
+	}
+	return serve(ctx, app.New(options), listener, logger, transport, ports)
+}
+
+// openRecords opens and loads the records file. On failure the file is closed
+// and left unchanged.
+func openRecords(path string) (*records.Store, []app.GameRecord, error) {
+	store, err := records.Open(path)
+	if err != nil {
+		return nil, nil, fmt.Errorf("open: %w", err)
+	}
+	past, err := store.Load()
+	if err != nil {
+		return nil, nil, errors.Join(fmt.Errorf("load: %w", err), store.Close())
+	}
+	return store, past, nil
 }
 
 func serve(ctx context.Context, application *app.App, listener net.Listener, logger *slog.Logger, transport *serial.Transport, ports []string) error {
