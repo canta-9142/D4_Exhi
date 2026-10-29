@@ -120,7 +120,7 @@ func TestStatusUsesLatestCommittedValues(t *testing.T) {
 	h.clear()
 	h.tick(3200 * time.Millisecond)
 	statuses := h.statusMessages("p1")
-	if len(statuses) != 1 || statuses[0].Remaining != 117 {
+	if len(statuses) != 1 || statuses[0].Remaining != gameSeconds-3 {
 		t.Fatalf("catchup sent intermediate statuses: %v", statuses)
 	}
 	h.clear()
@@ -129,16 +129,16 @@ func TestStatusUsesLatestCommittedValues(t *testing.T) {
 		t.Fatal("unchanged display was sent on every Tick")
 	}
 	h.execute(Command{Operation: Finish})
-	if statuses = h.statusMessages("p1"); len(statuses) != 1 || statuses[0].Remaining != 117 {
+	if statuses = h.statusMessages("p1"); len(statuses) != 1 || statuses[0].Remaining != gameSeconds-3 {
 		t.Fatalf("Finish did not force frozen status: %v", statuses)
 	}
 	h.clear()
 	h.tick(90 * time.Second)
-	if len(h.statusMessages("p1")) != 0 || h.state().Remaining != 116700*time.Millisecond {
+	if len(h.statusMessages("p1")) != 0 || h.state().Remaining != GameDuration-3300*time.Millisecond {
 		t.Fatal("Finished time advanced")
 	}
 	h.execute(Command{Operation: Reset})
-	if statuses = h.statusMessages("p1"); len(statuses) != 1 || statuses[0] != (StatusData{Remaining: 120}) {
+	if statuses = h.statusMessages("p1"); len(statuses) != 1 || statuses[0] != (StatusData{Remaining: gameSeconds}) {
 		t.Fatalf("wrong initial status: %v", statuses)
 	}
 }
@@ -669,7 +669,7 @@ func TestSendFailureDoesNotRewriteCatchUpHistory(t *testing.T) {
 			}
 			expectedFIFO := 10
 			if input == "game end" {
-				expectedFIFO = 119
+				expectedFIFO = gameSeconds - 1
 			}
 			if got.Nodes[0].Score != 0 || got.Nodes[0].FIFOUsage != expectedFIFO {
 				t.Fatalf("manual history was auto-forwarded: %+v", got.Nodes[0])

@@ -16,6 +16,9 @@ import (
 	"github.com/canta-9142/d4-exhi/internal/app"
 )
 
+// gameSeconds is the game length in whole seconds.
+const gameSeconds = int(app.GameDuration / time.Second)
+
 // stateApp returns a fixed Snapshot and records how State was called.
 type stateApp struct {
 	snapshot app.Snapshot
@@ -36,7 +39,7 @@ func (a *stateApp) Execute(context.Context, app.Command) error { return nil }
 // devices.
 func baseSnapshot() app.Snapshot {
 	s := app.Snapshot{
-		Phase: app.Preparing, Remaining: app.GameDuration, RemainingSeconds: 120,
+		Phase: app.Preparing, Remaining: app.GameDuration, RemainingSeconds: gameSeconds,
 		CanStart: true, StartBlockers: []app.StartBlocker{}, Devices: []app.DeviceSnapshot{},
 	}
 	for id := app.NodeID(1); id <= app.NodeCount; id++ {
@@ -103,9 +106,9 @@ func TestStateExample(t *testing.T) {
 	want := compact(t, `{
   "game": {
     "phase": "Preparing",
-    "durationSeconds": 120,
+    "durationSeconds": 90,
     "elapsedMs": 0,
-    "remainingSeconds": 120,
+    "remainingSeconds": 90,
     "canStart": false,
     "startBlockers": [
       {"code": "players_not_ready", "nodeIds": ["P1"]}
@@ -140,13 +143,13 @@ func TestStateExample(t *testing.T) {
 // A Playing game with values in every player and bot field.
 func TestStatePlaying(t *testing.T) {
 	s := baseSnapshot()
-	s.Phase, s.Elapsed, s.RemainingSeconds = app.Playing, 30*time.Second, 90
+	s.Phase, s.Elapsed, s.RemainingSeconds = app.Playing, 30*time.Second, gameSeconds-30
 	s.CanStart, s.StartBlockers = false, []app.StartBlocker{{Code: app.CodeNotPreparing}}
 	s.Nodes[2] = app.NodeSnapshot{ID: 3, Kind: "player", Enabled: true, Ready: true, FIFOUsage: 5, Score: 2147483647, RankingEligible: true}
 	s.Nodes[9] = app.NodeSnapshot{ID: 10, Kind: "bot", FIFOUsage: 4, Rate: 2.5}
 
 	w, body := getState(t, s)
-	wantGame := `{"phase":"Playing","durationSeconds":120,"elapsedMs":30000,"remainingSeconds":90,"canStart":false,"startBlockers":[{"code":"not_preparing"}]}`
+	wantGame := `{"phase":"Playing","durationSeconds":90,"elapsedMs":30000,"remainingSeconds":60,"canStart":false,"startBlockers":[{"code":"not_preparing"}]}`
 	if got := compact(t, string(mustField(t, w, "game"))); got != wantGame {
 		t.Errorf("game = %s, want %s", got, wantGame)
 	}
@@ -291,12 +294,12 @@ func TestStateTime(t *testing.T) {
 		remaining int
 		wantMs    string
 	}{
-		{0, 120, "0"},
-		{999 * time.Microsecond, 120, "0"},
-		{time.Millisecond, 120, "1"},
-		{1999999 * time.Nanosecond, 120, "1"},
-		{61*time.Second + 234*time.Millisecond + 999999, 59, "61234"},
-		{app.GameDuration, 0, "120000"},
+		{0, gameSeconds, "0"},
+		{999 * time.Microsecond, gameSeconds, "0"},
+		{time.Millisecond, gameSeconds, "1"},
+		{1999999 * time.Nanosecond, gameSeconds, "1"},
+		{61*time.Second + 234*time.Millisecond + 999999, 29, "61234"},
+		{app.GameDuration, 0, "90000"},
 	} {
 		t.Run(tc.elapsed.String(), func(t *testing.T) {
 			s := baseSnapshot()
@@ -308,8 +311,8 @@ func TestStateTime(t *testing.T) {
 			if got, want := string(body.Game["remainingSeconds"]), fmt.Sprint(tc.remaining); got != want {
 				t.Errorf("remainingSeconds = %s, want %s", got, want)
 			}
-			if got := string(body.Game["durationSeconds"]); got != "120" {
-				t.Errorf("durationSeconds = %s, want 120", got)
+			if got := string(body.Game["durationSeconds"]); got != "90" {
+				t.Errorf("durationSeconds = %s, want 90", got)
 			}
 		})
 	}

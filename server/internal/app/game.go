@@ -11,7 +11,7 @@ import (
 const (
 	PlayerCount    = 8
 	NodeCount      = 11
-	GameDuration   = 120 * time.Second
+	GameDuration   = 90 * time.Second
 	botCapacity    = 4
 	packetTTL      = 5
 	maxGamePackets = 1000

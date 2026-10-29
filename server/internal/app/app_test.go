@@ -17,6 +17,9 @@ import (
 
 const testUID = "001122AABBCC"
 
+// gameSeconds is the game length in whole seconds.
+const gameSeconds = int(GameDuration / time.Second)
+
 type sentMessage struct {
 	session SessionID
 	message Message

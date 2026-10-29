@@ -147,7 +147,7 @@ func TestStartBlockersOrderAndRejection(t *testing.T) {
 func TestSnapshotRemainingSecondsMatchesStatus(t *testing.T) {
 	h := newHarness(t)
 	h.connect("p1", testUID, 1)
-	if s := h.state(); s.RemainingSeconds != 120 {
+	if s := h.state(); s.RemainingSeconds != gameSeconds {
 		t.Fatalf("Preparing remaining %d", s.RemainingSeconds)
 	}
 	h.start()
@@ -157,16 +157,16 @@ func TestSnapshotRemainingSecondsMatchesStatus(t *testing.T) {
 	if len(statuses) == 0 {
 		t.Fatal("missing STATUS")
 	}
-	if s := h.state(); s.RemainingSeconds != 119 || s.RemainingSeconds != statuses[len(statuses)-1].Remaining {
+	if s := h.state(); s.RemainingSeconds != gameSeconds-1 || s.RemainingSeconds != statuses[len(statuses)-1].Remaining {
 		t.Fatalf("snapshot %d, status %d", s.RemainingSeconds, statuses[len(statuses)-1].Remaining)
 	}
 	h.execute(Command{Operation: Finish})
 	h.tick(10 * time.Second)
-	if s := h.state(); s.RemainingSeconds != 119 {
+	if s := h.state(); s.RemainingSeconds != gameSeconds-1 {
 		t.Fatalf("Finished remaining changed: %d", s.RemainingSeconds)
 	}
 	h.execute(Command{Operation: Reset})
-	if s := h.state(); s.RemainingSeconds != 120 {
+	if s := h.state(); s.RemainingSeconds != gameSeconds {
 		t.Fatalf("Reset remaining: %d", s.RemainingSeconds)
 	}
 }

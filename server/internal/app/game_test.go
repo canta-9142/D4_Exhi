@@ -25,7 +25,7 @@ func TestDelayedTicksMatchOnTimeTicks(t *testing.T) {
 	for at := 100 * time.Millisecond; at <= 130*time.Second; at += 100 * time.Millisecond {
 		regular.advance(epoch.Add(at))
 	}
-	if delayed.phase != Finished || delayed.elapsed != GameDuration || delayed.nextPID != 8*119 {
+	if delayed.phase != Finished || delayed.elapsed != GameDuration || delayed.nextPID != uint32(8*(gameSeconds-1)) {
 		t.Fatalf("wrong game boundary: phase=%s elapsed=%s generated=%d", delayed.phase, delayed.elapsed, delayed.nextPID)
 	}
 	if !reflect.DeepEqual(delayed.nodes, regular.nodes) {
