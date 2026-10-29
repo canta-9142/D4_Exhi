@@ -11,6 +11,7 @@
 nix develop -c go -C server run ./cmd/server
 nix develop -c go -C server run ./cmd/server -log-level debug
 nix develop -c go -C server run ./cmd/server -devices-file data/devices.json
+nix develop -c go -C server run ./cmd/server -records-file data/records.sqlite3
 nix develop -c go -C server run ./cmd/server -http-addr 127.0.0.1:8080
 nix develop -c go -C server run ./cmd/server -list-serial-ports
 nix develop -c go -C server run ./cmd/server -serial-port /dev/ttyACM0 -serial-port /dev/ttyACM1
@@ -19,6 +20,7 @@ nix develop -c go -C server vet ./...
 ```
 
 `main`はログ設定を読み込み、標準出力へのログ、Transport、`app`を初期化する。
+デバイス対応表はHTTPの待ち受けより前に読み込む。記録ファイルは待ち受けの後、要求の受付より前に開く。
 指定ポートごとにUSB CDC接続を管理するgoroutineを起動する。
 HTTPは`-http-addr`（既定`:8080`）で待ち受け、管理APIと並行してserialを処理する。
 SIGINT・SIGTERMではHTTPを最大5秒待って停止し、ポートの再接続処理を停止する。
@@ -79,7 +81,8 @@ Linuxの疑似TTYでraw設定、改行を変換しない送受信、別名での
 Snapshotの経過時間・残り時間は`time.Duration`であり、`RemainingSeconds`は
 MCUの`status.remaining`と同じ切り上げ済み残り秒数を返す。HTTPでの時間表現への変換は`web`が行う。
 Snapshotにはノードごとの`Ready`・確定順位`Rank`、`CanStart`・`StartBlockers`、機器種別付きの対応表、
-現在確認表示中の機器と確認用ノードIDも含む。開始条件の判定はStartとStateで共通化する。
+現在確認表示中の機器と確認用ノードID、ベストスコアと記録ファイルの状態`Records`も含む。
+開始条件の判定はStartとStateで共通化する。
 
 管理操作の拒否は`*app.Rejection`で返し、`errors.As`で`Code`・`Nodes`を取得できる。
 開始不可理由は`StartBlocker`の配列で、`not_preparing`、`pid_exhausted`、
@@ -268,8 +271,8 @@ LEDの通常設定は`CONFIG NODE false` → Bot用なら現在件数の`BUFFER`
 `preview.go`は確認表示と復旧を担当する。
 ゲームの転送処理は状態を確定し、通知する出来事を戻り値で返す。
 手動SENDではRESULTを先に送信し、その後で返された通知を処理する。
-serial接続・受信パーサー・HTTP API・対応表の保存は実装済みで、疑似TTYとHTTPで検証する。
-実機検証、管理画面の本実装、スコアの外部保存は未実施・未実装である。
+serial接続・受信パーサー・HTTP API・対応表とゲーム記録の保存は実装済みで、疑似TTYとHTTPで検証する。
+実機検証と管理画面の本実装は未実施・未実装である。
 
 ## デバイス対応表の保存・復元
 
@@ -306,3 +309,52 @@ serial接続・受信パーサー・HTTP API・対応表の保存は実装済み
 ファイルを旧内容へ戻さず、候補の反映・以後の入力処理・送信要求を停止して全セッションを閉じ、
 `Run`がエラーを返す。`main`はHTTPも終了し、プロセスを異常終了する。
 保存完了後のMCUへの送信失敗では、保存済みの対応表を戻さない。
+
+## ゲーム記録の保存と集計
+
+仕様は[サーバー仕様3.5](../spec/server.md#35-ゲーム記録とベストスコア)に従う。
+
+`records`パッケージはSQLiteの読み書きだけを担当し、ドライバにはcgoを使わない`modernc.org/sqlite`を使う。
+Windowsでの`go test`とarm64 Linux向けのクロスビルドでCコンパイラを要しないためである。
+型`app.GameRecord`・`app.PlayerResult`は`app`に置き、`records`が`app`をimportする（`serial`と同じ向き）。
+
+| 呼び出し | 用途 |
+|---|---|
+| `records.Open(path)` | ファイルを開き、版を確認して、スキーマの作成・移行と全件の検証をしてからWALへ切り替える |
+| `(*Store).Load()` | 全ゲームを保存順に読み込み、全件を検証 |
+| `(*Store).SaveGame(GameRecord)` | 1ゲーム分を1トランザクションで書き込む |
+| `(*Store).Close()` | 接続を閉じる |
+
+保存先は`-records-file`で指定し、既定値は作業ディレクトリ基準の`data/records.sqlite3`とする。
+空のパス、`?`を含むパス、`file:`で始まるパスは開けないファイルとして扱い、起動を続ける。
+`?`以降はドライバの接続設定として読まれ、`file:`で始まる名前はSQLiteがURIとして開くため、
+指定したパスと異なるファイルを開くおそれがある。ファイルがなければ親ディレクトリを作成し、SQLiteが新しいファイルを作る。
+接続は1本に限り、`busy_timeout`は1000ms、`synchronous=FULL`、`foreign_keys=ON`を接続ごとに設定する。
+保存は`app`のgoroutineで同期的に行うため、他のプロセスが書込ロックを持つ場合の待機を短くしている。
+移行は版ごとのSQLの列とする。現行の版までの移行と全件の検証を1トランザクションで行い、
+検証に成功した場合だけ確定してから`journal_mode=WAL`へ切り替える。
+未対応の版、他のスキーマ、不正な記録を持つファイルは、移行もWALへの切替も行わずに変更しない。
+表は`STRICT`とし、列の型・範囲・時間切れでの経過時間をCHECK制約でも検証する。
+
+`main`は`Open`・`Load`の失敗では起動を中止せず、ログへ記録して`Options.RecordsUnavailable`に理由を渡す。
+この場合は`Options.SaveGame`を設定せず、ファイルを閉じる。成功時は読み込んだ記録を`Options.Records`へ、
+`(*Store).SaveGame`を`Options.SaveGame`へ渡し、`serve`の終了後に`Close`する。
+
+`game.finish`は終了理由を記録し、`change{kind:"finished"}`を通知する。
+`app`はこの通知で`GameRecord`を作り、保存を呼び、集計を更新する。`phase(Finished)`の通知より前に保存するため、
+同じイベント中の自動仮割当が保存不明で停止しても、ゲーム記録の保存は済んでいる。
+集計は起動時に過去の記録を保存順に1件ずつ加え、以後は終了ごとに1件加える。
+同点では置き換えないため、先に保存したゲームが残る。`State`は集計結果を複製して返す。
+`web`は`app.JST`で時刻を+09:00のRFC3339へ変換する。
+
+## 運用の注意
+
+1時間ごとのベストスコアは、ゲーム記録の`finished_at`（実行ホストの壁時計）で時間帯を決める。
+実行ホストの時計がNTPかRTCで正しく合っていないと、時間帯がずれる。
+RTCのないホストをネットワークにつながずに起動すると、時計が過去の時刻のままになることがある。
+展示の前に`date`で時刻を確認する。時計を直す前に終わったゲームの記録は、そのときの時刻のまま残る。
+
+記録ファイルを使えない起動では、ログに`cannot use game records`と理由が出る。
+管理画面にもその旨が出る。サーバーは記録を保存せずに動き続ける。
+ファイルを退避するか直してから、サーバーを再起動する。
+記録ファイルを複製する場合は、サーバーを止めてから`-wal`・`-shm`のファイルも合わせて扱う。

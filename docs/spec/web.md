@@ -6,7 +6,7 @@
 
 `web`はHTTPの形式を検証し、状態取得を`app.State(ctx)`、管理操作を`app.Execute(ctx, command)`へ対応付ける。対応表やゲーム状態を直接変更しない。以下で定義するJSONは管理画面向けの表現とし、MCUとの通信形式とは区別する。
 
-管理画面のレイアウトとスコアの外部保存は本仕様の対象外とする。対応表の保存・復元は[サーバー仕様4.2.3](./server.md#423-デバイス対応表の保存復元)に従い、保存専用のHTTP APIは設けない。
+管理画面のレイアウトは本仕様の対象外とする。対応表の保存・復元は[サーバー仕様4.2.3](./server.md#423-デバイス対応表の保存復元)、ゲーム記録の保存とベストスコアの集計は[サーバー仕様3.5](./server.md#35-ゲーム記録とベストスコア)に従い、保存専用のHTTP APIは設けない。
 
 ## 2. 共通形式
 
@@ -37,7 +37,7 @@ JSONはUTF-8とし、APIが生成する応答のContent-Typeは`application/json
 
 1回の`app.State`が返した整合したコピーをJSONへ変換する。項目ごとに別の時点の状態を読み直さない。GETは時間進行・生成・転送・準備完了・割当などを変更せず、ゲーム時刻も最後に確定した値を使用する。
 
-以下は`players`・`bots`を一部省略した例である。実際の応答は全プレイヤー・全Botを含む。
+以下は`players`・`bots`を一部省略した例である。実際の応答は全プレイヤー・全Botを含む。`records`は、13時台に1件の対象ゲームが終わった後のPreparingを表す。
 
 ```json
 {
@@ -80,13 +80,23 @@ JSONはUTF-8とし、APIが生成する応答のContent-Typeは`application/json
       "assignment": {"kind": "player", "nodeId": "P1"}
     }
   ],
-  "preview": {"deviceId": "001122334455", "nodeId": "P1"}
+  "preview": {"deviceId": "001122334455", "nodeId": "P1"},
+  "records": {
+    "gameBest": null,
+    "hourlyBests": [
+      {"hourStart": "2026-10-28T13:00:00+09:00", "score": 812, "nodeIds": ["P3"], "finishedAt": "2026-10-28T13:05:12+09:00"}
+    ],
+    "allTimeBest": {"score": 812, "nodeIds": ["P3"], "finishedAt": "2026-10-28T13:05:12+09:00"},
+    "available": true,
+    "unavailableReason": null,
+    "saveFailed": false
+  }
 }
 ```
 
 ### 3.2. Snapshotの項目
 
-トップレベルの`game`・`players`・`bots`・`devices`・`preview`は毎回含める。対象のない配列は`[]`、未割当の`assignment`と対象のない`preview`は`null`とし、フィールドを省略しない。
+トップレベルの`game`・`players`・`bots`・`devices`・`preview`・`records`は毎回含める。対象のない配列は`[]`、未割当の`assignment`と対象のない`preview`は`null`とし、フィールドを省略しない。
 
 | gameの項目 | 型と意味 |
 |---|---|
@@ -132,6 +142,28 @@ JSONはUTF-8とし、APIが生成する応答のContent-Typeは`application/json
 | assignment | 正式な割当の`{"kind":"player","nodeId":"P1"}`形式、またはnull。kindは機器種別と一致する |
 
 `preview`がある場合は対象の`deviceId`と確認用の`nodeId`を含める。機器種別は`devices`から取得する。未割当基板への一時的なP1設定もここへ返し、`devices[].assignment`を変更しない。SnapshotのFIFO・スコア・準備完了状態へ確認用の値を混ぜない。
+
+`records`はベストスコアと記録ファイルの状態を表す。`records`の各項目も省略しない。集計の対象・同点・時間帯の規則は[サーバー仕様3.5.5](./server.md#355-ベストスコアの集計)と[ゲームのルール](../rules.md#ベストスコア)に従う。
+
+| recordsの項目 | 型と意味 |
+|---|---|
+| gameBest | Finishedのゲームでの、ランキング対象者の最高点を表すベストスコア。手動の終了でも返す。Preparing・Playingと、対象者のいないゲームではnull |
+| hourlyBests | 1時間ごとのベストスコアの配列。対象の結果がある時間帯をすべて、新しい時間帯から順に含める。なければ`[]` |
+| allTimeBest | 通算のベストスコア。対象の結果がなければnull |
+| available | 起動時に記録ファイルを使えたかの真偽値 |
+| unavailableReason | availableがfalseのとき、記録ファイルを使えなかった理由の文字列。trueのときはnull |
+| saveFailed | 直近のゲーム記録の保存に失敗したかの真偽値。次の保存に成功するとfalseに戻る。起動後にまだ保存していない場合と、availableがfalseの場合はfalse |
+
+| ベストスコアの項目 | 型と意味 |
+|---|---|
+| hourStart | hourlyBestsの要素だけに含める。時間帯の始まりの正時 |
+| score | 最高点の整数。0〜2147483647 |
+| nodeIds | その点を出したプレイヤーノードIDの配列。同点の対象者を全員、番号順に含める。1件以上 |
+| finishedAt | その点を出したゲームが終わった時刻 |
+
+時刻は日本時間の`+09:00`を付けたRFC3339形式の、秒までの文字列とする（例: `2026-10-28T13:05:12+09:00`）。秒未満は切り捨てる。
+
+`available`がfalseのとき、`hourlyBests`・`allTimeBest`はこの起動中に終わったゲームだけの集計となる。管理画面は、その旨と`unavailableReason`を表示する。`unavailableReason`はログと同じ内容の説明であり、画面の分岐に文面を使用しない。
 
 ### 3.3. 開始不可理由
 
