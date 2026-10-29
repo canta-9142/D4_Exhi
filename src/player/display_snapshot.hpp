@@ -26,14 +26,22 @@ struct DisplaySnapshot {
   FinalSummary summary{};
   uint16_t finishedProgress = 1000;
   bool previewLit = true;
+  bool countdownGo = false;
 };
 
 static_assert(std::is_trivially_copyable<DisplaySnapshot>::value, "FreeRTOS queues copy snapshots as bytes");
 using PacketDirtyRows = std::bitset<ANIMATION_HEIGHT>;
 
-enum class DisplayScreen : uint8_t { Playing, Preparing, Finished, Preview };
+// STATUSの取得前・同期中・確認表示中は、通常のPlaying画面で接続状態を示す。
+inline bool countdown_enabled(const DisplaySnapshot& s) {
+  return s.phase == GamePhase::Playing && !s.preview && s.synced && s.selfId != NodeId::None &&
+         !s.awaitingStatus && s.status.known;
+}
+
+enum class DisplayScreen : uint8_t { Playing, Preparing, Finished, Preview, Countdown };
 inline DisplayScreen display_screen(const DisplaySnapshot& s) {
   if (s.preview && s.synced && s.selfId != NodeId::None && s.phase != GamePhase::Unknown) return DisplayScreen::Preview;
+  if (countdown_enabled(s) && (s.status.countdown || s.countdownGo)) return DisplayScreen::Countdown;
   if (s.phase == GamePhase::Preparing) return DisplayScreen::Preparing;
   if (s.phase == GamePhase::Finished) return DisplayScreen::Finished;
   return DisplayScreen::Playing;
@@ -88,9 +96,9 @@ struct DisplayChanges {
   bool self = false, label = false, score = false, remaining = false, ready = false;
   bool full = false, preparingHeader = false, preparingBody = false, preparingBar = false, preparingArrows = false;
   bool resultHeader = false, resultBody = false, resultScore = false, resultRank = false, resultAccent = false;
-  bool previewBody = false;
+  bool previewBody = false, countdownBody = false;
   bool any() const {
-    return resultHeader || resultBody || resultScore || resultRank || resultAccent || previewBody || full || preparingHeader || preparingBody || preparingBar || preparingArrows || cards.any() || buttons || self || label || score || remaining || ready;
+    return resultHeader || resultBody || resultScore || resultRank || resultAccent || previewBody || countdownBody || full || preparingHeader || preparingBody || preparingBar || preparingArrows || cards.any() || buttons || self || label || score || remaining || ready;
   }
 };
 
@@ -104,6 +112,12 @@ inline DisplayChanges display_changes(const DisplaySnapshot& previous, const Dis
   if (display_screen(next) == DisplayScreen::Preview) {
     changes.label = false;
     changes.previewBody = first || changes.self || previous.previewLit != next.previewLit;
+    return changes;
+  }
+  if (display_screen(next) == DisplayScreen::Countdown) {
+    changes.label = false;
+    changes.countdownBody = first || changes.self || previous.status.countdown != next.status.countdown ||
+                            previous.countdownGo != next.countdownGo;
     return changes;
   }
   if (display_screen(next) == DisplayScreen::Finished) {
@@ -151,7 +165,7 @@ inline DisplayChanges display_changes(const DisplaySnapshot& previous, const Dis
 inline FrameDamage display_damage(const DisplayChanges& changes, bool first) {
   FrameDamage damage;
   if (first || changes.full) { damage.full(); return damage; }
-  if (changes.resultBody || changes.previewBody) damage.markRect(0, 81, 480, 239);
+  if (changes.resultBody || changes.previewBody || changes.countdownBody) damage.markRect(0, 81, 480, 239);
   if (changes.resultHeader) damage.markRect(24, 48, 320, 24);
   if (changes.resultScore) damage.markRect(24, 128, 432, 56);
   if (changes.resultRank) damage.markRect(24, 216, 432, 104);

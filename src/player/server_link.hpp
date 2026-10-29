@@ -103,7 +103,7 @@ public:
   template<class Port>
   bool send(Port& port, const PacketQueue& queue, NodeId to, uint32_t nowMs) {
     if (!port || !fifo_synced() || preview_ || mode_ != ControlMode::Manual ||
-        phase_ != GamePhase::Playing || pending_ || txLength_ || !queue.size() ||
+        phase_ != GamePhase::Playing || counting_down() || pending_ || txLength_ || !queue.size() ||
         nextRid_ > UINT32_MAX) return false;
     const unsigned target = static_cast<unsigned>(to);
     if (target < 1 || target > static_cast<unsigned>(NodeId::B3)) return false;
@@ -128,6 +128,9 @@ public:
   ControlMode mode() const { return mode_; }
   const PlayerStatus& status() const { return status_; }
   bool awaiting_status() const { return statusSync_ != StatusSync::Complete; }
+  // カウントダウン中のFIFOは空のはずだが、念のため入力も無視する。
+  // STATUSの取得待ちでは以前の値を使わず、SENDに追加の制限を設けない。
+  bool counting_down() const { return status_.countdown && !awaiting_status(); }
   bool preview() const { return preview_; }
   const FinalSummary& summary() const { return summary_; }
   bool ready_pending() const { return readyPending_; }
@@ -469,11 +472,12 @@ private:
     } else if (std::strcmp(type, "status") == 0) {
       if (!data["score"].is<int32_t>() || data["score"].as<int32_t>() < 0 ||
           !data["remaining"].is<uint8_t>() || data["remaining"].as<unsigned>() > 120 ||
-          !data["ready"].is<bool>()) {
+          !data["ready"].is<bool>() ||
+          !data["countdown"].is<uint8_t>() || data["countdown"].as<unsigned>() > 3) {
         request_resync();
       } else if (state_ != State::AwaitConfig) {
         status_ = {data["score"].as<int32_t>(), data["remaining"].as<uint8_t>(),
-                   data["ready"].as<bool>(), true};
+                   data["ready"].as<bool>(), true, data["countdown"].as<uint8_t>()};
         if (status_.ready) cancel_ready();
         if (statusSync_ == StatusSync::AwaitStatus) {
           statusSync_ = StatusSync::Complete;

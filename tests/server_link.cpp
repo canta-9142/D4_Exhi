@@ -60,8 +60,8 @@ static void test_status_and_mode() {
   const std::string manual = message("config", R"({"node":1,"mode":"manual","preview":false})");
   const std::string automatic = message("config", R"({"node":1,"mode":"auto","preview":false})");
   const std::string playing = message("phase", R"({"phase":"Playing"})");
-  const std::string status = message("status", R"({"score":23,"remaining":87,"ready":true})");
-  const std::string maximum = message("status", R"({"score":2147483647,"remaining":120,"ready":false})");
+  const std::string status = message("status", R"({"score":23,"remaining":87,"ready":true,"countdown":0})");
+  const std::string maximum = message("status", R"({"score":2147483647,"remaining":120,"ready":false,"countdown":0})");
   const std::string hello = message("hello", R"({"uid":"001122334455"})");
   const std::string resync = message("resync", "{}");
   assert(ctx.link.mode() == ControlMode::Auto && !ctx.link.status().known);
@@ -100,7 +100,7 @@ static void test_status_and_mode() {
   assert(!ctx.link.awaiting_status() && ctx.link.status().known); // 通常RESETは取得待ちを増やさない。
 
   // STATUSは加点差分ではなく絶対値。0秒でもフェーズを独自に変更しない。
-  ctx.receive(message("status", R"({"score":0,"remaining":0,"ready":false})"));
+  ctx.receive(message("status", R"({"score":0,"remaining":0,"ready":false,"countdown":0})"));
   assert(ctx.link.status().score == 0 && ctx.link.status().remaining == 0 && !ctx.link.status().ready);
   assert(ctx.link.phase() == GamePhase::Playing && ctx.link.mode() == ControlMode::Manual);
   assert(ctx.link.send(ctx.port, ctx.queue, NodeId::P2, ctx.now));
@@ -113,14 +113,14 @@ static void test_status_and_mode() {
   assert(!ctx.link.pending() && ctx.port.output == resync);
 
   const std::string badStatus[] = {
-    R"({"remaining":120,"ready":true})", R"({"score":0,"ready":true})",
-    R"({"score":0,"remaining":120})", R"({"score":-1,"remaining":120,"ready":true})",
-    R"({"score":2147483648,"remaining":120,"ready":true})",
-    R"({"score":1.0,"remaining":120,"ready":true})",
-    R"({"score":true,"remaining":120,"ready":true})",
-    R"({"score":0,"remaining":-1,"ready":true})", R"({"score":0,"remaining":121,"ready":true})",
-    R"({"score":0,"remaining":"120","ready":true})", R"({"score":0,"remaining":1.0,"ready":true})",
-    R"({"score":0,"remaining":120,"ready":1})", R"({"score":0,"remaining":120,"ready":"true"})"
+    R"({"remaining":120,"ready":true,"countdown":0})", R"({"score":0,"ready":true,"countdown":0})",
+    R"({"score":0,"remaining":120,"countdown":0})", R"({"score":-1,"remaining":120,"ready":true,"countdown":0})",
+    R"({"score":2147483648,"remaining":120,"ready":true,"countdown":0})",
+    R"({"score":1.0,"remaining":120,"ready":true,"countdown":0})",
+    R"({"score":true,"remaining":120,"ready":true,"countdown":0})",
+    R"({"score":0,"remaining":-1,"ready":true,"countdown":0})", R"({"score":0,"remaining":121,"ready":true,"countdown":0})",
+    R"({"score":0,"remaining":"120","ready":true,"countdown":0})", R"({"score":0,"remaining":1.0,"ready":true,"countdown":0})",
+    R"({"score":0,"remaining":120,"ready":1,"countdown":0})", R"({"score":0,"remaining":120,"ready":"true","countdown":0})"
   };
   for (const auto& fields : badStatus) {
     ctx.receive(fifo + maximum);
@@ -213,7 +213,7 @@ static void test_utf8_validation() {
   TestContext ctx;
   const std::string config = message("config", R"({"node":1,"mode":"manual","preview":false})");
   const std::string fifo = reset("0000000000000000000000000000000A", R"([{"pid":10,"dst":2}])");
-  const std::string status = message("status", R"({"score":1,"remaining":120,"ready":false})");
+  const std::string status = message("status", R"({"score":1,"remaining":120,"ready":false,"countdown":0})");
   const std::string hello = message("hello", R"({"uid":"001122334455"})");
   const auto with_text = [](const std::string& text) {
     return message("config", "{\"node\":1,\"mode\":\"manual\",\"preview\":false,\"extra\":\"" + text + "\"}");
@@ -314,7 +314,7 @@ static void test_partial_writes() {
   const std::string config = message("config", R"({"node":1,"mode":"manual","preview":false})");
   const std::string fifo = reset(sync, R"([{"pid":10,"dst":2}])");
   const std::string playing = message("phase", R"({"phase":"Playing"})");
-  const std::string status = message("status", R"({"score":0,"remaining":120,"ready":false})");
+  const std::string status = message("status", R"({"score":0,"remaining":120,"ready":false,"countdown":0})");
   const std::string hello = message("hello", R"({"uid":"001122334455"})");
   const std::string resync = message("resync", "{}");
   const std::string send = message("send", "{\"sync\":\"" + sync + "\",\"rid\":0,\"pid\":10,\"to\":2}");
@@ -420,8 +420,8 @@ static void test_ready() {
   const auto config = message("config", R"({"node":1,"mode":"manual","preview":false})");
   const auto prep = message("phase", R"({"phase":"Preparing"})");
   const auto playing = message("phase", R"({"phase":"Playing"})");
-  const auto no = message("status", R"({"score":0,"remaining":120,"ready":false})");
-  const auto yes = message("status", R"({"score":0,"remaining":120,"ready":true})");
+  const auto no = message("status", R"({"score":0,"remaining":120,"ready":false,"countdown":0})");
+  const auto yes = message("status", R"({"score":0,"remaining":120,"ready":true,"countdown":0})");
   const auto readyA = message("ready", "{\"sync\":\"" + syncA + "\"}");
   const auto readyB = message("ready", "{\"sync\":\"" + syncB + "\"}");
   const auto resync = message("resync", "{}");
@@ -513,7 +513,7 @@ static void test_summary_and_preview() {
   const auto config = message("config", R"({"node":1,"mode":"manual","preview":false})");
   const auto playing = message("phase", R"({"phase":"Playing"})");
   const auto finished = message("phase", R"({"phase":"Finished"})");
-  const auto status = message("status", R"({"score":9,"remaining":0,"ready":false})");
+  const auto status = message("status", R"({"score":9,"remaining":0,"ready":false,"countdown":0})");
   const auto summary = [&](const std::string& sync, const std::string& fields = R"("score":2147483647,"rank":2,"eligible":true)") {
     return message("summary", "{\"sync\":\"" + sync + "\"," + fields + "}");
   };
@@ -637,7 +637,55 @@ static void test_summary_and_preview() {
   assert(!ctx.link.preview() && ctx.self == NodeId::None);
 }
 
+static void test_countdown() {
+  TestContext ctx;
+  const std::string sync = "0000000000000000000000000000000A";
+  const std::string fifo = reset(sync, R"([{"pid":10,"dst":2}])");
+  const std::string resync = message("resync", "{}");
+  const auto countdown = [](const std::string& value) {
+    return message("status", R"({"score":0,"remaining":90,"ready":true,"countdown":)" + value + "}");
+  };
+  ctx.receive(message("config", R"({"node":1,"mode":"manual","preview":false})") + fifo +
+              message("phase", R"({"phase":"Playing"})"));
+  for (unsigned value : {3u, 3u, 2u, 1u}) {
+    ctx.receive(countdown(std::to_string(value))); // 同じ値の再通知も受け付ける。
+    assert(ctx.link.status().countdown == value && ctx.link.counting_down() && ctx.link.fifo_synced());
+    // FIFOが残っていても、カウントダウン中はボタンのSENDを出さない。
+    ctx.port.output.clear();
+    assert(!ctx.link.send(ctx.port, ctx.queue, NodeId::P2, ctx.now) && ctx.port.output.empty());
+  }
+  ctx.receive(countdown("0"));
+  assert(ctx.link.status().countdown == 0 && !ctx.link.counting_down());
+  assert(ctx.link.phase() == GamePhase::Playing && ctx.link.send(ctx.port, ctx.queue, NodeId::P2, ctx.now));
+  ctx.receive(result(sync, 0));
+  assert(ctx.queue.size() == 0 && !ctx.link.pending());
+
+  const std::string bad[] = {"-1", "4", "255", "256", "1.0", "true", "\"1\"", "null"};
+  for (const auto& value : bad) {
+    ctx.receive(fifo + countdown("2"));
+    ctx.port.output.clear();
+    ctx.receive(countdown(value));
+    assert(ctx.port.output == resync && !ctx.link.fifo_synced() && ctx.queue.size() == 1);
+    assert(ctx.link.status().countdown == 2 && ctx.link.status().score == 0 && ctx.link.status().ready);
+  }
+  ctx.receive(fifo + countdown("2"));
+  ctx.port.output.clear();
+  ctx.receive(message("status", R"({"score":0,"remaining":90,"ready":true})")); // 欠落も不正。
+  assert(ctx.port.output == resync && !ctx.link.fifo_synced() && ctx.link.status().countdown == 2);
+
+  // 再同期のSTATUS取得待ちでは、保持中の値でSENDを止めない。
+  ctx.receive(fifo);
+  assert(ctx.link.awaiting_status() && ctx.link.status().countdown == 2 && !ctx.link.counting_down());
+  assert(ctx.link.send(ctx.port, ctx.queue, NodeId::P2, ctx.now));
+  ctx.receive(result(sync, 1, false) + countdown("1"));
+  assert(!ctx.link.awaiting_status() && ctx.link.counting_down());
+  assert(!ctx.link.send(ctx.port, ctx.queue, NodeId::P2, ctx.now));
+  ctx.receive(message("identify", "{}"));
+  assert(!ctx.link.status().known && ctx.link.status().countdown == 0 && !ctx.link.counting_down());
+}
+
 int main() {
+  test_countdown();
   test_summary_and_preview();
   test_ready();
   test_status_and_mode();
@@ -650,7 +698,7 @@ int main() {
   const std::string syncB = "0000000000000000000000000000000B";
   const std::string packets = R"([{"pid":10,"dst":2}])";
   const std::string config = message("config", R"({"node":1,"mode":"manual","preview":false})");
-  const std::string status = message("status", R"({"score":23,"remaining":87,"ready":true})");
+  const std::string status = message("status", R"({"score":23,"remaining":87,"ready":true,"countdown":0})");
   const std::string identify = message("identify", "{}");
   const std::string hello = message("hello", R"({"uid":"001122334455"})");
   const std::string resync = message("resync", "{}");
@@ -882,7 +930,7 @@ int main() {
   assert(!ctx.link.fifo_synced() && !ctx.link.pending());
   ctx.receive(reset(syncB, "[]"));
   assert(ctx.link.fifo_synced() && !ctx.link.send(ctx.port, ctx.queue, NodeId::P2, ctx.now));
-  std::cout << "PASS: identify, sync/rid, phase gating, delayed results, reset/config/reconnect, "
+  std::cout << "PASS: identify, sync/rid, phase gating, countdown, delayed results, reset/config/reconnect, "
                "send/receive timeouts, partial writes, strict JSON/UTF-8, oversized-line discard, "
                "validation, line boundaries, capacity\n";
 }

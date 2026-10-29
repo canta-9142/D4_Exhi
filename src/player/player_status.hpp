@@ -10,6 +10,8 @@ struct PlayerStatus {
   uint8_t remaining = 0;
   bool ready = false;
   bool known = false;
+  // ゲーム時間の起点までの秒数。サーバーの値をそのまま表示し、MCUでは減らさない。
+  uint8_t countdown = 0;
 };
 
 // 結果の正本はsummary。statusや現在の操作モードから補完しない。
@@ -43,6 +45,35 @@ public:
 private:
   uint32_t revision_ = 0;
   uint32_t startedMs_ = 0;
+  bool running_ = false;
+};
+
+// カウントダウンが表示中に0へ変わったとき、GO!を出す期間を返す。表示だけの演出で通信状態は変えない。
+class CountdownAnimation {
+public:
+  static constexpr uint32_t GO_MS = 500;
+
+  bool update(uint8_t countdown, bool enabled, uint32_t nowMs) {
+    if (!enabled) {
+      counting_ = running_ = false;
+      return false;
+    }
+    if (countdown) {
+      counting_ = true;
+      running_ = false;
+      return false;
+    }
+    if (counting_) {
+      counting_ = false;
+      running_ = true;
+      startedMs_ = nowMs;
+    }
+    if (running_ && nowMs - startedMs_ >= GO_MS) running_ = false;
+    return running_;
+  }
+private:
+  uint32_t startedMs_ = 0;
+  bool counting_ = false;
   bool running_ = false;
 };
 

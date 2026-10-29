@@ -121,6 +121,66 @@ int main() {
   dark.summary.score = 10;
   assert(!display_changes(beforeScore, dark, false).any());
 
+  // カウントダウンは届いた値ごとに本文だけを描き直し、GO!の後で通常のPlaying画面へ戻る。
+  auto counting = displayed;
+  counting.status.countdown = 3;
+  assert(display_screen(counting) == DisplayScreen::Countdown);
+  auto countdown = display_changes(displayed, counting, false);
+  assert(countdown.full && countdown.self && countdown.countdownBody && countdown.cards.none());
+  assert(countdown.buttons == 0 && !countdown.label && !countdown.score && !countdown.remaining);
+  auto two = counting;
+  two.status.countdown = 2;
+  countdown = display_changes(counting, two, false);
+  assert(countdown.countdownBody && !countdown.full && !countdown.self);
+  const auto countdownArea = display_damage(countdown, false);
+  assert(countdownArea.containsPixel(78, 88) && countdownArea.containsPixel(401, 231));
+  assert(!countdownArea.containsPixel(0, 0) && !countdownArea.containsPixel(400, 40));
+  auto ignored = two;
+  ignored.pressedMask = 5;
+  ignored.status.score = 50;
+  ignored.cards[0].y = 30;
+  assert(!display_changes(two, ignored, false).any()); // ボタン・スコア・カードは描かない。
+  auto other = two;
+  other.selfId = NodeId::P8;
+  countdown = display_changes(two, other, false);
+  assert(countdown.self && countdown.countdownBody && !countdown.full); // 数字の色も変わる。
+  auto go = two;
+  go.status.countdown = 0;
+  go.countdownGo = true;
+  assert(display_screen(go) == DisplayScreen::Countdown);
+  countdown = display_changes(two, go, false);
+  assert(countdown.countdownBody && !countdown.full);
+  auto playing = go;
+  playing.countdownGo = false;
+  assert(display_screen(playing) == DisplayScreen::Playing);
+  countdown = display_changes(go, playing, false);
+  assert(countdown.full && countdown.cards.all() && countdown.buttons == 15 && countdown.score);
+  // 同期・STATUS取得待ちと確認表示では数字を出さない。
+  for (int i = 0; i < 6; ++i) {
+    auto hidden = counting;
+    if (i == 0) hidden.synced = false;
+    if (i == 1) hidden.awaitingStatus = true;
+    if (i == 2) hidden.status.known = false;
+    if (i == 3) hidden.selfId = NodeId::None;
+    if (i == 4) hidden.phase = GamePhase::Preparing;
+    if (i == 5) hidden.preview = true;
+    assert(!countdown_enabled(hidden) && display_screen(hidden) != DisplayScreen::Countdown);
+  }
+  CountdownAnimation goAnimation;
+  assert(!goAnimation.update(0, true, 0)); // 0のままではGO!を出さない。
+  assert(!goAnimation.update(1, true, UINT32_MAX - 100));
+  assert(goAnimation.update(0, true, UINT32_MAX - 100));
+  assert(goAnimation.update(0, true, CountdownAnimation::GO_MS - 102)); // millis()の周回をまたぐ。
+  assert(!goAnimation.update(0, true, CountdownAnimation::GO_MS - 101));
+  assert(!goAnimation.update(0, true, 2000)); // 1回の0への変化で1度だけ出す。
+  assert(!goAnimation.update(2, true, 3000));
+  assert(!goAnimation.update(0, false, 3001)); // 数字を出せない間に0になった場合は出さない。
+  assert(!goAnimation.update(0, true, 3002));
+  assert(!goAnimation.update(1, true, 4000));
+  assert(goAnimation.update(0, true, 4001));
+  assert(!goAnimation.update(0, false, 4002)); // Reset・Finish・再同期などで取り消す。
+  assert(!goAnimation.update(0, true, 4003));
+
   ScanTiming timing;
   timing.locked = true;
   std::array<ScanTransferBlock, 3> blocks{{{112, 16, 0, 500}, {304, 16, 400, 1200}, {464, 16, 800, 2000}}};
@@ -136,5 +196,5 @@ int main() {
   plan = plan_transfer(timing, blocks, 3);
   assert(!plan.feasible && std::isfinite(plan.startDelayFromScanUs));
   assert(!plan_transfer(timing, blocks, 0).feasible);
-  std::puts("PASS: state-driven damage, old/new card rows, clipping, no-op frames, sparse transfer timing");
+  std::puts("PASS: state-driven damage, old/new card rows, clipping, no-op frames, countdown screen, sparse transfer timing");
 }

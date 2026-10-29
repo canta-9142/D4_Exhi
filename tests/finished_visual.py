@@ -27,7 +27,7 @@ class FakeCDC:
         sync = f"{self.generation:032X}"
         self.send("reset", sync=sync, packets=packets)
         self.send("phase", phase=phase)
-        self.send("status", score=0, remaining=120, ready=False)
+        self.send("status", score=0, remaining=120, ready=False, countdown=0)
         return sync
 
     def read(self, timeout):

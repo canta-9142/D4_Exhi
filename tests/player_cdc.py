@@ -69,8 +69,8 @@ class CDC:
             if not os.read(self.fd, 4096):
                 raise ConnectionError("USB CDC disconnected")
 
-    def status(self, score=0, remaining=120, ready=False):
-        self.send("status", score=score, remaining=remaining, ready=ready)
+    def status(self, score=0, remaining=120, ready=False, countdown=0):
+        self.send("status", score=score, remaining=remaining, ready=ready, countdown=countdown)
 
     def reset(self, packets, phase="Playing", with_status=True):
         sync = uuid.uuid4().hex.upper()
@@ -230,13 +230,18 @@ def exercise(cdc, buttons, idle_seconds):
         ("result", {"sync": sync, "rid": 0, "ok": 1}),
         ("result", {"sync": sync, "rid": 0x100000000, "ok": True}),
         ("result", {"ok": True}),
-        ("status", {"score": -1, "remaining": 120, "ready": False}),
-        ("status", {"score": 2147483648, "remaining": 120, "ready": False}),
-        ("status", {"score": 1.0, "remaining": 120, "ready": False}),
-        ("status", {"score": 0, "remaining": 121, "ready": False}),
-        ("status", {"score": 0, "remaining": "120", "ready": False}),
-        ("status", {"score": 0, "remaining": 120, "ready": 1}),
-        ("status", {"score": 0, "remaining": 120}),
+        ("status", {"score": -1, "remaining": 120, "ready": False, "countdown": 0}),
+        ("status", {"score": 2147483648, "remaining": 120, "ready": False, "countdown": 0}),
+        ("status", {"score": 1.0, "remaining": 120, "ready": False, "countdown": 0}),
+        ("status", {"score": 0, "remaining": 121, "ready": False, "countdown": 0}),
+        ("status", {"score": 0, "remaining": "120", "ready": False, "countdown": 0}),
+        ("status", {"score": 0, "remaining": 120, "ready": 1, "countdown": 0}),
+        ("status", {"score": 0, "remaining": 120, "countdown": 0}),
+        ("status", {"score": 0, "remaining": 120, "ready": False, "countdown": -1}),
+        ("status", {"score": 0, "remaining": 120, "ready": False, "countdown": 4}),
+        ("status", {"score": 0, "remaining": 120, "ready": False, "countdown": 1.0}),
+        ("status", {"score": 0, "remaining": 120, "ready": False, "countdown": "1"}),
+        ("status", {"score": 0, "remaining": 120, "ready": False}),
     ]
     for kind, data in invalid:
         cdc.send(kind, **data)

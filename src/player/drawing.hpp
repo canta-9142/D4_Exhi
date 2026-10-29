@@ -11,6 +11,7 @@
 #include "packet_renderer.hpp"
 #include "preparing_renderer.hpp"
 #include "finished_renderer.hpp"
+#include "countdown_renderer.hpp"
 
 struct DrawingTaskContext {
   QueueHandle_t snapshots;
@@ -145,6 +146,7 @@ void draw_screen_layout(const DisplaySnapshot& snapshot) {
   if (preparing_screen(snapshot)) draw_preparing_layout(frame);
   else if (display_screen(snapshot) == DisplayScreen::Finished) draw_result_layout(frame, false);
   else if (display_screen(snapshot) == DisplayScreen::Preview) draw_result_layout(frame, true);
+  else if (display_screen(snapshot) == DisplayScreen::Countdown) frame.fillScreen(TFT_BLACK);
   else draw_static_layout();
 }
 
@@ -169,6 +171,11 @@ void render_snapshot(const DisplaySnapshot& snapshot, const DisplayChanges& chan
     if (display_screen(snapshot) == DisplayScreen::Preview) {
       if (changes.previewBody) render_preview(frame, snapshot);
     } else render_finished(frame, snapshot, changes);
+    return;
+  }
+  if (display_screen(snapshot) == DisplayScreen::Countdown) {
+    if (changes.self) draw_button(360, 0, snapshot.selfId, false);
+    if (changes.countdownBody) render_countdown(frame, snapshot);
     return;
   }
   if (preparing_screen(snapshot)) {

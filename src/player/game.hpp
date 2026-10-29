@@ -27,6 +27,7 @@ PacketDemo packetDemo;
 ServerLink serverLink;
 char nodeUid[13]{};
 FinishedAnimation finishedAnimation;
+CountdownAnimation countdownAnimation;
 #endif
 
 NodeId selfId = NodeId::None;
@@ -65,6 +66,7 @@ void publish_display_snapshot() {
       !snapshot.preview && snapshot.phase == GamePhase::Finished &&
       finished_state(snapshot) == FinishedState::Ready, millis());
   snapshot.previewLit = millis() / 500 % 2 == 0;
+  snapshot.countdownGo = countdownAnimation.update(snapshot.status.countdown, countdown_enabled(snapshot), millis());
 #endif
   xQueueOverwrite(displayQueue, &snapshot);
 }

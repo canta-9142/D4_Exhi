@@ -1,4 +1,7 @@
-"""通常ファームウェアの長押し実機確認。標準入力: start/reset/auto/manual/accept/reject/ignore/stop。"""
+"""通常ファームウェアの長押し実機確認。標準入力: start/reset/auto/manual/accept/reject/ignore/stop。
+
+startではサーバーと同じく、status.countdownを3・2・1・0と1秒ごとに送ってからパケットを追加する。
+"""
 
 import argparse
 import json
@@ -13,6 +16,7 @@ from player_cdc import CDC
 
 def run(cdc, args):
     mode, phase, ready, score = "manual", "Preparing", False, 0
+    countdown, countdown_at = 0, None
     sync = ""
     ids = []
     next_pid, last_rid = 1001, -1
@@ -26,7 +30,7 @@ def run(cdc, args):
                 output.write(json.dumps(message, separators=(",", ":")) + "\n")
 
     def status():
-        cdc.status(score=score, remaining=120, ready=ready)
+        cdc.status(score=score, remaining=120, ready=ready, countdown=countdown)
 
     def synchronize():
         nonlocal sync, ack_at
@@ -67,15 +71,12 @@ def run(cdc, args):
                         continue
                     phase = "Playing"
                     ack_at = None
+                    countdown, countdown_at = 3, time.monotonic() + 1
                     cdc.send("phase", phase=phase)
-                    if not ids:
-                        for _ in range(4):
-                            ids.append(next_pid)
-                            cdc.send("push", pid=next_pid, dst=2)
-                            next_pid += 1
                     status()
                 elif command in ("reset", "auto", "manual"):
                     phase, ready, score, ids = "Preparing", False, 0, []
+                    countdown, countdown_at = 0, None
                     if command != "reset":
                         mode = command
                         cdc.send("config", node=1, mode=mode, preview=False)
@@ -103,7 +104,7 @@ def run(cdc, args):
                 synchronize()
                 print(f"PASS: resync; ready={ready}; release ends before retry", flush=True)
             elif kind == "send":
-                assert phase == "Playing" and mode == "manual" and ids, message
+                assert phase == "Playing" and mode == "manual" and not countdown and ids, message
                 assert data["sync"] == sync and data["pid"] == ids[0] and data["rid"] > last_rid, message
                 assert data["to"] in (2, 9, 11, 8), message
                 last_rid = data["rid"]
@@ -118,6 +119,16 @@ def run(cdc, args):
             status()
             ack_at = None
             print("STATUS ready=true; waiting for administrator start command", flush=True)
+        if countdown_at is not None and time.monotonic() >= countdown_at:
+            countdown -= 1
+            countdown_at = countdown_at + 1 if countdown else None
+            status()
+            print(f"STATUS countdown={countdown}", flush=True)
+            if not countdown and not ids:
+                for _ in range(4):
+                    ids.append(next_pid)
+                    cdc.send("push", pid=next_pid, dst=2)
+                    next_pid += 1
 
 
 def main():
