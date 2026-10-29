@@ -79,7 +79,8 @@ function isSnapshot(s) {
     isListOf(players, (p) => isString(p.nodeId) && isString(p.mode) && typeof p.ready === "boolean" &&
       Number.isInteger(p.fifoLength) && Number.isInteger(p.score) &&
       (p.rankingEligible === null || typeof p.rankingEligible === "boolean") &&
-      (p.rank === null || Number.isInteger(p.rank))) &&
+      (p.rank === null || Number.isInteger(p.rank)) &&
+      (p.topPercent === null || Number.isInteger(p.topPercent))) &&
     isListOf(bots, (b) => isString(b.nodeId) && Number.isInteger(b.fifoLength) && Number.isFinite(b.ratePps)) &&
     isListOf(devices, (d) => isString(d.deviceId) && isString(d.kind) && typeof d.connected === "boolean" &&
       (d.assignment === null || isNode(d.assignment))) &&

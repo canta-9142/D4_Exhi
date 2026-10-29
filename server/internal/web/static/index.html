@@ -58,17 +58,18 @@
       <section class="panel section" aria-labelledby="players-title">
         <div class="panel-head"><h2 id="players-title">プレイヤー</h2><span id="players-meta" class="meta"></span></div>
         <div class="scroll">
-          <table>
+          <table class="players">
             <thead>
               <tr>
                 <th scope="col">ノード</th><th scope="col">機器</th><th scope="col">操作</th>
                 <th scope="col" data-lead="Preparing">準備</th><th scope="col" class="num">FIFO</th>
                 <th scope="col" class="num" data-lead="Playing">スコア</th>
                 <th id="rank-head" scope="col" data-lead="Finished">ランキング</th>
+                <th scope="col" class="num">上位%</th>
               </tr>
             </thead>
             <tbody id="players">
-              <tr><td class="placeholder" colspan="7">未取得</td></tr>
+              <tr><td class="placeholder" colspan="8">未取得</td></tr>
             </tbody>
           </table>
         </div>

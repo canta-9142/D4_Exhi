@@ -93,7 +93,7 @@ function blockerItem(blocker) {
 const playerRows = new Map();
 
 export function renderPlayers(snapshot) {
-  const { game, players, devices } = snapshot;
+  const { game, players, devices, records } = snapshot;
   const phase = game.phase;
   for (const head of leadHeads) {
     head.classList.toggle("lead", head.dataset.lead === phase);
@@ -105,6 +105,9 @@ export function renderPlayers(snapshot) {
     meta += `、うち準備完了 ${manual.filter((p) => p.ready).length} 人`;
   } else if (phase === "Playing") {
     meta = "ゲーム中は操作モードを変更できません";
+  } else if (phase === "Finished" && !records.available) {
+    // The percentages then count only this run's games, as the best scores do.
+    meta += "、上位%はこの起動中のゲームだけで計算";
   }
   setText(ui.playersMeta, meta);
 
@@ -139,12 +142,12 @@ function createPlayerRow(nodeId) {
   const modeCell = element("td");
   modeCell.append(modes);
   row.append(node, element("td"), modeCell, element("td"), element("td", "", "num"), element("td", "", "num"),
-    element("td"));
+    element("td"), element("td", "", "num"));
   return row;
 }
 
 function updatePlayerRow(row, player, phase, devices) {
-  const [, deviceCell, modeCell, readyCell, fifoCell, scoreCell, rankCell] = row.cells;
+  const [, deviceCell, modeCell, readyCell, fifoCell, scoreCell, rankCell, topPercentCell] = row.cells;
   const device = devices.find((d) => d.assignment?.kind === "player" && d.assignment.nodeId === player.nodeId);
   if (!device) {
     setCell(deviceCell, "— なし", "muted");
@@ -176,6 +179,11 @@ function updatePlayerRow(row, player, phase, devices) {
     setCell(rankCell, "—", "muted");
   } else {
     setCell(rankCell, `${player.rank}位`, player.rank === 1 ? "strong" : "");
+  }
+  if (phase === "Finished" && player.topPercent !== null) {
+    setCell(topPercentCell, `${player.topPercent}%`, "num");
+  } else {
+    setCell(topPercentCell, "—", "num muted");
   }
 }
 

@@ -49,6 +49,9 @@ type playerState struct {
 	// Rank is app's final rank, passed through. It is null except for the
 	// ranked players of Finished.
 	Rank *int `json:"rank"`
+	// TopPercent is app's top percent, passed through. It is null except for
+	// the players of Finished who have one, and includes values above 50.
+	TopPercent *int `json:"topPercent"`
 }
 
 type botState struct {
@@ -171,7 +174,7 @@ func newStateResponse(s app.Snapshot) (stateResponse, error) {
 			}
 			res.Players = append(res.Players, playerState{
 				NodeID: name, Mode: mode, Ready: n.Ready, FIFOLength: n.FIFOUsage, Score: n.Score,
-				RankingEligible: eligible, Rank: n.Rank,
+				RankingEligible: eligible, Rank: n.Rank, TopPercent: n.TopPercent,
 			})
 		case "bot":
 			name, err := botName(n.ID)

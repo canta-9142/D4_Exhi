@@ -262,6 +262,8 @@ body[data-countdown="true"] .unit { color: var(--caution); }
 table { width: 100%; border-collapse: collapse; }
 th, td { height: 30px; padding: 0 8px; border-bottom: 1px solid var(--rule); text-align: left; white-space: nowrap; }
 thead th { position: sticky; top: 0; z-index: 1; height: 22px; background: var(--surface); color: var(--ink-2); font-size: 12px; font-weight: 400; }
+/* The eighth column of the player table would otherwise need a scrollbar at 1366px. */
+table.players th, table.players td { padding: 0 5px; }
 thead th.lead { color: var(--ink); font-weight: 700; }
 tbody th { font-weight: 400; }
 .num { text-align: right; }

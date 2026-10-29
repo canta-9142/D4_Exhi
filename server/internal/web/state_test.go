@@ -120,14 +120,14 @@ func TestStateExample(t *testing.T) {
     ]
   },
   "players": [
-    {"nodeId": "P1", "mode": "manual", "ready": false, "fifoLength": 0, "score": 0, "rankingEligible": null, "rank": null},
-    {"nodeId": "P2", "mode": "auto", "ready": false, "fifoLength": 0, "score": 0, "rankingEligible": null, "rank": null},
-    {"nodeId": "P3", "mode": "auto", "ready": false, "fifoLength": 0, "score": 0, "rankingEligible": null, "rank": null},
-    {"nodeId": "P4", "mode": "auto", "ready": false, "fifoLength": 0, "score": 0, "rankingEligible": null, "rank": null},
-    {"nodeId": "P5", "mode": "auto", "ready": false, "fifoLength": 0, "score": 0, "rankingEligible": null, "rank": null},
-    {"nodeId": "P6", "mode": "auto", "ready": false, "fifoLength": 0, "score": 0, "rankingEligible": null, "rank": null},
-    {"nodeId": "P7", "mode": "auto", "ready": false, "fifoLength": 0, "score": 0, "rankingEligible": null, "rank": null},
-    {"nodeId": "P8", "mode": "auto", "ready": false, "fifoLength": 0, "score": 0, "rankingEligible": null, "rank": null}
+    {"nodeId": "P1", "mode": "manual", "ready": false, "fifoLength": 0, "score": 0, "rankingEligible": null, "rank": null, "topPercent": null},
+    {"nodeId": "P2", "mode": "auto", "ready": false, "fifoLength": 0, "score": 0, "rankingEligible": null, "rank": null, "topPercent": null},
+    {"nodeId": "P3", "mode": "auto", "ready": false, "fifoLength": 0, "score": 0, "rankingEligible": null, "rank": null, "topPercent": null},
+    {"nodeId": "P4", "mode": "auto", "ready": false, "fifoLength": 0, "score": 0, "rankingEligible": null, "rank": null, "topPercent": null},
+    {"nodeId": "P5", "mode": "auto", "ready": false, "fifoLength": 0, "score": 0, "rankingEligible": null, "rank": null, "topPercent": null},
+    {"nodeId": "P6", "mode": "auto", "ready": false, "fifoLength": 0, "score": 0, "rankingEligible": null, "rank": null, "topPercent": null},
+    {"nodeId": "P7", "mode": "auto", "ready": false, "fifoLength": 0, "score": 0, "rankingEligible": null, "rank": null, "topPercent": null},
+    {"nodeId": "P8", "mode": "auto", "ready": false, "fifoLength": 0, "score": 0, "rankingEligible": null, "rank": null, "topPercent": null}
   ],
   "bots": [
     {"nodeId": "B1", "fifoLength": 0, "ratePps": 1},
@@ -168,7 +168,7 @@ func TestStatePlaying(t *testing.T) {
 	if got := compact(t, string(mustField(t, w, "game"))); got != wantGame {
 		t.Errorf("game = %s, want %s", got, wantGame)
 	}
-	wantP3 := `{"nodeId":"P3","mode":"manual","ready":true,"fifoLength":5,"score":2147483647,"rankingEligible":true,"rank":null}`
+	wantP3 := `{"nodeId":"P3","mode":"manual","ready":true,"fifoLength":5,"score":2147483647,"rankingEligible":true,"rank":null,"topPercent":null}`
 	if got := compact(t, string(mustField(t, w, "players", 2))); got != wantP3 {
 		t.Errorf("players[2] = %s, want %s", got, wantP3)
 	}
@@ -324,6 +324,46 @@ func TestStateRank(t *testing.T) {
 				}
 				if i >= len(tc.want) && string(raw) != "null" {
 					t.Errorf("players[%d].rank = %s, want null", i, raw)
+				}
+			}
+		})
+	}
+}
+
+// topPercent is passed through as app gives it, including the values above 50
+// that the player summary leaves out (web.md 3.2).
+func TestStateTopPercent(t *testing.T) {
+	percent := func(n int) *int { return &n }
+	for _, tc := range []struct {
+		name    string
+		phase   app.Phase
+		percent []*int
+		want    []string
+	}{
+		{"Preparing", app.Preparing, nil, []string{"null", "null", "null", "null"}},
+		{"Playing", app.Playing, nil, []string{"null", "null", "null", "null"}},
+		{"Finished without percents", app.Finished, nil, []string{"null", "null", "null", "null"}},
+		{"Finished", app.Finished, []*int{percent(1), percent(50), percent(51), nil}, []string{"1", "50", "51", "null"}},
+		{"Finished at the largest", app.Finished, []*int{percent(100)}, []string{"100", "null", "null", "null"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := baseSnapshot()
+			s.Phase = tc.phase
+			for i, p := range tc.percent {
+				s.Nodes[i].TopPercent = p
+			}
+			w, body := getState(t, s)
+			for i, p := range body.Players {
+				raw, ok := p["topPercent"]
+				if !ok {
+					t.Fatalf("players[%d] has no topPercent: %s", i, mustField(t, w, "players", i))
+				}
+				want := "null"
+				if i < len(tc.want) {
+					want = tc.want[i]
+				}
+				if string(raw) != want {
+					t.Errorf("players[%d].topPercent = %s, want %s", i, raw, want)
 				}
 			}
 		})
