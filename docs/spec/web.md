@@ -46,6 +46,7 @@ JSONはUTF-8とし、APIが生成する応答のContent-Typeは`application/json
     "durationSeconds": 90,
     "elapsedMs": 0,
     "remainingSeconds": 90,
+    "countdownSeconds": 0,
     "canStart": false,
     "startBlockers": [
       {"code": "players_not_ready", "nodeIds": ["P1"]}
@@ -91,8 +92,9 @@ JSONはUTF-8とし、APIが生成する応答のContent-Typeは`application/json
 |---|---|
 | phase | 現在のフェーズの文字列 |
 | durationSeconds | ルールで定めるゲーム時間の整数秒。現行90 |
-| elapsedMs | 確定済み経過時間をミリ秒未満切り捨てで表した非負整数。Preparingは0、Finishedは終了時点の値を保持 |
-| remainingSeconds | 0〜durationSecondsの整数。MCUの`status.remaining`と同じ計算・保持規則に従う |
+| elapsedMs | 確定済み経過時間をミリ秒未満切り捨てで表した非負整数。Preparingと、Playingの開始直後のカウントダウン中は0。Finishedは終了時点の値を保持 |
+| remainingSeconds | 0〜durationSecondsの整数。MCUの`status.remaining`と同じ計算・保持規則に従う。カウントダウン中はdurationSeconds |
+| countdownSeconds | ゲーム時間が始まるまでの秒数を表す0〜3の整数。Startの受理から3秒間のカウントダウン中は3・2・1、それ以外は0。MCUの`status.countdown`と同じ値 |
 | canStart | 現在のStart受理条件を満たすかの真偽値 |
 | startBlockers | 満たしていないStart受理条件の配列。開始可能なら空配列 |
 
