@@ -21,6 +21,8 @@ const ui = {
   blockers: document.getElementById("blockers"),
   startHint: document.getElementById("start-hint"),
   start: document.getElementById("start"),
+  resetNext: document.getElementById("reset-next"),
+  reset: document.getElementById("reset"),
   finish: document.getElementById("finish"),
   playersMeta: document.getElementById("players-meta"),
   rankHead: document.getElementById("rank-head"),
@@ -66,6 +68,13 @@ export function renderGame(snapshot) {
   ui.start.disabled = !game.canStart;
   // An unknown phase disables nothing and leaves the decision to app.
   ui.finish.disabled = PHASES.includes(game.phase) && game.phase !== "Playing";
+
+  // After a game the reset takes the place of the start button, and the small
+  // one goes, so that the same operation is not shown twice (admin-ui.md 5.2).
+  const finished = game.phase === "Finished";
+  ui.start.hidden = finished;
+  ui.resetNext.hidden = !finished;
+  ui.reset.classList.toggle("away", finished);
 }
 
 function blockerItem(blocker) {

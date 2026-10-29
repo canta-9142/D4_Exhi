@@ -76,3 +76,26 @@ func TestErrorTexts(t *testing.T) {
 		}
 	}
 }
+
+// TestResetNextButton checks the reset that takes the place of the start
+// button after a game (admin-ui.md 5.2): it sends reset, has the size of the
+// start button, and is hidden until view.js shows it.
+func TestResetNextButton(t *testing.T) {
+	index, err := fs.ReadFile(embedded, "static/index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tag := regexp.MustCompile(`<button\s[^>]*id="reset-next"[^>]*>`).Find(index)
+	if tag == nil {
+		t.Fatal("index.html has no #reset-next button")
+	}
+	if !regexp.MustCompile(`\sdata-action="reset"`).Match(tag) {
+		t.Errorf("#reset-next does not send reset: %s", tag)
+	}
+	if !regexp.MustCompile(`class="[^"]*\bbtn-start\b[^"]*"`).Match(tag) {
+		t.Errorf("#reset-next does not have the size of the start button: %s", tag)
+	}
+	if !regexp.MustCompile(`\shidden[\s>]`).Match(tag) {
+		t.Errorf("#reset-next is not hidden at first: %s", tag)
+	}
+}

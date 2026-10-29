@@ -211,11 +211,16 @@ body[data-countdown="true"] .unit { color: var(--caution); }
 .btn-primary { border-color: var(--press); background: var(--press); color: var(--on-press); font-weight: 700; }
 .btn-start { height: 64px; font-size: 22px; letter-spacing: 0.1em; }
 .btn-start:disabled { font-weight: 700; }
+/* After a game, the reset takes the place of the start button (admin-ui.md 5.2). */
+.btn-next { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; line-height: 1.2; }
+.btn-next small { font-size: 12px; font-weight: 400; letter-spacing: 0; }
 .btn-danger { color: var(--halt); border-color: currentColor; }
 .btn-danger:disabled { color: var(--ink-3); border-color: var(--rule); }
 
 .ends { display: flex; flex-direction: column; justify-content: center; gap: 8px; }
 .ends .btn { width: 100%; }
+/* The small reset keeps its place while away, so that Finish does not move. */
+.ends .btn.away { visibility: hidden; }
 
 /* ---------- 下段 3 列 ---------- */
 .main {
