@@ -293,7 +293,7 @@ func TestPlayerPreviewRestoresBeforeStart(t *testing.T) {
 	if h.state().Preview != nil || len(h.reset("p1").Packets) != 0 || h.reset("p1").Sync == previewReset.Sync {
 		t.Fatal("preview not restored with a new generation")
 	}
-	h.tick(time.Second)
+	h.tick(CountdownDuration + time.Second)
 	h.must(h.a.submit(h.ctx, false, func(time.Time) error {
 		if h.a.game.nextPID != 8 {
 			return fmt.Errorf("preview consumed a PID: %d", h.a.game.nextPID)

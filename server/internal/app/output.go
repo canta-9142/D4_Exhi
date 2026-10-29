@@ -4,16 +4,14 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"strings"
-	"time"
 )
 
 func (a *App) remainingSeconds() int {
-	remaining := GameDuration - a.game.elapsed
-	return int((remaining + time.Second - 1) / time.Second)
+	return seconds(GameDuration - a.game.elapsed)
 }
 
 func (a *App) status(node NodeID) StatusData {
-	data := StatusData{Remaining: a.remainingSeconds()}
+	data := StatusData{Remaining: a.remainingSeconds(), Countdown: a.game.countdown}
 	if node != 0 {
 		n := &a.game.nodes[node]
 		data.Score, data.Ready = n.score, n.manual && n.ready

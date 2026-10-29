@@ -109,6 +109,7 @@ func TestStateExample(t *testing.T) {
     "durationSeconds": 90,
     "elapsedMs": 0,
     "remainingSeconds": 90,
+    "countdownSeconds": 0,
     "canStart": false,
     "startBlockers": [
       {"code": "players_not_ready", "nodeIds": ["P1"]}
@@ -149,7 +150,7 @@ func TestStatePlaying(t *testing.T) {
 	s.Nodes[9] = app.NodeSnapshot{ID: 10, Kind: "bot", FIFOUsage: 4, Rate: 2.5}
 
 	w, body := getState(t, s)
-	wantGame := `{"phase":"Playing","durationSeconds":90,"elapsedMs":30000,"remainingSeconds":60,"canStart":false,"startBlockers":[{"code":"not_preparing"}]}`
+	wantGame := `{"phase":"Playing","durationSeconds":90,"elapsedMs":30000,"remainingSeconds":60,"countdownSeconds":0,"canStart":false,"startBlockers":[{"code":"not_preparing"}]}`
 	if got := compact(t, string(mustField(t, w, "game"))); got != wantGame {
 		t.Errorf("game = %s, want %s", got, wantGame)
 	}
@@ -313,6 +314,37 @@ func TestStateTime(t *testing.T) {
 			}
 			if got := string(body.Game["durationSeconds"]); got != "90" {
 				t.Errorf("durationSeconds = %s, want 90", got)
+			}
+		})
+	}
+}
+
+// countdownSeconds is written in every phase, including its zero value.
+func TestStateCountdown(t *testing.T) {
+	for _, tc := range []struct {
+		phase     app.Phase
+		countdown int
+	}{
+		{app.Preparing, 0},
+		{app.Playing, 3},
+		{app.Playing, 2},
+		{app.Playing, 1},
+		{app.Playing, 0},
+		{app.Finished, 0},
+	} {
+		t.Run(fmt.Sprintf("%s/%d", tc.phase, tc.countdown), func(t *testing.T) {
+			s := baseSnapshot()
+			s.Phase, s.CountdownSeconds = tc.phase, tc.countdown
+			_, body := getState(t, s)
+			got, ok := body.Game["countdownSeconds"]
+			if !ok {
+				t.Fatal("countdownSeconds is missing")
+			}
+			if want := fmt.Sprint(tc.countdown); string(got) != want {
+				t.Errorf("countdownSeconds = %s, want %s", got, want)
+			}
+			if got := string(body.Game["remainingSeconds"]); got != fmt.Sprint(gameSeconds) {
+				t.Errorf("remainingSeconds = %s, want %d", got, gameSeconds)
 			}
 		})
 	}

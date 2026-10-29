@@ -6,12 +6,14 @@
 
 import { chip, element, fieldError, placeChildren, setAttr, setContent, setText, tile } from "./dom.js";
 import {
-  BOT_FIFO_MAX, FINISHED_HINT, NO_MANUAL_HINT, PHASES, blockerText, displayName, modeLabel, nodeLabel, phaseLabel,
+  BOT_FIFO_MAX, COUNTDOWN_LABEL, FINISHED_HINT, NO_MANUAL_HINT, PHASES, REMAINING_LABEL, blockerText, displayName,
+  modeLabel, nodeLabel, phaseLabel,
 } from "./labels.js";
 
 const ui = {
   phase: document.getElementById("phase"),
   track: document.getElementById("phase-track"),
+  timeLabel: document.getElementById("time-label"),
   remaining: document.getElementById("remaining"),
   duration: document.getElementById("duration"),
   timeBar: document.getElementById("time-bar"),
@@ -35,8 +37,13 @@ export function renderGame(snapshot) {
   for (const step of ui.track.children) {
     setAttr(step, "aria-current", step.dataset.phase === game.phase ? "step" : null);
   }
-  setText(ui.remaining, String(game.remainingSeconds));
-  setText(ui.duration, `/ ${game.durationSeconds} 秒`);
+  // The countdown before the game time takes the place of the remaining time;
+  // the phase stays Playing (admin-ui.md 5.2).
+  const countdown = game.countdownSeconds > 0;
+  document.body.dataset.countdown = String(countdown);
+  setText(ui.timeLabel, countdown ? COUNTDOWN_LABEL : REMAINING_LABEL);
+  setText(ui.remaining, String(countdown ? game.countdownSeconds : game.remainingSeconds));
+  setText(ui.duration, countdown ? "" : `/ ${game.durationSeconds} 秒`);
   const ratio = game.durationSeconds > 0 ? Math.min(Math.max(game.remainingSeconds / game.durationSeconds, 0), 1) : 0;
   ui.timeBar.style.width = `${ratio * 100}%`;
 

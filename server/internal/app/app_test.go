@@ -153,6 +153,10 @@ func (h *harness) ready(id SessionID) {
 	h.mu.Unlock()
 	h.message(id, IncomingMessage{Type: "ready", Sync: generation})
 }
+
+// start processes Start CountdownDuration before the current test time, so
+// that the game clock starts at that time and later ticks read as game time.
+// Tests of the countdown itself execute Start directly.
 func (h *harness) start() {
 	h.t.Helper()
 	s := h.state()
@@ -161,7 +165,10 @@ func (h *harness) start() {
 			h.ready(d.Session)
 		}
 	}
+	at := h.clock.Load()
+	h.clock.Store(at - int64(CountdownDuration))
 	h.execute(Command{Operation: Start})
+	h.clock.Store(at)
 }
 func (h *harness) reset(id SessionID) ResetData {
 	h.t.Helper()

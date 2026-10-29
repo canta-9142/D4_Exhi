@@ -181,6 +181,10 @@ button, input, select { font: inherit; color: inherit; }
 body:not([data-phase="Playing"]) .sec,
 body:not([data-phase="Playing"]) .unit { color: var(--ink-3); }
 body:not([data-phase="Playing"]) .time-bar span { background: var(--rule-2); }
+/* The countdown before the game time is shown in the caution colour. */
+body[data-countdown="true"] .time-label { color: var(--caution); font-weight: 700; }
+body[data-countdown="true"] .sec,
+body[data-countdown="true"] .unit { color: var(--caution); }
 
 .start { display: grid; grid-template-columns: minmax(0, 1fr) 168px; gap: 16px; align-items: center; }
 .readiness { min-width: 0; max-height: 78px; overflow: auto; }

@@ -72,6 +72,7 @@ function isSnapshot(s) {
   const { game, players, bots, devices, preview } = s;
   return isObject(game) && typeof game.phase === "string" &&
     Number.isInteger(game.durationSeconds) && Number.isInteger(game.remainingSeconds) &&
+    Number.isInteger(game.countdownSeconds) &&
     typeof game.canStart === "boolean" &&
     isListOf(game.startBlockers, (b) => typeof b.code === "string" &&
       (b.nodeIds === undefined || (Array.isArray(b.nodeIds) && b.nodeIds.every(isString)))) &&

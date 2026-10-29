@@ -15,6 +15,9 @@ const (
 	botCapacity    = 4
 	packetTTL      = 5
 	maxGamePackets = 1000
+	// CountdownDuration runs within Playing, from Start until GameDuration
+	// begins.
+	CountdownDuration = 3 * time.Second
 )
 
 type NodeID uint8
@@ -118,12 +121,15 @@ type change struct {
 
 type game struct {
 	phase   Phase
-	started time.Time
+	started time.Time // The game clock origin, CountdownDuration after Start.
 	elapsed time.Duration
 	nodes   [NodeCount + 1]node
 	nextPID uint32
 	random  func(int) int
 	notify  func(change)
+	// countdown is ceil(started - now) in seconds as of the last advance, so
+	// that State, which never advances, reports a settled value.
+	countdown int
 }
 
 func newGame(notify func(change)) game {
@@ -168,7 +174,8 @@ func (g *game) start(now time.Time) error {
 	if err := g.startError(); err != nil {
 		return err
 	}
-	g.phase, g.started, g.elapsed = Playing, now, 0
+	g.phase, g.started, g.elapsed = Playing, now.Add(CountdownDuration), 0
+	g.countdown = seconds(CountdownDuration)
 	for id := NodeID(1); id <= NodeCount; id++ {
 		n := &g.nodes[id]
 		if id.player() {
@@ -196,13 +203,13 @@ func (g *game) finish() error {
 			}
 		}
 	}
-	g.phase = Finished
+	g.phase, g.countdown = Finished, 0
 	g.notify(change{kind: "phase"})
 	return nil
 }
 
 func (g *game) reset() {
-	g.phase, g.started, g.elapsed = Preparing, time.Time{}, 0
+	g.phase, g.started, g.elapsed, g.countdown = Preparing, time.Time{}, 0, 0
 	for id := NodeID(1); id <= NodeCount; id++ {
 		n := &g.nodes[id]
 		n.fifo = nil
@@ -214,6 +221,14 @@ func (g *game) reset() {
 	// Stale requests are rejected by sync generation and session, not by PID.
 	g.nextPID = 0
 	g.notify(change{kind: "reset"})
+}
+
+// seconds rounds a duration up to whole seconds, and is 0 if it is not positive.
+func seconds(d time.Duration) int {
+	if d <= 0 {
+		return 0
+	}
+	return int((d + time.Second - 1) / time.Second)
 }
 
 func interval(rate float64) time.Duration {
@@ -263,6 +278,8 @@ func (g *game) advance(now time.Time) {
 	if g.phase != Playing {
 		return
 	}
+	// Until started, the countdown runs and nothing is due: until stays 0.
+	g.countdown = seconds(g.started.Sub(now))
 	until := min(max(now.Sub(g.started), g.elapsed), GameDuration)
 	for {
 		deadline := GameDuration

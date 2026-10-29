@@ -250,7 +250,7 @@ func (a *App) State(ctx context.Context) (Snapshot, error) {
 		reasons := g.startBlockers()
 		snapshot = Snapshot{
 			Phase: g.phase, Elapsed: g.elapsed, Remaining: GameDuration - g.elapsed, RemainingSeconds: a.remainingSeconds(),
-			CanStart: len(reasons) == 0, StartBlockers: reasons,
+			CountdownSeconds: g.countdown, CanStart: len(reasons) == 0, StartBlockers: reasons,
 			Nodes: make([]NodeSnapshot, 0, NodeCount), Devices: make([]DeviceSnapshot, 0, len(a.devices)),
 		}
 		for id := NodeID(1); id <= NodeCount; id++ {

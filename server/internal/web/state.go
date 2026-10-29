@@ -25,6 +25,7 @@ type gameState struct {
 	DurationSeconds  int            `json:"durationSeconds"`
 	ElapsedMs        int64          `json:"elapsedMs"`
 	RemainingSeconds int            `json:"remainingSeconds"`
+	CountdownSeconds int            `json:"countdownSeconds"`
 	CanStart         bool           `json:"canStart"`
 	StartBlockers    []startBlocker `json:"startBlockers"`
 }
@@ -103,6 +104,7 @@ func newStateResponse(s app.Snapshot) (stateResponse, error) {
 			DurationSeconds:  int(app.GameDuration / time.Second),
 			ElapsedMs:        s.Elapsed.Milliseconds(),
 			RemainingSeconds: s.RemainingSeconds,
+			CountdownSeconds: s.CountdownSeconds,
 			CanStart:         s.CanStart,
 			StartBlockers:    make([]startBlocker, 0, len(s.StartBlockers)),
 		},

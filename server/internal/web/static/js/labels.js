@@ -70,6 +70,10 @@ export function blockerText(code) {
 export const NO_MANUAL_HINT = "手動のプレイヤーがいないため、全員自動で始まります";
 export const FINISHED_HINT = "次のゲームは、リセットして準備中に戻してから始めます";
 
+// The heading over the seconds of the command bar (admin-ui.md 5.2, 7.4).
+export const REMAINING_LABEL = "残り時間";
+export const COUNTDOWN_LABEL = "開始まで（カウントダウン中）";
+
 // ---------- 状態帯（admin-ui.md 5.1、9） ----------
 
 export const connectionLabels = { connecting: "● 接続中", online: "● 正常", offline: "× 通信途絶" };

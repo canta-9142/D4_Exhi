@@ -74,6 +74,7 @@ type StatusData struct {
 	Score     int  `json:"score"`
 	Remaining int  `json:"remaining"`
 	Ready     bool `json:"ready"`
+	Countdown int  `json:"countdown"`
 }
 type LEDConfigData struct {
 	Node    NodeID
@@ -160,7 +161,9 @@ type Snapshot struct {
 	Elapsed   time.Duration `json:"elapsed"`
 	Remaining time.Duration `json:"remaining"`
 	// RemainingSeconds is the value MCUs receive as status.remaining.
-	RemainingSeconds int              `json:"remaining_seconds"`
+	RemainingSeconds int `json:"remaining_seconds"`
+	// CountdownSeconds is the value MCUs receive as status.countdown.
+	CountdownSeconds int              `json:"countdown_seconds"`
 	Nodes            []NodeSnapshot   `json:"nodes"`
 	Devices          []DeviceSnapshot `json:"devices"`
 	CanStart         bool             `json:"can_start"`

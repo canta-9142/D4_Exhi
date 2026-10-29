@@ -9,11 +9,12 @@ import (
 
 var epoch = time.Unix(1000, 0)
 
+// startedGame starts the game clock at epoch, after the countdown.
 func startedGame(t *testing.T) *game {
 	t.Helper()
 	g := newGame(func(change) {})
 	g.random = func(n int) int { return n / 2 }
-	if err := g.start(epoch); err != nil {
+	if err := g.start(epoch.Add(-CountdownDuration)); err != nil {
 		t.Fatal(err)
 	}
 	return &g
@@ -165,7 +166,7 @@ func TestResetRestartsPIDFromZero(t *testing.T) {
 	if err := g.start(epoch); err != nil {
 		t.Fatal(err)
 	}
-	g.advance(epoch.Add(time.Second))
+	g.advance(epoch.Add(CountdownDuration + time.Second))
 	if got := g.nodes[1].fifo[0].PID; got != 0 {
 		t.Fatalf("first packet after Reset has PID %d, want 0", got)
 	}
