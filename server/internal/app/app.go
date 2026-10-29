@@ -25,6 +25,17 @@ type Options struct {
 	// SaveDevices synchronously persists the complete candidate before commit.
 	// Nil allows in-memory operation. It must not call back into app.
 	SaveDevices func([]SavedDevice) error
+	// Records are the saved games in save order, already validated by the
+	// records package. They are ignored if RecordsUnavailable is set.
+	Records []GameRecord
+	// SaveGame synchronously persists a finished game once, at the transition
+	// to Finished. Nil allows in-memory operation. It must not call back into
+	// app.
+	SaveGame func(GameRecord) error
+	// RecordsUnavailable is why the records file could not be used at
+	// startup. If set, app never calls SaveGame and counts only the games of
+	// this process.
+	RecordsUnavailable string
 }
 
 type session struct {
@@ -72,6 +83,9 @@ type App struct {
 	advancing     bool
 	fatalErr      error
 	assignPending bool
+	bests         bests
+	gameBest      *BestScore // The finished game's best until Reset.
+	saveFailed    bool       // Whether the latest SaveGame failed.
 }
 
 func New(options Options) *App {
@@ -85,6 +99,11 @@ func New(options Options) *App {
 	a.game = newGame(a.notify)
 	for _, d := range options.Devices {
 		a.devices[d.DeviceID] = &device{kind: d.Kind, node: d.Node, noAuto: d.AutoAssignExcluded}
+	}
+	if options.RecordsUnavailable == "" {
+		for _, r := range options.Records {
+			a.bests.add(r)
+		}
 	}
 	return a
 }
@@ -201,7 +220,7 @@ func (a *App) Execute(ctx context.Context, command Command) error {
 			a.restorePreview()
 			return a.game.start(now)
 		case Finish:
-			return a.game.finish()
+			return a.game.finish(FinishManual)
 		case Reset:
 			a.game.reset()
 		case SetNodeEnabled:
@@ -282,6 +301,7 @@ func (a *App) State(ctx context.Context) (Snapshot, error) {
 		if p := a.preview; p != nil {
 			snapshot.Preview = &PreviewSnapshot{DeviceID: p.uid, Kind: a.devices[p.uid].kind, Node: p.node}
 		}
+		snapshot.Records = a.recordsSnapshot()
 		return nil
 	})
 	if err != nil {

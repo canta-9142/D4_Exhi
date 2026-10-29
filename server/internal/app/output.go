@@ -166,7 +166,10 @@ func (a *App) notify(c change) {
 		}
 		a.assignPending = true
 		a.autoAssignPending()
+	case "finished":
+		a.recordGame()
 	case "reset":
+		a.gameBest = nil
 		a.notifyReset()
 	case "push", "fifo":
 		if c.node.bot() {

@@ -130,6 +130,7 @@ type game struct {
 	// countdown is ceil(started - now) in seconds as of the last advance, so
 	// that State, which never advances, reports a settled value.
 	countdown int
+	reason    FinishReason // How the game finished, while Finished.
 }
 
 func newGame(notify func(change)) game {
@@ -187,7 +188,9 @@ func (g *game) start(now time.Time) error {
 	return nil
 }
 
-func (g *game) finish() error {
+// finish settles the result. The record is published before the phase so that
+// it is saved even if the phase change's notifications stop app.
+func (g *game) finish(reason FinishReason) error {
 	if g.phase != Playing {
 		return reject(CodePhaseConflict, "Finish requires Playing phase")
 	}
@@ -203,13 +206,14 @@ func (g *game) finish() error {
 			}
 		}
 	}
-	g.phase, g.countdown = Finished, 0
+	g.phase, g.countdown, g.reason = Finished, 0, reason
+	g.notify(change{kind: "finished"})
 	g.notify(change{kind: "phase"})
 	return nil
 }
 
 func (g *game) reset() {
-	g.phase, g.started, g.elapsed, g.countdown = Preparing, time.Time{}, 0, 0
+	g.phase, g.started, g.elapsed, g.countdown, g.reason = Preparing, time.Time{}, 0, 0, ""
 	for id := NodeID(1); id <= NodeCount; id++ {
 		n := &g.nodes[id]
 		n.fifo = nil
@@ -321,7 +325,7 @@ func (g *game) advance(now time.Time) {
 	}
 	g.elapsed = until
 	if until == GameDuration {
-		_ = g.finish()
+		_ = g.finish(FinishTimeout)
 	}
 }
 

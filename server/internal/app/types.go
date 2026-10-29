@@ -156,6 +156,36 @@ type PreviewSnapshot struct {
 	Node     NodeID     `json:"node"`
 }
 
+// BestScore is a best score of rules.md: the score, every node that has it in
+// node order, and when its game finished.
+type BestScore struct {
+	Score      int       `json:"score"`
+	Nodes      []NodeID  `json:"nodes"`
+	FinishedAt time.Time `json:"finished_at"`
+}
+
+// HourlyBest is the best score of the JST hour that begins at HourStart.
+type HourlyBest struct {
+	HourStart time.Time `json:"hour_start"`
+	BestScore
+}
+
+// RecordsSnapshot holds the best scores of server.md 3.5.5 and the state of
+// the records file.
+type RecordsSnapshot struct {
+	// GameBest is the current game's best while Finished, otherwise nil.
+	GameBest *BestScore `json:"game_best"`
+	// HourlyBests is newest hour first.
+	HourlyBests []HourlyBest `json:"hourly_bests"`
+	AllTimeBest *BestScore   `json:"all_time_best"`
+	// Available is false if the records file could not be used at startup;
+	// the bests then count only the games of this process.
+	Available         bool   `json:"available"`
+	UnavailableReason string `json:"unavailable_reason"`
+	// SaveFailed reports whether the latest save failed.
+	SaveFailed bool `json:"save_failed"`
+}
+
 type Snapshot struct {
 	Phase     Phase         `json:"phase"`
 	Elapsed   time.Duration `json:"elapsed"`
@@ -169,4 +199,5 @@ type Snapshot struct {
 	CanStart         bool             `json:"can_start"`
 	StartBlockers    []StartBlocker   `json:"start_blockers"`
 	Preview          *PreviewSnapshot `json:"preview,omitempty"`
+	Records          RecordsSnapshot  `json:"records"`
 }

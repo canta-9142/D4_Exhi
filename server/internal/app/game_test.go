@@ -196,7 +196,7 @@ func TestStartRequiresUnissuedPIDs(t *testing.T) {
 
 func TestResetRecoversFromPIDExhaustion(t *testing.T) {
 	g := startedGame(t)
-	_ = g.finish()
+	_ = g.finish(FinishManual)
 	g.nextPID = 65536 - maxGamePackets + 1
 	if blockers := g.startBlockers(); len(blockers) != 2 || blockers[1].Code != CodePIDExhausted {
 		t.Fatalf("exhausted PIDs not reported: %v", blockers)
@@ -226,7 +226,7 @@ func TestRankingCannotBeRestoredDuringGame(t *testing.T) {
 	if g.nodes[1].eligible {
 		t.Fatal("manual control restored ranking eligibility")
 	}
-	_ = g.finish()
+	_ = g.finish(FinishManual)
 	g.setManual(2, true)
 	if g.nodes[2].eligible {
 		t.Fatal("Finished ranking changed")

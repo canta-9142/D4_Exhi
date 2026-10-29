@@ -63,7 +63,7 @@ func TestFinalRanksExcludeIneligibleAndUseCompetitionRanking(t *testing.T) {
 			for i, score := range []int{100, 100, 80, 1000, 0, 0, 0, 0} {
 				g.nodes[i+1].score = score
 			}
-			if err := g.finish(); err != nil {
+			if err := g.finish(FinishManual); err != nil {
 				t.Fatal(err)
 			}
 			for id := NodeID(1); id <= PlayerCount; id++ {
