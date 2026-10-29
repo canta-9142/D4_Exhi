@@ -108,6 +108,7 @@ type node struct {
 	eligible       bool
 	ready          bool
 	rank           int
+	topPercent     int // 1-100 once settled at Finished; 0 for none.
 	nextGeneration time.Duration
 	nextTransfer   time.Duration
 }
@@ -221,6 +222,7 @@ func (g *game) reset() {
 		n.eligible = n.manual
 		n.ready = false
 		n.rank = 0
+		n.topPercent = 0
 	}
 	// Stale requests are rejected by sync generation and session, not by PID.
 	g.nextPID = 0

@@ -85,6 +85,9 @@ type SummaryData struct {
 	Score    int    `json:"score"`
 	Rank     *int   `json:"rank"`
 	Eligible bool   `json:"eligible"`
+	// TopPercent is 1-50, or nil when the player is not within the top half
+	// or the server cannot tell (player.md).
+	TopPercent *int `json:"topPercent"`
 }
 type LightData struct {
 	Neighbor    NodeID
@@ -139,6 +142,9 @@ type NodeSnapshot struct {
 	Rate            float64 `json:"rate"`
 	Ready           bool    `json:"ready"`
 	Rank            *int    `json:"rank"`
+	// TopPercent is 1-100 for a player who has one, otherwise nil. Unlike the
+	// summary it includes values above 50.
+	TopPercent *int `json:"top_percent"`
 }
 
 type DeviceSnapshot struct {

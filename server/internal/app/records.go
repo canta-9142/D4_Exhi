@@ -72,18 +72,32 @@ func (r GameRecord) best() *BestScore {
 	return best
 }
 
+// counted reports whether r ran its full duration under the current rule,
+// which the hourly and all-time bests and the top percent require.
+func (r GameRecord) counted() bool {
+	return r.Reason == FinishTimeout && r.Duration == GameDuration
+}
+
 // bests holds the hourly and all-time best scores of rules.md. Records are
 // added in save order and a tie never replaces a best, so the earlier game
 // keeps it.
 type bests struct {
 	hourly  []HourlyBest // Newest hour first.
 	allTime *BestScore
+	// scores is every eligible score of the counted games, the population of
+	// the top percent. It is in no particular order.
+	scores []int
 }
 
 // add counts r if it ran its full duration under the current rule.
 func (b *bests) add(r GameRecord) {
-	if r.Reason != FinishTimeout || r.Duration != GameDuration {
+	if !r.counted() {
 		return
+	}
+	for _, p := range r.Results {
+		if p.Eligible {
+			b.scores = append(b.scores, p.Score)
+		}
 	}
 	best := r.best()
 	if best == nil {
@@ -117,6 +131,7 @@ func (a *App) recordGame() {
 	}
 	a.gameBest = r.best()
 	a.bests.add(r)
+	a.settleTopPercent(r)
 }
 
 func (a *App) recordsSnapshot() RecordsSnapshot {

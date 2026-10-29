@@ -48,12 +48,13 @@ func (a *App) sendSummary(id SessionID) {
 		return
 	}
 	n := &a.game.nodes[node]
-	var rank *int
+	var rank, topPercent *int
 	if n.eligible {
 		value := n.rank
 		rank = &value
+		topPercent = a.deviceTopPercent(n)
 	}
-	if a.send(id, Message{Type: "summary", Data: SummaryData{Sync: s.sync, Score: n.score, Rank: rank, Eligible: n.eligible}}) {
+	if a.send(id, Message{Type: "summary", Data: SummaryData{Sync: s.sync, Score: n.score, Rank: rank, Eligible: n.eligible, TopPercent: topPercent}}) {
 		s.summaryPending = false
 	}
 }
