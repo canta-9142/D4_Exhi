@@ -110,6 +110,13 @@
   - rank: ランキング対象者なら1〜8の整数、対象外ならnull
   - eligible: 当該ゲームのランキング対象か（boolean）。現在の操作モードとは独立した確定値
   - topPercent: 過去の対象ゲームを含めた上位何%か。上位50%以内なら1〜50の整数、それ以外はnull。[上位%の規則](../rules.md#上位)に従い、サーバーが決める
+  - gameBest: その回のランキング対象者の最高点。0〜2147483647の整数。対象者がいなければnull
+  - gameBestNodes: gameBestを取った対象者のノード番号（1〜8の整数）を昇順に重複なく並べた配列。同点なら全員を含む。gameBestがnullなら空配列
+  - hourBest: このゲームが終わった時間帯（日本時間の正時で区切る）のベストスコア。0〜2147483647の整数またはnull
+  - hourBestStart: hourBestの時間帯の開始の時。日本時間の0〜23の整数。hourBestがnullならnull
+  - hourBestMine: hourBestがこのゲームの、この筐体のプレイヤーの結果ならtrue（boolean）
+  - allTimeBest: 通算のベストスコア。0〜2147483647の整数またはnull
+  - allTimeBestMine: allTimeBestがこのゲームの、この筐体のプレイヤーの結果ならtrue（boolean）
 
 サーバーからの識別要求・同期、MCUからの転送要求、およびサーバーの応答例を以下に示す。各行が独立したメッセージである。
 
@@ -246,19 +253,30 @@ MCUは受信した`status`の4フィールドの型・範囲をすべて検証�
 
 ### 確定結果の通知
 
-サーバーはFinishedへの遷移時に、全プレイヤーの最終スコア・ランキング資格・順位・上位%を同じ確定状態から決定する。順位の計算は[最終順位の規則](../rules.md#最終順位)に従い、ランキング対象外のプレイヤーを順位計算にも人数にも含めない。上位%の計算は[上位%の規則](../rules.md#上位)に従い、過去のゲームの記録を持つサーバーだけが求める。MCUは通知された順位と上位%を表示し、現在の`config.mode`や他プレイヤーのスコアから独自に算出しない。
+サーバーはFinishedへの遷移時に、全プレイヤーの最終スコア・ランキング資格・順位・上位%と、筐体へ送るベストスコアを同じ確定状態から決定する。順位の計算は[最終順位の規則](../rules.md#最終順位)に従い、ランキング対象外のプレイヤーを順位計算にも人数にも含めない。上位%の計算は[上位%の規則](../rules.md#上位)に従い、過去のゲームの記録を持つサーバーだけが求める。MCUは通知された順位と上位%を表示し、現在の`config.mode`や他プレイヤーのスコアから独自に算出しない。
 
 Finishedへの遷移時は、接続・識別・割当済みで通常表示のMCUへ`phase(Finished)`、`status`、`summary`の順に送信する。Finished中の初期同期・再接続・再設定では`config(preview=false)`、新しい同期世代の`reset`、`phase(Finished)`、`status`、`summary`の順に送る。Finishedの通常表示中に`reset`を送る場合も、その後に`phase`、`status`、新しい同期世代の`summary`を続ける。現在の`status.score`と`summary.score`は同じ確定スコアを通知する。再同期・再接続・モード変更・基板交換で確定結果を変更しない。
 
 ```json
 {"type":"phase","data":{"phase":"Finished"}}
 {"type":"status","data":{"score":345,"remaining":0,"ready":true,"countdown":0}}
-{"type":"summary","data":{"sync":"00000000000000000000000000000002","score":345,"rank":2,"eligible":true,"topPercent":12}}
+{"type":"summary","data":{"sync":"00000000000000000000000000000002","score":345,"rank":2,"eligible":true,"topPercent":12,"gameBest":410,"gameBestNodes":[3],"hourBest":410,"hourBestStart":13,"hourBestMine":false,"allTimeBest":520,"allTimeBestMine":false}}
 ```
 
-対象外の場合は、例えば`score=400, rank=null, eligible=false, topPercent=null`とし、スコアを保持して順位と上位%を付けない。全フィールドは必須とする。`summary.sync`の形式は`reset.sync`と同じで、`eligible=true`なら`rank`は1〜8の整数、falseならnullでなければ不正とする。`topPercent`は1〜50の整数またはnullとし、`eligible=false`ではnullでなければ不正とする。`eligible=true`ではnullも整数も正しい。上位50%を超える人、母数が足りないとき、手動の終了、およびサーバーが過去の記録を使えないときは、`eligible=true`でも`topPercent`はnullになる。MCUはsync・score・rank・eligible・topPercentの型・範囲・組合せを検証してから一括で適用する。
+対象外の場合は、例えば`score=400, rank=null, eligible=false, topPercent=null`とし、スコアを保持して順位と上位%を付けない。全フィールドは必須とする。`summary.sync`の形式は`reset.sync`と同じで、`eligible=true`なら`rank`は1〜8の整数、falseならnullでなければ不正とする。`topPercent`は1〜50の整数またはnullとし、`eligible=false`ではnullでなければ不正とする。`eligible=true`ではnullも整数も正しい。上位50%を超える人、母数が足りないとき、手動の終了、およびサーバーが過去の記録を使えないときは、`eligible=true`でも`topPercent`はnullになる。MCUはsync・score・rank・eligible・topPercentと、後述のベストスコアの項目の型・範囲・組合せを検証してから一括で適用する。
 
-`topPercent`は、`topPercent`を知らない既存のファームウェアが無視する追加の項目である。そのため、サーバーを先に更新してから、ファームウェアを更新してよい。不正な`summary`では既存の正常値を保持して再同期する。形式が正しくても、未設定・FIFO同期待ち・Finished以外・確認表示中の場合や、適用済み`reset`の同期世代と一致しない場合は無視する。
+ベストスコアの項目（gameBest、gameBestNodes、hourBest、hourBestStart、hourBestMine、allTimeBest、allTimeBestMine）は、[ベストスコアの規則](../rules.md#ベストスコア)に従ってサーバーが決め、Finishedへの遷移時に順位と同じ確定状態から1回だけ求めて、以後は変えない。値は[サーバー仕様](./server.md#357-プレイヤーへ送るベストスコア)の3.5.7に従う。組合せは次のとおりとし、満たさない`summary`は不正とする。
+
+- `gameBest`がnullなら`gameBestNodes`は空配列、整数なら`gameBestNodes`は1〜8個の要素を持つ。
+- `hourBest`がnullなら`hourBestStart`はnull、整数なら`hourBestStart`は0〜23の整数とする。
+- `hourBestMine`が`true`なら、`eligible=true`で、`hourBest`は`score`と等しい。`allTimeBestMine`と`allTimeBest`も同じとする。`hourBest`・`allTimeBest`がnullなら、対応する`*Mine`は`false`とする。
+- `eligible=false`のプレイヤーにも、その回・時間帯・通算のベストスコアを送る。`*Mine`は`false`になる。
+
+時間帯のベストは、このゲームが終わった時間帯のものとし、今回の結果が1時間ごとの集計の対象なら今回の結果も含める。手動で終了したゲームなど対象でない場合は、今回の結果を含めない値になり、その時間帯に対象の結果がなければ`hourBest`と`hourBestStart`はnullになる。通算も同じく、対象の結果がなければnullになる。サーバーが過去の記録を使えない起動では、`hourBest`・`hourBestStart`・`allTimeBest`をnull、`hourBestMine`・`allTimeBestMine`を`false`とし、`gameBest`・`gameBestNodes`だけを送る。MCUはnullのベストを「---」などの値なしとして表示する。
+
+これらの項目は`summary.data`の直下に平らに置き、配列は`gameBestNodes`の1段だけとする。`summary`全体のJSONの入れ子の深さは3（メッセージ、`data`、`gameBestNodes`）である。既存のファームウェアはJSONの入れ子の深さを4までに制限しており、それを超えるメッセージを受け取ると設定を捨てて再識別するため、`bests: {game: {...}}`のような入れ子にはしない。
+
+`topPercent`とベストスコアの項目は、それらを知らない既存のファームウェアが無視する追加の項目である。そのため、サーバーを先に更新してから、ファームウェアを更新してよい。不正な`summary`では既存の正常値を保持して再同期する。形式が正しくても、未設定・FIFO同期待ち・Finished以外・確認表示中の場合や、適用済み`reset`の同期世代と一致しない場合は無視する。
 
 通常表示でFIFO同期とFinishedの取得が両方成立してから3秒以内に、その同期世代の有効な`summary`を取得できなければ`resync`で復旧する。取得待ち中は`phase`・`status`の再通知や通常の`reset`で期限を延長しない。復旧の同期待ちでは既存の1秒間隔の再試行に従い、次の同期が成立してから改めて取得期限を開始する。結果取得済みの正常な無通信状態にはタイムアウトを設けない。
 
