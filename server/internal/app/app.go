@@ -283,14 +283,9 @@ func (a *App) State(ctx context.Context) (Snapshot, error) {
 				value := n.rank
 				rank = &value
 			}
-			var topPercent *int
-			if n.topPercent != 0 {
-				value := n.topPercent
-				topPercent = &value
-			}
 			snapshot.Nodes = append(snapshot.Nodes, NodeSnapshot{
 				ID: id, Kind: kind, Enabled: n.manual, FIFOUsage: len(n.fifo), Score: n.score,
-				RankingEligible: n.eligible, Rate: n.rate, Ready: n.ready, Rank: rank, TopPercent: topPercent,
+				RankingEligible: n.eligible, Rate: n.rate, Ready: n.ready, Rank: rank, TopPercent: optionalPercent(n.topPercent),
 			})
 		}
 		for uid, d := range a.devices {

@@ -257,6 +257,30 @@ func TestTopPercentAtTimeout(t *testing.T) {
 	}
 }
 
+// Saved games that the best scores do not count are not in the population
+// either: a manual finish, another duration, and ineligible results.
+func TestTopPercentPopulationIgnoresUncountedRecords(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		below int // Counted scores of earlier games.
+		want  int
+	}{
+		{"29 counted scores", 28, 0}, // The game's own makes 29.
+		{"30 counted scores", 29, 4},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			manual := testRecord(jst(11, 0, 0, 0), FinishManual, map[NodeID]int{1: 100, 2: 100}, nil)
+			longer := testRecord(jst(11, 10, 0, 0), FinishTimeout, map[NodeID]int{1: 100, 2: 100}, nil)
+			longer.Duration, longer.Elapsed = GameDuration+30*time.Second, GameDuration+30*time.Second
+			ineligible := testRecord(jst(11, 20, 0, 0), FinishTimeout, nil, map[NodeID]int{1: 100, 2: 100})
+			records := slices.Concat([]GameRecord{manual, longer, ineligible}, topPercentHistory(pastScores(0, tc.below)))
+			h := topPercentHarness(t, Options{Records: records}, []NodeID{1}, nil)
+			h.playToTimeout(map[NodeID]int{1: 7000})
+			wantPercent(t, "Snapshot topPercent", topPercentOf(h.state(), 1), tc.want)
+		})
+	}
+}
+
 func TestManualFinishGivesNoTopPercent(t *testing.T) {
 	// 99 earlier scores and the game's own would make 100, but a manual Finish
 	// gives nobody a value.

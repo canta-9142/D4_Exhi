@@ -49,9 +49,17 @@ func (a *App) settleTopPercent(r GameRecord) {
 // file was usable at startup (otherwise the population holds only this
 // process's games) and n is within maxDeviceTopPercent.
 func (a *App) deviceTopPercent(n *node) *int {
-	if a.options.RecordsUnavailable != "" || n.topPercent == 0 || n.topPercent > maxDeviceTopPercent {
+	if a.options.RecordsUnavailable != "" || n.topPercent > maxDeviceTopPercent {
 		return nil
 	}
-	value := n.topPercent
-	return &value
+	return optionalPercent(n.topPercent)
+}
+
+// optionalPercent is a copy of percent for a Snapshot or message, so that it
+// does not alias game state, or nil for 0 (none).
+func optionalPercent(percent int) *int {
+	if percent == 0 {
+		return nil
+	}
+	return &percent
 }
