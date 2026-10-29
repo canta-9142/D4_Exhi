@@ -88,6 +88,16 @@ type SummaryData struct {
 	// TopPercent is 1-50, or nil when the player is not within the top half
 	// or the server cannot tell (player.md).
 	TopPercent *int `json:"topPercent"`
+	// The best scores of server.md 3.5.7 stay flat in data, because the
+	// player firmware limits JSON nesting to 4 (player.md).
+	GameBest *int `json:"gameBest"`
+	// GameBestNodes is ints, not []NodeID, which would encode as base64.
+	GameBestNodes   []int `json:"gameBestNodes"`
+	HourBest        *int  `json:"hourBest"`
+	HourBestStart   *int  `json:"hourBestStart"`
+	HourBestMine    bool  `json:"hourBestMine"`
+	AllTimeBest     *int  `json:"allTimeBest"`
+	AllTimeBestMine bool  `json:"allTimeBestMine"`
 }
 type LightData struct {
 	Neighbor    NodeID

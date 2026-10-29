@@ -54,7 +54,9 @@ func (a *App) sendSummary(id SessionID) {
 		rank = &value
 		topPercent = a.deviceTopPercent(n)
 	}
-	if a.send(id, Message{Type: "summary", Data: SummaryData{Sync: s.sync, Score: n.score, Rank: rank, Eligible: n.eligible, TopPercent: topPercent}}) {
+	data := SummaryData{Sync: s.sync, Score: n.score, Rank: rank, Eligible: n.eligible, TopPercent: topPercent}
+	a.setSummaryBests(&data, node)
+	if a.send(id, Message{Type: "summary", Data: data}) {
 		s.summaryPending = false
 	}
 }
@@ -171,6 +173,7 @@ func (a *App) notify(c change) {
 		a.recordGame()
 	case "reset":
 		a.gameBest = nil
+		a.deviceBests = deviceBests{}
 		a.notifyReset()
 	case "push", "fifo":
 		if c.node.bot() {

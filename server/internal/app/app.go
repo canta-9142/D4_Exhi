@@ -84,8 +84,9 @@ type App struct {
 	fatalErr      error
 	assignPending bool
 	bests         bests
-	gameBest      *BestScore // The finished game's best until Reset.
-	saveFailed    bool       // Whether the latest SaveGame failed.
+	gameBest      *BestScore  // The finished game's best until Reset.
+	deviceBests   deviceBests // The finished game's bests for summaries until Reset.
+	saveFailed    bool        // Whether the latest SaveGame failed.
 }
 
 func New(options Options) *App {

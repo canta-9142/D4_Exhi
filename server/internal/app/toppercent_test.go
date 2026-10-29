@@ -101,12 +101,12 @@ func TestSummaryTopPercentJSON(t *testing.T) {
 		data SummaryData
 		want string
 	}{
-		{"within the top half", SummaryData{Sync: "S", Score: 345, Rank: &rank, Eligible: true, TopPercent: &percent},
-			`{"type":"summary","data":{"sync":"S","score":345,"rank":2,"eligible":true,"topPercent":12}}`},
-		{"outside the top half", SummaryData{Sync: "S", Score: 345, Rank: &rank, Eligible: true},
-			`{"type":"summary","data":{"sync":"S","score":345,"rank":2,"eligible":true,"topPercent":null}}`},
-		{"not eligible", SummaryData{Sync: "S", Score: 400},
-			`{"type":"summary","data":{"sync":"S","score":400,"rank":null,"eligible":false,"topPercent":null}}`},
+		{"within the top half", SummaryData{Sync: "S", Score: 345, Rank: &rank, Eligible: true, TopPercent: &percent, GameBestNodes: []int{}},
+			`{"type":"summary","data":{"sync":"S","score":345,"rank":2,"eligible":true,"topPercent":12,"gameBest":null,"gameBestNodes":[],"hourBest":null,"hourBestStart":null,"hourBestMine":false,"allTimeBest":null,"allTimeBestMine":false}}`},
+		{"outside the top half", SummaryData{Sync: "S", Score: 345, Rank: &rank, Eligible: true, GameBestNodes: []int{}},
+			`{"type":"summary","data":{"sync":"S","score":345,"rank":2,"eligible":true,"topPercent":null,"gameBest":null,"gameBestNodes":[],"hourBest":null,"hourBestStart":null,"hourBestMine":false,"allTimeBest":null,"allTimeBestMine":false}}`},
+		{"not eligible", SummaryData{Sync: "S", Score: 400, GameBestNodes: []int{}},
+			`{"type":"summary","data":{"sync":"S","score":400,"rank":null,"eligible":false,"topPercent":null,"gameBest":null,"gameBestNodes":[],"hourBest":null,"hourBestStart":null,"hourBestMine":false,"allTimeBest":null,"allTimeBestMine":false}}`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			line, err := Message{Type: "summary", Data: tc.data}.MarshalLine()

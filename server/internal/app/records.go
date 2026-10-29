@@ -89,10 +89,11 @@ type bests struct {
 	scores []int
 }
 
-// add counts r if it ran its full duration under the current rule.
-func (b *bests) add(r GameRecord) {
+// add counts r if it ran its full duration under the current rule. It
+// reports whether r set the best of its hour and the all-time best.
+func (b *bests) add(r GameRecord) (hour, allTime bool) {
 	if !r.counted() {
-		return
+		return false, false
 	}
 	for _, p := range r.Results {
 		if p.Eligible {
@@ -101,20 +102,86 @@ func (b *bests) add(r GameRecord) {
 	}
 	best := r.best()
 	if best == nil {
-		return
+		return false, false
 	}
 	if b.allTime == nil || best.Score > b.allTime.Score {
-		b.allTime = best
+		b.allTime, allTime = best, true
 	}
-	t := best.FinishedAt.In(JST)
-	hour := time.Date(t.Year(), t.Month(), t.Day(), t.Hour(), 0, 0, 0, JST)
-	i, found := slices.BinarySearchFunc(b.hourly, hour, func(h HourlyBest, hour time.Time) int { return hour.Compare(h.HourStart) })
+	start := hourStart(best.FinishedAt)
+	i, found := b.findHour(start)
 	switch {
 	case !found:
-		b.hourly = slices.Insert(b.hourly, i, HourlyBest{HourStart: hour, BestScore: *best})
+		b.hourly = slices.Insert(b.hourly, i, HourlyBest{HourStart: start, BestScore: *best})
+		hour = true
 	case best.Score > b.hourly[i].Score:
 		b.hourly[i].BestScore = *best
+		hour = true
 	}
+	return hour, allTime
+}
+
+// hourStart is the start of the JST hour that contains t.
+func hourStart(t time.Time) time.Time {
+	t = t.In(JST)
+	return time.Date(t.Year(), t.Month(), t.Day(), t.Hour(), 0, 0, 0, JST)
+}
+
+// findHour is the index of the hour that begins at start in b.hourly, or
+// where to insert it, as slices.BinarySearchFunc reports.
+func (b *bests) findHour(start time.Time) (int, bool) {
+	return slices.BinarySearchFunc(b.hourly, start, func(h HourlyBest, start time.Time) int { return start.Compare(h.HourStart) })
+}
+
+// deviceBests is what a finished game sends of the hourly and all-time
+// bests in each summary (server.md 3.5.7), settled once at Finished.
+type deviceBests struct {
+	hour    *HourlyBest // The best of the game's hour; nil for none.
+	allTime *BestScore
+	// hourMine and allTimeMine report whether the game set those bests, so
+	// that its nodes in them are sent *Mine.
+	hourMine, allTimeMine bool
+}
+
+// settleDeviceBests keeps the bests of the game r for summaries, after r has
+// been added to b. It keeps none if the records file was unusable at
+// startup, since the bests then count only this process's games.
+func (a *App) settleDeviceBests(r GameRecord, hourSet, allTimeSet bool) {
+	a.deviceBests = deviceBests{}
+	if a.options.RecordsUnavailable != "" {
+		return
+	}
+	if i, found := a.bests.findHour(hourStart(r.FinishedAt)); found {
+		h := a.bests.hourly[i]
+		h.Nodes = slices.Clone(h.Nodes)
+		a.deviceBests.hour, a.deviceBests.hourMine = &h, hourSet
+	}
+	a.deviceBests.allTime, a.deviceBests.allTimeMine = a.bests.allTime.clone(), allTimeSet
+}
+
+// setSummaryBests sets the best scores of node's summary.
+func (a *App) setSummaryBests(data *SummaryData, node NodeID) {
+	data.GameBestNodes = []int{}
+	if b := a.gameBest; b != nil {
+		data.GameBest = optionalScore(b.Score)
+		for _, id := range b.Nodes {
+			data.GameBestNodes = append(data.GameBestNodes, int(id))
+		}
+	}
+	if h := a.deviceBests.hour; h != nil {
+		start := h.HourStart.In(JST).Hour()
+		data.HourBest, data.HourBestStart = optionalScore(h.Score), &start
+		data.HourBestMine = a.deviceBests.hourMine && slices.Contains(h.Nodes, node)
+	}
+	if b := a.deviceBests.allTime; b != nil {
+		data.AllTimeBest = optionalScore(b.Score)
+		data.AllTimeBestMine = a.deviceBests.allTimeMine && slices.Contains(b.Nodes, node)
+	}
+}
+
+// optionalScore is a copy of score for a message, so that it does not alias
+// the bests.
+func optionalScore(score int) *int {
+	return &score
 }
 
 // recordGame saves and counts the game that has just finished. A failed save
@@ -130,8 +197,9 @@ func (a *App) recordGame() {
 		}
 	}
 	a.gameBest = r.best()
-	a.bests.add(r)
+	hourSet, allTimeSet := a.bests.add(r)
 	a.settleTopPercent(r)
+	a.settleDeviceBests(r, hourSet, allTimeSet)
 }
 
 func (a *App) recordsSnapshot() RecordsSnapshot {
