@@ -96,6 +96,7 @@ def exercise(cdc):
 
 def visual(cdc):
     phase, score, rank, eligible, preview = "Finished", 2147483647, 2, True, False
+    top = None
     mode = "manual"
     sync = ""
 
@@ -103,7 +104,7 @@ def visual(cdc):
         nonlocal sync
         sync = cdc.reset([], phase)
         if phase == "Finished" and not preview:
-            result(cdc, sync, score, rank, eligible)
+            result(cdc, sync, score, rank, eligible, top)
 
     def resynchronize():
         nonlocal preview
@@ -115,7 +116,7 @@ def visual(cdc):
     configure(cdc, mode)
     synchronize()
     print("READY: final score 2147483647 / RANK 2", flush=True)
-    print("Commands: animate/unranked/preview/result/reset/duplicate/resync/stop", flush=True)
+    print("Commands: animate/unranked/preview/result/top N/reset/duplicate/resync/stop", flush=True)
     while True:
         if select.select([sys.stdin], [], [], 0)[0]:
             line = sys.stdin.readline()
@@ -123,7 +124,7 @@ def visual(cdc):
                 return
             command = line.strip()
             if command == "duplicate":
-                result(cdc, sync, score, rank, eligible)
+                result(cdc, sync, score, rank, eligible, top)
             elif command == "animate":
                 preview, phase, score, rank, eligible = False, "Playing", 345, 2, True
                 mode = "manual"
@@ -132,17 +133,24 @@ def visual(cdc):
                 phase = "Finished"
                 cdc.send("phase", phase=phase)
                 cdc.status(score, 0, True)
-                result(cdc, sync, score, rank, eligible)
+                result(cdc, sync, score, rank, eligible, top)
             elif command in ("unranked", "preview", "result", "reset"):
                 preview = command == "preview"
                 phase = "Preparing" if command == "reset" else "Finished"
                 score, rank, eligible = (400, None, False) if command == "unranked" else (2147483647, 2, True)
+                top = None
                 mode = "auto" if preview else "manual"
                 configure(cdc, mode, preview)
                 synchronize()
+            elif command.startswith("top ") and command[4:].isdigit() and 1 <= int(command[4:]) <= 50:
+                # 上位%を付けた結果を静止表示で出す。animateはこの値を保って終了遷移を演出する。
+                preview, phase, score, rank, eligible, top = False, "Finished", 345, 2, True, int(command[4:])
+                mode = "manual"
+                configure(cdc, mode)
+                synchronize()
             elif command == "resync":
                 resynchronize()
-            print(f"STATE: {phase} preview={preview} score={score} rank={rank}", flush=True)
+            print(f"STATE: {phase} preview={preview} score={score} rank={rank} topPercent={top}", flush=True)
         message = cdc.read(.05)
         if message:
             assert message["type"] == "resync", message

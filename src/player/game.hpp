@@ -28,6 +28,9 @@ ServerLink serverLink;
 char nodeUid[13]{};
 FinishedAnimation finishedAnimation;
 CountdownAnimation countdownAnimation;
+ResultPager resultPager;
+// スナップショットの発行までに押された右端ボタン。発行の間隔より短い押下も取りこぼさない。
+uint8_t resultPageEdges = 0;
 #endif
 
 NodeId selfId = NodeId::None;
@@ -62,9 +65,14 @@ void publish_display_snapshot() {
 #ifndef PLAYER_PACKET_DEMO
   snapshot.preview = serverLink.preview();
   snapshot.summary = serverLink.summary();
+  const bool finished = !snapshot.preview && snapshot.phase == GamePhase::Finished;
+  const bool resultReady = finished && finished_state(snapshot) == FinishedState::Ready;
+  resultPager.update(snapshot.summary, finished, resultReady, resultPageEdges & ResultPager::NEXT_BUTTON, millis());
+  resultPageEdges = 0;
+  snapshot.resultPage = resultPager.page();
+  snapshot.topProgress = resultPager.progress();
   snapshot.finishedProgress = finishedAnimation.update(snapshot.summary,
-      !snapshot.preview && snapshot.phase == GamePhase::Finished &&
-      finished_state(snapshot) == FinishedState::Ready, millis());
+      resultReady && snapshot.resultPage == ResultPage::Score, millis());
   snapshot.previewLit = millis() / 500 % 2 == 0;
   snapshot.countdownGo = countdownAnimation.update(snapshot.status.countdown, countdown_enabled(snapshot), millis());
 #endif
@@ -134,6 +142,7 @@ void loop() {
     packetAnimation = PacketAnimation{};
   }
   serverLink.update_ready(Serial, pswPressedMask, nowMs);
+  resultPageEdges |= pressedEdges;
 #endif
   if (pressedEdges && packetQueue.size() != 0) {
     for (int i = 0; i < 4; ++i) {

@@ -100,7 +100,8 @@ int main() {
   auto diff = display_changes(result, moving, false);
   assert(diff.resultScore && diff.resultRank && diff.resultAccent && !diff.full && !diff.resultBody);
   auto area = display_damage(diff, false);
-  assert(area.containsPixel(24, 128) && area.containsPixel(455, 319) && !area.containsPixel(0, 0));
+  assert(area.containsPixel(24, 128) && area.containsPixel(359, 319) && !area.containsPixel(0, 0));
+  assert(!area.containsPixel(420, 300)); // 演出中も右端の枠（ページ送りの案内）は描かない。
   moving.summary.eligible = false;
   moving.summary.rank = 0;
   assert(display_changes(result, moving, false).resultRank);
@@ -109,6 +110,99 @@ int main() {
   assert(display_changes(result, moving, false).resultBody);
   assert(animation.update(result.summary, false, 3000) == 1000);
   assert(animation.update(result.summary, true, 3001) == 1000);
+  // 上位%は2ページ目に出し、ページ・塗りの進捗・自分のマスの点滅ごとに必要な範囲だけを描く。
+  auto ranked = result;
+  ranked.finishedProgress = 1000;
+  ranked.summary.topPercent = 12;
+  diff = display_changes(result, ranked, false);
+  assert(diff.resultBody && diff.resultRank && !diff.topBody && !diff.full); // 1ページ目に送りの案内を足す。
+  auto topPage = ranked;
+  topPage.resultPage = ResultPage::TopPercent;
+  diff = display_changes(ranked, topPage, false);
+  assert(diff.resultBody && diff.topBody && !diff.full && !diff.resultScore && !diff.resultRank && !diff.resultAccent);
+  area = display_damage(diff, false);
+  assert(area.containsPixel(0, 81) && area.containsPixel(479, 319) && !area.containsPixel(0, 0));
+  auto blink = topPage;
+  blink.previewLit = false;
+  diff = display_changes(topPage, blink, false);
+  assert(!diff.topBody && !diff.topCurve && diff.topCell == 12);
+  area = display_damage(diff, false);
+  assert(area.changedTiles() <= 4 && area.containsPixel(grid_cell_x(11), grid_cell_y(11)));
+  auto growing = topPage;
+  growing.topProgress = 400;
+  diff = display_changes(topPage, growing, false);
+  assert(!diff.topBody && diff.topCurve && diff.topCell == 12 && !diff.resultBody);
+  area = display_damage(diff, false);
+  assert(area.containsPixel(BELL_X, BELL_BASE) && area.containsPixel(GRID_X + GRID_SIZE - 1, GRID_Y + GRID_SIZE - 1));
+  assert(!area.containsPixel(240, 88) && !area.containsPixel(420, 300)); // 文字とボタン枠は描かない。
+  assert(BELL_AREA_Y + BELL_AREA_H <= 240 && GRID_Y + GRID_SIZE <= 240); // ボタン枠より上に収める。
+  auto still = topPage;
+  still.finishedProgress = 300;
+  still.pressedMask = 1;
+  assert(!display_changes(topPage, still, false).any()); // 1ページ目の演出は描かない。
+  auto syncing = topPage;
+  syncing.synced = false;
+  assert(display_changes(topPage, syncing, false).resultBody && !display_changes(topPage, syncing, false).topBody);
+  assert(display_changes(syncing, topPage, false).topBody); // 復旧で2ページ目を描き直す。
+  assert(top_percent_z_milli(1) == 2326 && top_percent_z_milli(5) == 1645 && top_percent_z_milli(10) == 1282);
+  assert(top_percent_z_milli(25) == 674 && top_percent_z_milli(50) == 0);
+  for (uint8_t p = 2; p <= 50; ++p) assert(top_percent_z_milli(p) < top_percent_z_milli(p - 1));
+  assert(bell_x(0) == BELL_X + BELL_WIDTH / 2 && bell_height(BELL_WIDTH / 2) == BELL_HEIGHT);
+  assert(bell_height(0) == 0 && bell_height(BELL_WIDTH - 1) == 0);
+  assert(top_fill_x(bell_x(0), 0) == BELL_X + BELL_WIDTH && top_fill_x(bell_x(0), 1000) == bell_x(0));
+  assert(top_filled_cells(12, 0) == 0 && top_filled_cells(12, 1000) == 12 && top_filled_cells(50, 1000) == 50);
+
+  // 右端のボタンで1・2ページ目を行き来し、上位%がなければ送らない。
+  ResultPager pager;
+  FinalSummary top = ranked.summary;
+  pager.update(top, true, true, false, 0);
+  assert(pager.page() == ResultPage::Score && pager.progress() == 1000);
+  pager.update(top, true, true, true, 10);
+  assert(pager.page() == ResultPage::TopPercent && pager.progress() == 0);
+  pager.update(top, true, true, false, 10 + ResultPager::INTRO_MS / 2);
+  assert(pager.progress() == 500);
+  pager.update(top, true, true, true, 20 + ResultPager::INTRO_MS / 2);
+  assert(pager.page() == ResultPage::Score && pager.progress() == 1000);
+  pager.update(top, true, true, true, 30 + ResultPager::INTRO_MS / 2);
+  assert(pager.page() == ResultPage::TopPercent && pager.progress() == 1000); // 2回目は静止画。
+  pager.update(top, true, false, true, 2000);
+  assert(pager.page() == ResultPage::TopPercent); // 再同期中は押下を無視し、ページを保つ。
+  pager.update(top, true, true, false, 2001);
+  assert(pager.page() == ResultPage::TopPercent);
+  auto renewed = top;
+  renewed.revision = 2;
+  pager.update(renewed, true, true, false, 2002);
+  assert(pager.page() == ResultPage::Score); // 別世代の結果では1ページ目へ戻す。
+  pager.update(renewed, true, true, true, 2003);
+  assert(pager.page() == ResultPage::TopPercent && pager.progress() == 0);
+  pager.update(renewed, true, false, false, 2004);
+  assert(pager.progress() == 1000); // 演出中の再同期で取り消し、復旧後は静止画。
+  pager.update(renewed, true, true, false, 2005);
+  assert(pager.page() == ResultPage::TopPercent && pager.progress() == 1000);
+  pager.update(renewed, false, false, false, 2006);
+  assert(pager.page() == ResultPage::Score); // Finishedから離れると1ページ目。
+  renewed.revision = 3;
+  renewed.animate = false;
+  pager.update(renewed, true, true, true, UINT32_MAX);
+  assert(pager.page() == ResultPage::TopPercent && pager.progress() == 1000); // 再接続後の結果は演出しない。
+  renewed.known = false;
+  pager.update(renewed, true, false, false, 0);
+  assert(pager.page() == ResultPage::Score); // 設定の無効化・Resetで結果を破棄したとき。
+  auto unranked = renewed;
+  unranked.known = true;
+  unranked.revision = 4;
+  unranked.topPercent = 0;
+  pager.update(unranked, true, true, true, 10);
+  assert(pager.page() == ResultPage::Score);
+  pager.update(unranked, true, true, true, 20);
+  assert(pager.page() == ResultPage::Score); // 下位50%・対象外はスコアと順位だけ。
+  // 2ページ目の間は1ページ目の終了演出を止め、戻っても再演しない。
+  FinishedAnimation scoreAnimation;
+  top.revision = 9;
+  assert(scoreAnimation.update(top, true, 0) == 0);
+  assert(scoreAnimation.update(top, false, 100) == 1000);
+  assert(scoreAnimation.update(top, true, 200) == 1000);
+
   auto preview = result;
   preview.preview = true;
   assert(display_screen(preview) == DisplayScreen::Preview);
@@ -196,5 +290,5 @@ int main() {
   plan = plan_transfer(timing, blocks, 3);
   assert(!plan.feasible && std::isfinite(plan.startDelayFromScanUs));
   assert(!plan_transfer(timing, blocks, 0).feasible);
-  std::puts("PASS: state-driven damage, old/new card rows, clipping, no-op frames, countdown screen, sparse transfer timing");
+  std::puts("PASS: state-driven damage, old/new card rows, clipping, no-op frames, countdown screen, top percent page and pager, sparse transfer timing");
 }

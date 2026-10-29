@@ -10,6 +10,7 @@
 #include "player_status.hpp"
 #include "frame_damage.hpp"
 #include "ready_hold.hpp"
+#include "top_percent.hpp"
 
 struct DisplaySnapshot {
   PacketAnimation::Snapshot cards;
@@ -27,6 +28,8 @@ struct DisplaySnapshot {
   uint16_t finishedProgress = 1000;
   bool previewLit = true;
   bool countdownGo = false;
+  ResultPage resultPage = ResultPage::Score;
+  uint16_t topProgress = 1000;
 };
 
 static_assert(std::is_trivially_copyable<DisplaySnapshot>::value, "FreeRTOS queues copy snapshots as bytes");
@@ -97,8 +100,10 @@ struct DisplayChanges {
   bool full = false, preparingHeader = false, preparingBody = false, preparingBar = false, preparingArrows = false;
   bool resultHeader = false, resultBody = false, resultScore = false, resultRank = false, resultAccent = false;
   bool previewBody = false, countdownBody = false;
+  bool topBody = false, topCurve = false; // topCurveはベルカーブとマスの両方を描き直す。
+  uint8_t topCell = 0; // 点滅で描き直すマスの番号（1〜50）。0は描き直さない。
   bool any() const {
-    return resultHeader || resultBody || resultScore || resultRank || resultAccent || previewBody || countdownBody || full || preparingHeader || preparingBody || preparingBar || preparingArrows || cards.any() || buttons || self || label || score || remaining || ready;
+    return resultHeader || resultBody || resultScore || resultRank || resultAccent || topBody || topCurve || topCell || previewBody || countdownBody || full || preparingHeader || preparingBody || preparingBar || preparingArrows || cards.any() || buttons || self || label || score || remaining || ready;
   }
 };
 
@@ -123,8 +128,14 @@ inline DisplayChanges display_changes(const DisplaySnapshot& previous, const Dis
   if (display_screen(next) == DisplayScreen::Finished) {
     changes.resultHeader = changes.label || previous.status.known != next.status.known;
     changes.label = false;
-    changes.resultBody = first || finished_state(previous) != finished_state(next);
-    if (finished_state(next) == FinishedState::Ready) {
+    changes.resultBody = first || finished_state(previous) != finished_state(next) ||
+        previous.resultPage != next.resultPage || previous.summary.topPercent != next.summary.topPercent;
+    if (finished_state(next) == FinishedState::Ready && next.resultPage == ResultPage::TopPercent) {
+      changes.topBody = changes.resultBody || changes.self;
+      changes.topCurve = changes.topBody || previous.topProgress != next.topProgress;
+      // 自分のマスは確認表示と同じ500msの周期で点滅させる。
+      if (changes.topCurve || previous.previewLit != next.previewLit) changes.topCell = next.summary.topPercent;
+    } else if (finished_state(next) == FinishedState::Ready) {
       changes.resultScore = changes.resultBody || displayed_final_score(previous) != displayed_final_score(next);
       changes.resultRank = changes.resultBody || previous.summary.rank != next.summary.rank ||
           previous.summary.eligible != next.summary.eligible ||
@@ -168,8 +179,14 @@ inline FrameDamage display_damage(const DisplayChanges& changes, bool first) {
   if (changes.resultBody || changes.previewBody || changes.countdownBody) damage.markRect(0, 81, 480, 239);
   if (changes.resultHeader) damage.markRect(24, 48, 320, 24);
   if (changes.resultScore) damage.markRect(24, 128, 432, 56);
-  if (changes.resultRank) damage.markRect(24, 216, 432, 104);
+  if (changes.resultRank) damage.markRect(24, 216, 336, 104);
   if (changes.resultAccent) damage.markRect(40, 192, 400, 4);
+  if (changes.topBody) damage.markRect(0, 81, 480, 239);
+  if (changes.topCurve) {
+    damage.markRect(BELL_AREA_X, BELL_AREA_Y, BELL_AREA_W, BELL_AREA_H);
+    damage.markRect(GRID_X, GRID_Y, GRID_SIZE, GRID_SIZE);
+  }
+  if (changes.topCell) damage.markRect(grid_cell_x(changes.topCell - 1), grid_cell_y(changes.topCell - 1), GRID_CELL, GRID_CELL);
   if (changes.preparingBody) damage.markRect(0, 81, 480, 239);
   if (changes.preparingHeader) damage.markRect(24, 48, 320, 24);
   if (changes.preparingBar) damage.markRect(40, 152, 400, 32);

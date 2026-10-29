@@ -30,6 +30,9 @@ class FakeCDC:
         self.send("status", score=0, remaining=120, ready=False, countdown=0)
         return sync
 
+    def status(self, score=0, remaining=120, ready=False, countdown=0):
+        self.send("status", score=score, remaining=remaining, ready=ready, countdown=countdown)
+
     def read(self, timeout):
         if self.request_resync and self.preview:
             self.request_resync = False
@@ -56,7 +59,18 @@ def main():
         assert [kind for kind, _ in restored] == ["config", "reset", "phase", "status", "summary"]
         assert restored[1][1]["sync"] == restored[4][1]["sync"]
         assert restored[4][1]["score"] == 2147483647 and restored[4][1]["rank"] == 2
-    print("PASS: preview ends on command/MCU resync; auto mode, fresh generation and final result restored")
+        assert restored[4][1]["topPercent"] is None
+
+    # top Nは上位%付きの結果を出し、animate・duplicate・resyncでも同じ値を送る。不正な値は無視する。
+    cdc = FakeCDC(False)
+    stream = io.StringIO("top 12\ntop 0\ntop 51\nanimate\nduplicate\nresync\nunranked\nstop\n")
+    with patch("finished_cdc.sys.stdin", stream), \
+         patch("finished_cdc.select.select", return_value=([stream], [], [])), \
+         redirect_stdout(io.StringIO()):
+        visual(cdc)
+    tops = [data["topPercent"] for kind, data in cdc.messages if kind == "summary"]
+    assert tops == [None, 12, 12, 12, 12, None], tops
+    print("PASS: preview ends on command/MCU resync; auto mode, fresh generation and final result restored; top N")
 
 
 if __name__ == "__main__":
