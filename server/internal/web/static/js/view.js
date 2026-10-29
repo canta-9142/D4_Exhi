@@ -105,7 +105,7 @@ export function renderPlayers(snapshot) {
     meta += `、うち準備完了 ${manual.filter((p) => p.ready).length} 人`;
   } else if (phase === "Playing") {
     meta = "ゲーム中は操作モードを変更できません";
-  } else if (phase === "Finished" && !records.available) {
+  } else if (phase === "Finished" && !records.available && players.some((p) => p.topPercent !== null)) {
     // The percentages then count only this run's games, as the best scores do.
     meta += "、上位%はこの起動中のゲームだけで計算";
   }
