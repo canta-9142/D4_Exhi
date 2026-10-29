@@ -8,6 +8,9 @@
 <script type="module" src="/static/js/main.js"></script>
 </head>
 <body data-connection="connecting">
+<!-- The records file could not be used at startup. It stays until the server
+     restarts, so it cannot be closed (admin-ui.md 5.10). -->
+<div id="records-alert" class="records-alert" role="alert" hidden></div>
 <!-- The status bar has no controls, so it stays outside the fieldset. -->
 <header class="statusbar">
   <h1>D4 Exhi 管理画面</h1>
@@ -81,6 +84,31 @@
               <tr><td class="placeholder" colspan="4">未取得</td></tr>
             </tbody>
           </table>
+        </div>
+      </section>
+      <section class="panel bests" aria-labelledby="bests-title">
+        <div class="panel-head"><h2 id="bests-title">ベストスコア</h2><span id="bests-meta" class="meta"></span></div>
+        <div class="bests-body">
+          <div class="bests-fixed">
+            <div class="best">
+              <h3 class="best-head">この回</h3>
+              <div id="best-game" class="best-value"><span class="placeholder">未取得</span></div>
+            </div>
+            <div class="best">
+              <h3 class="best-head">通算<span id="best-all-time-new" class="new" hidden>NEW</span></h3>
+              <div id="best-all-time" class="best-value"><span class="placeholder">未取得</span></div>
+            </div>
+          </div>
+          <div class="bests-hourly">
+            <h3 class="best-head">1時間ごと</h3>
+            <div class="scroll">
+              <table>
+                <tbody id="best-hourly">
+                  <tr><td class="placeholder" colspan="4">未取得</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
         </div>
       </section>
     </div>

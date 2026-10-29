@@ -12,11 +12,12 @@ import { updateDialog } from "./dialogs.js";
 import { setText } from "./dom.js";
 import { renderInspector } from "./inspector.js";
 import {
-  EXCEPTION_REASON, commandPhrases, connectionLabels, fetchedText, pendingText, rejectedText, successText,
-  unknownReason, unknownText,
+  EXCEPTION_REASON, SAVE_FAILED_TEXT, commandPhrases, connectionLabels, fetchedText, pendingText, rejectedText,
+  successText, unknownReason, unknownText,
 } from "./labels.js";
 import { renderMap } from "./map.js";
 import { Poller } from "./poller.js";
+import { renderRecords } from "./records.js";
 import { renderBots, renderGame, renderPlayers } from "./view.js";
 
 const ui = {
@@ -38,6 +39,10 @@ const page = {
   // The Device ID of a selected device that left the list, reported in the
   // panel until another device is selected or it is listed again.
   missing: null,
+  // records.saveFailed and the phase when a failed save was last looked
+  // for, so that each failed save is shown once (noticeSaveFailure).
+  saveFailed: false,
+  savePhase: null,
 };
 
 const poller = new Poller({
@@ -81,6 +86,7 @@ export async function runCommand(command, phrases = commandPhrases(command)) {
     // the refetch has updated the page, since the POST may have been sent.
     await poller.refresh();
     page.busy = false;
+    noticeSaveFailure();
     renderStatus();
   }
 }
@@ -103,7 +109,30 @@ function showSnapshot() {
     page.missing = null;
   }
   showSelection();
+  renderRecords(snapshot);
   updateDialog(snapshot);
+  if (!page.busy) {
+    noticeSaveFailure();
+  }
+}
+
+// noticeSaveFailure shows a failed save of a game record in the result
+// field like the result of an operation, when saveFailed turns true and when
+// another game finishes while it stays true, since each game is saved once
+// as it finishes (admin-ui.md 5.10). While an operation is in progress it
+// waits until the result has been shown, so that the result does not hide
+// the failure.
+function noticeSaveFailure() {
+  if (page.snapshot === null) {
+    return;
+  }
+  const { game, records } = page.snapshot;
+  const finishedNow = game.phase === "Finished" && page.savePhase !== "Finished";
+  if (records.saveFailed && (!page.saveFailed || finishedNow)) {
+    showNotice("alert", SAVE_FAILED_TEXT);
+  }
+  page.saveFailed = records.saveFailed;
+  page.savePhase = game.phase;
 }
 
 // showSelection draws the parts that depend on the selected device.

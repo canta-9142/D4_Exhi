@@ -97,6 +97,21 @@ button, input, select { font: inherit; color: inherit; }
   white-space: nowrap;
 }
 
+/* ---------- 記録ファイルの通知帯 ---------- */
+/* Shown above the status bar while the records file cannot be used
+   (admin-ui.md 5.10). The red is fixed in both schemes, so that the white
+   text keeps its contrast. */
+body[data-records="unavailable"] { grid-template-rows: auto auto minmax(0, 1fr); }
+.records-alert {
+  padding: 6px 12px;
+  border-radius: 6px;
+  background: #b3261e;
+  color: #ffffff;
+  font-weight: 700;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
 /* ---------- 状態帯 ---------- */
 /* The bar always has room for a result of two lines, so that a long result
    does not push the controls below it down (admin-ui.md 10). */
@@ -129,7 +144,8 @@ button, input, select { font: inherit; color: inherit; }
 .notice:empty { visibility: hidden; }
 .notice[data-level="pending"] { color: var(--ink-2); background: var(--sunken); }
 .notice[data-level="success"] { color: var(--go); background: var(--go-bg); }
-.notice[data-level="rejected"] { color: var(--halt); background: var(--halt-bg); }
+.notice[data-level="rejected"],
+.notice[data-level="alert"] { color: var(--halt); background: var(--halt-bg); }
 .notice[data-level="unknown"] { color: var(--caution); background: var(--caution-bg); font-weight: 700; }
 .busy { color: var(--ink-2); font-weight: 700; }
 
@@ -230,13 +246,16 @@ body[data-countdown="true"] .unit { color: var(--caution); }
   min-height: 0;
 }
 .col { display: grid; gap: 8px; min-height: 0; }
-.col-nodes { grid-template-rows: minmax(0, auto) minmax(0, auto); align-content: start; }
+/* The tables take their height first; the best scores get what is left
+   (admin-ui.md 4.1). */
+.col-nodes { grid-template-rows: minmax(0, auto) minmax(0, auto) minmax(0, 1fr); }
 .col-place { grid-template-rows: auto minmax(0, 1fr); }
 
 .panel-head { display: flex; align-items: baseline; gap: 12px; padding: 6px 12px 2px; }
 .panel-head h2 { margin: 0; font-size: 15px; font-weight: 700; white-space: nowrap; }
 .panel-head .meta { color: var(--ink-2); font-size: 12px; }
 .panel-head .meta.warn { color: var(--caution); font-weight: 700; }
+.panel-head .meta.bad { color: var(--halt); font-weight: 700; }
 .scroll { overflow: auto; min-height: 0; }
 .section { display: flex; flex-direction: column; }
 
@@ -297,6 +316,45 @@ td.strong { font-size: 15px; }
 .field-error { display: block; color: var(--halt); font-size: 12px; font-weight: 700; line-height: 1.3; white-space: normal; }
 .field-error:empty { display: none; }
 td.field { padding-top: 2px; padding-bottom: 2px; }
+
+/* ---------- ベストスコア ---------- */
+/* 「この回」 and 「通算」 stay in view on the left; the hours scroll on the
+   right (admin-ui.md 5.9). When the window is too low for even this, the
+   whole panel scrolls rather than spilling out of it. */
+.bests { display: flex; flex-direction: column; overflow: auto; }
+.bests-body {
+  display: grid;
+  grid-template-columns: 190px minmax(0, 1fr);
+  gap: 0 12px;
+  flex: 1;
+  min-height: 72px;
+  padding: 0 12px 6px;
+}
+.bests-fixed { display: flex; flex-direction: column; gap: 2px; min-height: 0; overflow: auto; }
+.bests-hourly { display: flex; flex-direction: column; min-height: 0; padding-left: 12px; border-left: 1px solid var(--rule); }
+.bests-hourly .scroll { flex: 1; }
+.best-head { margin: 0; color: var(--ink-2); font-size: 12px; font-weight: 400; line-height: 1.5; }
+.best-value { display: flex; flex-wrap: wrap; align-items: center; gap: 0 6px; min-height: 26px; }
+.best-value .best-score { font-size: 18px; font-weight: 700; }
+span.best-nodes { display: inline-flex; flex-wrap: wrap; gap: 2px 6px; }
+.best-at { color: var(--ink-2); font-size: 12px; }
+.bests-hourly th, .bests-hourly td { height: 26px; padding: 0 6px 0 0; }
+.bests-hourly td:last-child { padding-right: 0; }
+/* Tied nodes wrap between the chips, never inside one. */
+.bests-hourly td.best-nodes { white-space: normal; }
+.bests-hourly td.best-nodes .node { margin-right: 6px; white-space: nowrap; }
+.bests-hourly tr.latest th { padding-left: 6px; box-shadow: inset 3px 0 0 var(--ink); font-weight: 700; }
+.bests-hourly tr.latest .best-score { font-weight: 700; }
+.new {
+  margin-left: 4px;
+  padding: 0 4px;
+  border-radius: 3px;
+  background: var(--go);
+  color: var(--surface);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
 
 /* ---------- 機器 ---------- */
 /* The bar keeps the height of two lines, so that starting or stopping a

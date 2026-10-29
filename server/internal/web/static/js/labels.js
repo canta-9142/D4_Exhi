@@ -241,6 +241,58 @@ export function unknownText(phrases, reason) {
   return `? 「${phrases.name}」の結果は不明です（${reason}）。再送はしません。状態を確かめてください`;
 }
 
+// ---------- ベストスコアと記録ファイル（admin-ui.md 5.9、5.10、7.4、11.7） ----------
+
+export const SAVE_FAILED_TEXT = "× 結果の保存に失敗しました。サーバーのログを確認してください。";
+
+export function recordsUnavailableText(reason) {
+  const why = reason ? `（${reason}）` : "";
+  return `× 記録ファイルを読み込めませんでした${why}。この起動中の結果は保存されません。` +
+    "ファイルを確認してからサーバーを再起動してください。";
+}
+
+export const BESTS_THIS_PROCESS = "この起動中のゲームだけで集計";
+export const BESTS_SAVE_FAILED = "直近の結果を保存できませんでした";
+export const BESTS_NOTE = "1時間ごと・通算は最後まで行ったゲームだけ";
+export const NO_ELIGIBLE = "ランキング対象者なし";
+export const NO_RECORDS = "記録はまだありません";
+
+// The times of web.md 3.2 are RFC 3339 in +09:00. Their date and time are
+// read from the string and not converted to the zone of the browser, so
+// that they are JST whatever the zone of the laptop (admin-ui.md 7.4).
+const jstTime = /^\d{4}-(\d{2})-(\d{2})T(\d{2}):(\d{2}):\d{2}(?:\.\d+)?\+09:00$/;
+
+function jstParts(time) {
+  const m = jstTime.exec(time);
+  return m && { date: `${Number(m[1])}/${Number(m[2])}`, hour: m[3], minute: m[4] };
+}
+
+// jstDate is "10/28", or null for a time not in the form of web.md 3.2.
+export function jstDate(time) {
+  return jstParts(time)?.date ?? null;
+}
+
+// hourLabel is "13時台", or "10/28 13時台" with the date. A time in another
+// form is shown as it is.
+export function hourLabel(hourStart, withDate) {
+  const p = jstParts(hourStart);
+  if (!p) {
+    return hourStart;
+  }
+  const hour = `${Number(p.hour)}時台`;
+  return withDate ? `${p.date} ${hour}` : hour;
+}
+
+// finishedLabel is "13:05", or "10/28 13:05" with the date.
+export function finishedLabel(finishedAt, withDate) {
+  const p = jstParts(finishedAt);
+  if (!p) {
+    return finishedAt;
+  }
+  const time = `${p.hour}:${p.minute}`;
+  return withDate ? `${p.date} ${time}` : time;
+}
+
 // ---------- 機器（admin-ui.md 5.5、7.3） ----------
 
 export function previewText(device, preview) {

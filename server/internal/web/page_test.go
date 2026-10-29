@@ -99,3 +99,35 @@ func TestResetNextButton(t *testing.T) {
 		t.Errorf("#reset-next is not hidden at first: %s", tag)
 	}
 }
+
+// TestRecordsAlert checks the alert for an unusable records file
+// (admin-ui.md 5.10): it is outside the fieldset, since the fieldset is
+// disabled while the state cannot be fetched, it is hidden until records.js
+// shows it, and it has no close button.
+func TestRecordsAlert(t *testing.T) {
+	index, err := fs.ReadFile(embedded, "static/index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := regexp.MustCompile(`(?s)(<div\s[^>]*id="records-alert"[^>]*>)(.*?)</div>`).FindSubmatchIndex(index)
+	if m == nil {
+		t.Fatal("index.html has no #records-alert")
+	}
+	tag, body := index[m[2]:m[3]], index[m[4]:m[5]]
+	if !regexp.MustCompile(`\shidden[\s>]`).Match(tag) {
+		t.Errorf("#records-alert is not hidden at first: %s", tag)
+	}
+	if !regexp.MustCompile(`\srole="alert"`).Match(tag) {
+		t.Errorf("#records-alert is not an alert: %s", tag)
+	}
+	if regexp.MustCompile(`<button`).Match(body) {
+		t.Errorf("#records-alert has a button: %s", body)
+	}
+	fieldset := regexp.MustCompile(`<fieldset\s[^>]*id="operations"`).FindIndex(index)
+	if fieldset == nil {
+		t.Fatal("index.html has no #operations fieldset")
+	}
+	if m[0] > fieldset[0] {
+		t.Error("#records-alert is inside or after the operations fieldset")
+	}
+}
