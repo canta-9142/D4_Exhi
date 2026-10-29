@@ -41,6 +41,7 @@ func baseSnapshot() app.Snapshot {
 	s := app.Snapshot{
 		Phase: app.Preparing, Remaining: app.GameDuration, RemainingSeconds: gameSeconds,
 		CanStart: true, StartBlockers: []app.StartBlocker{}, Devices: []app.DeviceSnapshot{},
+		Records: app.RecordsSnapshot{HourlyBests: []app.HourlyBest{}, Available: true},
 	}
 	for id := app.NodeID(1); id <= app.NodeCount; id++ {
 		n := app.NodeSnapshot{ID: id, Kind: "player"}
@@ -101,6 +102,9 @@ func TestStateExample(t *testing.T) {
 		{ID: "AABBCCDDEEFF", Kind: app.PlayerDevice, Connected: true, Session: "s2", Node: 1, AssignmentKind: app.PlayerDevice},
 	}
 	s.Preview = &app.PreviewSnapshot{DeviceID: "001122334455", Kind: app.LEDDevice, Node: 1}
+	best := app.BestScore{Score: 812, Nodes: []app.NodeID{3}, FinishedAt: time.Date(2026, 10, 28, 13, 5, 12, 0, app.JST)}
+	s.Records.HourlyBests = []app.HourlyBest{{HourStart: time.Date(2026, 10, 28, 13, 0, 0, 0, app.JST), BestScore: best}}
+	s.Records.AllTimeBest = &best
 
 	w, _ := getState(t, s)
 	want := compact(t, `{
@@ -134,7 +138,17 @@ func TestStateExample(t *testing.T) {
     {"deviceId": "001122334455", "kind": "led", "connected": true, "assignment": null},
     {"deviceId": "AABBCCDDEEFF", "kind": "player", "connected": true, "assignment": {"kind": "player", "nodeId": "P1"}}
   ],
-  "preview": {"deviceId": "001122334455", "nodeId": "P1"}
+  "preview": {"deviceId": "001122334455", "nodeId": "P1"},
+  "records": {
+    "gameBest": null,
+    "hourlyBests": [
+      {"hourStart": "2026-10-28T13:00:00+09:00", "score": 812, "nodeIds": ["P3"], "finishedAt": "2026-10-28T13:05:12+09:00"}
+    ],
+    "allTimeBest": {"score": 812, "nodeIds": ["P3"], "finishedAt": "2026-10-28T13:05:12+09:00"},
+    "available": true,
+    "unavailableReason": null,
+    "saveFailed": false
+  }
 }`) + "\n"
 	if got := w.Body.String(); got != want {
 		t.Errorf("body\n got %s\nwant %s", got, want)
@@ -204,7 +218,63 @@ func TestStateEmpty(t *testing.T) {
 			if got := string(body.Game["startBlockers"]); got != "[]" {
 				t.Errorf("startBlockers = %s, want []", got)
 			}
+			var records map[string]json.RawMessage
+			if err := json.Unmarshal(mustField(t, w, "records"), &records); err != nil {
+				t.Fatal(err)
+			}
+			for key, want := range map[string]string{"gameBest": "null", "hourlyBests": "[]", "allTimeBest": "null"} {
+				if got := string(records[key]); got != want {
+					t.Errorf("records.%s = %s, want %s", key, got, want)
+				}
+			}
 		})
+	}
+}
+
+func TestStateRecords(t *testing.T) {
+	// A tie listed out of order, finishing just before 14:00 JST in UTC.
+	tie := app.BestScore{Score: 300, Nodes: []app.NodeID{3, 1}, FinishedAt: time.Date(2026, 10, 28, 4, 59, 59, 999_000_000, time.UTC)}
+	later := app.BestScore{Score: 250, Nodes: []app.NodeID{8}, FinishedAt: time.Date(2026, 10, 28, 14, 0, 0, 0, app.JST)}
+	s := baseSnapshot()
+	s.Phase = app.Finished
+	s.Records = app.RecordsSnapshot{
+		GameBest: &later, AllTimeBest: &tie, SaveFailed: true, Available: true,
+		HourlyBests: []app.HourlyBest{
+			{HourStart: time.Date(2026, 10, 28, 5, 0, 0, 0, time.UTC), BestScore: later},
+			{HourStart: time.Date(2026, 10, 28, 13, 0, 0, 0, app.JST), BestScore: tie},
+		},
+	}
+	w, _ := getState(t, s)
+	want := compact(t, `{
+  "gameBest": {"score": 250, "nodeIds": ["P8"], "finishedAt": "2026-10-28T14:00:00+09:00"},
+  "hourlyBests": [
+    {"hourStart": "2026-10-28T14:00:00+09:00", "score": 250, "nodeIds": ["P8"], "finishedAt": "2026-10-28T14:00:00+09:00"},
+    {"hourStart": "2026-10-28T13:00:00+09:00", "score": 300, "nodeIds": ["P1", "P3"], "finishedAt": "2026-10-28T13:59:59+09:00"}
+  ],
+  "allTimeBest": {"score": 300, "nodeIds": ["P1", "P3"], "finishedAt": "2026-10-28T13:59:59+09:00"},
+  "available": true,
+  "unavailableReason": null,
+  "saveFailed": true
+}`)
+	if got := compact(t, string(mustField(t, w, "records"))); got != want {
+		t.Errorf("records\n got %s\nwant %s", got, want)
+	}
+	if tie.Nodes[0] != 3 {
+		t.Error("the conversion reordered app's node slice")
+	}
+
+	s = baseSnapshot()
+	s.Records = app.RecordsSnapshot{Available: false, UnavailableReason: "open: file is not a database"}
+	w, _ = getState(t, s)
+	want = `{"gameBest":null,"hourlyBests":[],"allTimeBest":null,"available":false,"unavailableReason":"open: file is not a database","saveFailed":false}`
+	if got := compact(t, string(mustField(t, w, "records"))); got != want {
+		t.Errorf("unavailable records\n got %s\nwant %s", got, want)
+	}
+
+	s = baseSnapshot()
+	s.Records.AllTimeBest = &app.BestScore{Score: 1, Nodes: []app.NodeID{9}}
+	if w := serve(t, New(&stateApp{snapshot: s}, nil), http.MethodGet, "/api/state"); w.Code != http.StatusInternalServerError {
+		t.Errorf("a bot best: status %d, want 500", w.Code)
 	}
 }
 

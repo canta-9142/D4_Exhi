@@ -18,6 +18,7 @@ type stateResponse struct {
 	Bots    []botState    `json:"bots"`
 	Devices []deviceState `json:"devices"`
 	Preview *previewState `json:"preview"`
+	Records recordsState  `json:"records"`
 }
 
 type gameState struct {
@@ -71,6 +72,29 @@ type assignmentState struct {
 type previewState struct {
 	DeviceID string `json:"deviceId"`
 	NodeID   string `json:"nodeId"`
+}
+
+// recordsState is the records of web.md 3.2: app's best scores, passed
+// through, and whether the records file can be used.
+type recordsState struct {
+	GameBest    *bestState        `json:"gameBest"`
+	HourlyBests []hourlyBestState `json:"hourlyBests"`
+	AllTimeBest *bestState        `json:"allTimeBest"`
+	Available   bool              `json:"available"`
+	// UnavailableReason is null while the records file is available.
+	UnavailableReason *string `json:"unavailableReason"`
+	SaveFailed        bool    `json:"saveFailed"`
+}
+
+type bestState struct {
+	Score      int      `json:"score"`
+	NodeIDs    []string `json:"nodeIds"`
+	FinishedAt string   `json:"finishedAt"`
+}
+
+type hourlyBestState struct {
+	HourStart string `json:"hourStart"`
+	bestState
 }
 
 // handleState serves GET /api/state (web.md 3). The response is built only
@@ -179,7 +203,59 @@ func newStateResponse(s app.Snapshot) (stateResponse, error) {
 		}
 		res.Preview = &previewState{DeviceID: p.DeviceID, NodeID: name}
 	}
+
+	records, err := newRecordsState(s.Records)
+	if err != nil {
+		return stateResponse{}, err
+	}
+	res.Records = records
 	return res, nil
+}
+
+func newRecordsState(r app.RecordsSnapshot) (recordsState, error) {
+	res := recordsState{
+		HourlyBests: make([]hourlyBestState, 0, len(r.HourlyBests)),
+		Available:   r.Available, SaveFailed: r.SaveFailed,
+	}
+	if !r.Available {
+		reason := r.UnavailableReason
+		res.UnavailableReason = &reason
+	}
+	var err error
+	if res.GameBest, err = newBestState(r.GameBest); err != nil {
+		return recordsState{}, err
+	}
+	if res.AllTimeBest, err = newBestState(r.AllTimeBest); err != nil {
+		return recordsState{}, err
+	}
+	for _, h := range r.HourlyBests {
+		best, err := newBestState(&h.BestScore)
+		if err != nil {
+			return recordsState{}, err
+		}
+		res.HourlyBests = append(res.HourlyBests, hourlyBestState{HourStart: jstTime(h.HourStart), bestState: *best})
+	}
+	return res, nil
+}
+
+func newBestState(b *app.BestScore) (*bestState, error) {
+	if b == nil {
+		return nil, nil
+	}
+	res := &bestState{Score: b.Score, NodeIDs: make([]string, 0, len(b.Nodes)), FinishedAt: jstTime(b.FinishedAt)}
+	for _, id := range sortedIDs(b.Nodes) {
+		name, err := playerName(id)
+		if err != nil {
+			return nil, err
+		}
+		res.NodeIDs = append(res.NodeIDs, name)
+	}
+	return res, nil
+}
+
+// jstTime is t in RFC 3339 at +09:00, truncated to the second (web.md 3.2).
+func jstTime(t time.Time) string {
+	return t.In(app.JST).Format(time.RFC3339)
 }
 
 func sortedIDs(ids []app.NodeID) []app.NodeID {

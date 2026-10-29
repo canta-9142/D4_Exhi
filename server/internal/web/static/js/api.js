@@ -69,7 +69,7 @@ function isObject(v) {
 // does not check the ranges or the number of nodes, which the page shows as
 // they are.
 function isSnapshot(s) {
-  const { game, players, bots, devices, preview } = s;
+  const { game, players, bots, devices, preview, records } = s;
   return isObject(game) && typeof game.phase === "string" &&
     Number.isInteger(game.durationSeconds) && Number.isInteger(game.remainingSeconds) &&
     Number.isInteger(game.countdownSeconds) &&
@@ -83,7 +83,21 @@ function isSnapshot(s) {
     isListOf(bots, (b) => isString(b.nodeId) && Number.isInteger(b.fifoLength) && Number.isFinite(b.ratePps)) &&
     isListOf(devices, (d) => isString(d.deviceId) && isString(d.kind) && typeof d.connected === "boolean" &&
       (d.assignment === null || isNode(d.assignment))) &&
-    (preview === null || (isObject(preview) && isString(preview.deviceId) && isString(preview.nodeId)));
+    (preview === null || (isObject(preview) && isString(preview.deviceId) && isString(preview.nodeId))) &&
+    isRecords(records);
+}
+
+function isRecords(r) {
+  return isObject(r) && (r.gameBest === null || isBest(r.gameBest)) &&
+    isListOf(r.hourlyBests, (h) => isString(h.hourStart) && isBest(h)) &&
+    (r.allTimeBest === null || isBest(r.allTimeBest)) &&
+    typeof r.available === "boolean" && (r.unavailableReason === null || isString(r.unavailableReason)) &&
+    typeof r.saveFailed === "boolean";
+}
+
+function isBest(b) {
+  return isObject(b) && Number.isInteger(b.score) && Array.isArray(b.nodeIds) && b.nodeIds.every(isString) &&
+    isString(b.finishedAt);
 }
 
 function isListOf(v, check) {
