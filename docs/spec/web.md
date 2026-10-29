@@ -43,9 +43,9 @@ JSONはUTF-8とし、APIが生成する応答のContent-Typeは`application/json
 {
   "game": {
     "phase": "Preparing",
-    "durationSeconds": 120,
+    "durationSeconds": 90,
     "elapsedMs": 0,
-    "remainingSeconds": 120,
+    "remainingSeconds": 90,
     "canStart": false,
     "startBlockers": [
       {"code": "players_not_ready", "nodeIds": ["P1"]}
@@ -90,7 +90,7 @@ JSONはUTF-8とし、APIが生成する応答のContent-Typeは`application/json
 | gameの項目 | 型と意味 |
 |---|---|
 | phase | 現在のフェーズの文字列 |
-| durationSeconds | ルールで定めるゲーム時間の整数秒。現行120 |
+| durationSeconds | ルールで定めるゲーム時間の整数秒。現行90 |
 | elapsedMs | 確定済み経過時間をミリ秒未満切り捨てで表した非負整数。Preparingは0、Finishedは終了時点の値を保持 |
 | remainingSeconds | 0〜durationSecondsの整数。MCUの`status.remaining`と同じ計算・保持規則に従う |
 | canStart | 現在のStart受理条件を満たすかの真偽値 |

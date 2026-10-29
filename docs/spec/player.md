@@ -87,7 +87,7 @@
 
 - status: 対応付けられたプレイヤーのスコア・準備完了状態とゲームの残り時間の通知
   - score: 現在スコアの絶対値。0〜2147483647の整数
-  - remaining: 残り時間の秒数。0〜ゲーム時間の整数（現行ルールでは0〜120）
+  - remaining: 残り時間の秒数。0〜ゲーム時間の整数（現行ルールでは0〜90）
   - ready: サーバーが保持する準備完了状態（boolean）。autoノードはfalse
 
 - reset: MCU側キャッシュ全更新
@@ -199,7 +199,7 @@ MCUは設定・FIFO同期済みかつ取得済みフェーズがPreparingで、�
 
 ```json
 {"type":"ready","data":{"sync":"00000000000000000000000000000002"}}
-{"type":"status","data":{"score":0,"remaining":120,"ready":true}}
+{"type":"status","data":{"score":0,"remaining":90,"ready":true}}
 ```
 
 MCUは長押し中の進捗と要求後の「通知中」を表示し、`status.ready=true`を受け取ってから「準備完了」と表示する。3秒以内にtrueを確認できなければ`resync`でサーバーの最新状態を取得し、要求を自動再送しない。復旧後もfalseの場合は再度の長押しで要求する。フェーズ・モードの変更、`identify`・`config`・`reset`の受信、切断・復旧処理への移行では長押し計測と準備完了要求の確認待ちを解除し、両端を一度離してから次の計測を許可する。押したままの操作を次ゲームへ持ち越さない。
@@ -220,13 +220,13 @@ FIFOの`reset`は保持中のフェーズを変更しない。初期同期・再
 
 | フェーズ | score | remaining |
 |---|---|---|
-| Preparing | 0 | ゲーム時間の秒数（現行120） |
+| Preparing | 0 | ゲーム時間の秒数（現行90） |
 | Playing | ゲームルールに従う現在スコア | 残り時間の端数を切り上げた秒数 |
 | Finished | 確定した最終スコア | 終了時点の残り秒数を保持。時間満了なら0、手動Finishならその時点の残り秒数 |
 
 `ready`は「準備完了の要求と通知」で定める状態を各フェーズで通知する。Playing・Finishedへの遷移だけでは解除せず、ゲームのResetではfalseにする。autoノードには常にfalseを通知する。
 
-Playing中の残り秒数は、`ceil(max(0, ゲーム時間 - 経過時間))`でサーバーが計算する。例えば開始直後から1秒未満までは120、開始1秒後は119となる。ゲーム内時間と終了判定の正本はサーバーとし、MCUは独自のカウントダウンを行わない。
+Playing中の残り秒数は、`ceil(max(0, ゲーム時間 - 経過時間))`でサーバーが計算する。例えば開始直後から1秒未満までは90、開始1秒後は89となる。ゲーム内時間と終了判定の正本はサーバーとし、MCUは独自のカウントダウンを行わない。
 
 サーバーは初期設定・再接続・再同期・フェーズ変更時と、割当済みの有効なセッションから形式が正しい`ready`を受信した場合に、値が直前と同じでも`status`を送信する。それ以外では、入力イベント確定後にスコア・通知する残り秒数・準備完了状態のいずれかが変わったプレイヤーMCUにだけ送信する。残り時間の表示更新は通常1秒ごととなり、100msごとの同一値の通知は行わない。Tickが遅延した場合は処理確定後の最新値を通知し、途中の表示値をすべて再送しない。
 
@@ -366,14 +366,14 @@ sequenceDiagram
     S-->>M: CONFIG (mode=manual, preview=false)
     S-->>M: RESET (sync=a)
     S-->>M: PHASE (Preparing)
-    S-->>M: STATUS (score=0, remaining=120, ready=false)
+    S-->>M: STATUS (score=0, remaining=90, ready=false)
     Note over M: キャッシュ初期化・操作待機
     Note over M: 両端とも押された状態を2秒間維持
     M->>S: READY (sync=a)
-    S-->>M: STATUS (score=0, remaining=120, ready=true)
+    S-->>M: STATUS (score=0, remaining=90, ready=true)
     Note over S: 全manualノード準備完了後、管理者がStart
     S-->>M: PHASE (Playing)
-    S-->>M: STATUS (score=0, remaining=120, ready=true)
+    S-->>M: STATUS (score=0, remaining=90, ready=true)
     S-->>M: PUSH
     Note over M: パケット追加
     M->>S: SEND (sync=a, rid=1)
