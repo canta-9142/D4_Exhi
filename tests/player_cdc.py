@@ -124,7 +124,7 @@ def exercise_buttons(cdc, packets, sync):
     for phase in ("Preparing", "Finished"):
         cdc.send("phase", phase=phase)
         if phase == "Finished":
-            cdc.send("summary", sync=sync, score=0, rank=1, eligible=True)
+            cdc.send("summary", sync=sync, score=0, rank=1, eligible=True, topPercent=None)
         input(f"READY: {phase}; press Enter, then press the leftmost switch repeatedly for 10 seconds: ")
         cdc.quiet(10)
         print(f"PASS: no SEND in {phase}", flush=True)

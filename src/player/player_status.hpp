@@ -22,6 +22,8 @@ struct FinalSummary {
   bool known = false;
   uint32_t revision = 0;
   bool animate = false;
+  // 上位何%か（1〜50）。0はnullで、上位%のページを出さない。
+  uint8_t topPercent = 0;
 };
 
 class FinishedAnimation {

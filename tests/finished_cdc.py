@@ -7,8 +7,8 @@ import uuid
 from player_cdc import CDC
 
 
-def result(cdc, sync, score=2147483647, rank=2, eligible=True):
-    cdc.send("summary", sync=sync, score=score, rank=rank, eligible=eligible)
+def result(cdc, sync, score=2147483647, rank=2, eligible=True, top=None):
+    cdc.send("summary", sync=sync, score=score, rank=rank, eligible=eligible, topPercent=top)
 
 
 def configure(cdc, mode="manual", preview=False):
@@ -53,13 +53,24 @@ def exercise(cdc):
         {"score": 1, "eligible": False},
         {"score": 1, "rank": None, "eligible": 0},
     ]
+    invalid = [dict(fields, topPercent=None) for fields in invalid] + [
+        {"score": 1, "rank": 1, "eligible": True},
+        {"score": 1, "rank": 1, "eligible": True, "topPercent": 0},
+        {"score": 1, "rank": 1, "eligible": True, "topPercent": 51},
+        {"score": 1, "rank": 1, "eligible": True, "topPercent": 12.0},
+        {"score": 1, "rank": 1, "eligible": True, "topPercent": "12"},
+        {"score": 1, "rank": None, "eligible": False, "topPercent": 12},
+    ]
     for fields in invalid:
         cdc.send("summary", sync=sync, **fields)
         cdc.expect("resync")
         sync = cdc.reset([], "Finished")
         result(cdc, sync)
         cdc.quiet(.05)
-    print("PASS: invalid summary fields request resync", flush=True)
+    for top in (1, 50):
+        result(cdc, sync, top=top)
+    cdc.quiet(.05)
+    print("PASS: invalid summary fields request resync; topPercent 1 and 50 accepted", flush=True)
 
     configure(cdc, "auto", True)
     sync = cdc.reset([], "Finished")

@@ -514,7 +514,7 @@ static void test_summary_and_preview() {
   const auto playing = message("phase", R"({"phase":"Playing"})");
   const auto finished = message("phase", R"({"phase":"Finished"})");
   const auto status = message("status", R"({"score":9,"remaining":0,"ready":false,"countdown":0})");
-  const auto summary = [&](const std::string& sync, const std::string& fields = R"("score":2147483647,"rank":2,"eligible":true)") {
+  const auto summary = [&](const std::string& sync, const std::string& fields = R"("score":2147483647,"rank":2,"eligible":true,"topPercent":null)") {
     return message("summary", "{\"sync\":\"" + sync + "\"," + fields + "}");
   };
   // 同じ遷移を一括・行単位・1バイトずつ受け取っても、終了演出の判定は同じ。
@@ -557,7 +557,7 @@ static void test_summary_and_preview() {
   assert(!ctx.link.summary().known);
   ctx.receive(summary(a));
   assert(!ctx.link.summary().known);
-  ctx.receive(summary(b, R"("score":400,"rank":null,"eligible":false)"));
+  ctx.receive(summary(b, R"("score":400,"rank":null,"eligible":false,"topPercent":null)"));
   assert(ctx.link.summary().score == 400 && !ctx.link.summary().eligible && !ctx.link.summary().animate);
   ctx.receive(playing);
   assert(!ctx.link.summary().known);
@@ -576,14 +576,35 @@ static void test_summary_and_preview() {
   assert(ctx.link.summary().known && !ctx.link.summary().animate);
 
   const std::string bad[] = {
-    R"("score":-1,"rank":1,"eligible":true)", R"("score":2147483648,"rank":1,"eligible":true)",
-    R"("score":true,"rank":1,"eligible":true)", R"("score":1.5,"rank":1,"eligible":true)",
-    R"("score":1,"rank":0,"eligible":true)", R"("score":1,"rank":9,"eligible":true)",
-    R"("score":1,"rank":null,"eligible":true)", R"("score":1,"rank":true,"eligible":true)",
-    R"("score":1,"rank":1,"eligible":false)", R"("score":1,"eligible":false)",
-    R"("score":1,"rank":null)", R"("score":1,"rank":null,"eligible":0)",
-    R"("rank":1,"eligible":true)"
+    R"("score":-1,"rank":1,"eligible":true,"topPercent":null)",
+    R"("score":2147483648,"rank":1,"eligible":true,"topPercent":null)",
+    R"("score":true,"rank":1,"eligible":true,"topPercent":null)",
+    R"("score":1.5,"rank":1,"eligible":true,"topPercent":null)",
+    R"("score":1,"rank":0,"eligible":true,"topPercent":null)", R"("score":1,"rank":9,"eligible":true,"topPercent":null)",
+    R"("score":1,"rank":null,"eligible":true,"topPercent":null)",
+    R"("score":1,"rank":true,"eligible":true,"topPercent":null)",
+    R"("score":1,"rank":1,"eligible":false,"topPercent":null)", R"("score":1,"eligible":false,"topPercent":null)",
+    R"("score":1,"rank":null,"topPercent":null)", R"("score":1,"rank":null,"eligible":0,"topPercent":null)",
+    R"("rank":1,"eligible":true,"topPercent":null)",
+    // topPercentは必須で、1〜50の整数かnull。対象外ではnullだけを受け付ける。
+    R"("score":1,"rank":1,"eligible":true)", R"("score":1,"rank":1,"eligible":true,"topPercent":0)",
+    R"("score":1,"rank":1,"eligible":true,"topPercent":51)", R"("score":1,"rank":1,"eligible":true,"topPercent":-1)",
+    R"("score":1,"rank":1,"eligible":true,"topPercent":12.5)", R"("score":1,"rank":1,"eligible":true,"topPercent":true)",
+    R"("score":1,"rank":1,"eligible":true,"topPercent":"12")", R"("score":1,"rank":1,"eligible":true,"topPercent":[12])",
+    R"("score":1,"rank":null,"eligible":false,"topPercent":12)", R"("score":1,"rank":null,"eligible":false)"
   };
+  for (const unsigned top : {1u, 12u, 50u}) {
+    ctx.receive(config + reset(a, "[]") + finished + status +
+                summary(a, R"("score":5,"rank":1,"eligible":true,"topPercent":)" + std::to_string(top)));
+    assert(ctx.link.fifo_synced() && ctx.link.summary().known && ctx.link.summary().topPercent == top);
+  }
+  ctx.receive(summary(a, R"("score":5,"rank":1,"eligible":true,"topPercent":51)"));
+  assert(!ctx.link.fifo_synced() && ctx.link.summary().topPercent == 50); // 不正な値では正常値を保つ。
+  ctx.receive(config + reset(a, "[]") + finished + status);
+  ctx.receive(summary(a));
+  assert(ctx.link.fifo_synced() && ctx.link.summary().topPercent == 0); // 対象者のnullは上位%なし。
+  ctx.receive(summary(a, R"("score":400,"rank":null,"eligible":false,"topPercent":null)"));
+  assert(ctx.link.fifo_synced() && !ctx.link.summary().eligible && ctx.link.summary().topPercent == 0);
   for (const auto& fields : bad) {
     ctx.receive(config + reset(a, "[]") + finished + status + summary(a));
     ctx.receive(summary(a, fields));

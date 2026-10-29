@@ -489,15 +489,19 @@ private:
       const bool validRank = eligible ?
           data["rank"].is<uint8_t>() && data["rank"].as<unsigned>() >= 1 && data["rank"].as<unsigned>() <= 8 :
           !data["rank"].isUnbound() && data["rank"].isNull();
+      // topPercentは必須。対象外ではnullだけ、対象者ではnullまたは1〜50。
+      const JsonVariantConst top = data["topPercent"];
+      const bool validTop = (!top.isUnbound() && top.isNull()) ||
+          (eligible && top.is<uint8_t>() && top.as<unsigned>() >= 1 && top.as<unsigned>() <= 50);
       if (!valid_sync(data["sync"]) || !data["score"].is<int32_t>() || data["score"].as<int32_t>() < 0 ||
-          !data["eligible"].is<bool>() || !validRank) {
+          !data["eligible"].is<bool>() || !validRank || !validTop) {
         request_resync();
       } else if (fifo_synced() && phase_ == GamePhase::Finished && !preview_ &&
                  std::strcmp(sync_, data["sync"].as<const char*>()) == 0) {
         const bool first = !summary_.known;
         summary_ = {data["score"].as<int32_t>(), eligible ? data["rank"].as<uint8_t>() : uint8_t(0),
                     eligible, true, first ? ++summaryRevision_ : summary_.revision,
-                    first ? allowIntro_ : summary_.animate};
+                    first ? allowIntro_ : summary_.animate, top.isNull() ? uint8_t(0) : top.as<uint8_t>()};
         summaryTimerStarted_ = false;
         allowIntro_ = false;
       }
