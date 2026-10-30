@@ -176,5 +176,24 @@ int main() {
   assert(controller.ready() && outputCount == 2 && Serial.output == hello);
   assert(Serial.available() == 0);
   Serial.beforeWrite = nullptr;
+
+  // CHEERは受け付けた時点から出力へ描き、CLEARで消す。
+  auto expect_pixel = [](unsigned pin, size_t index, uint8_t r, uint8_t g, uint8_t b) {
+    assert(retainedPixels[pin].at(index * 3) == r);
+    assert(retainedPixels[pin].at(index * 3 + 1) == g);
+    assert(retainedPixels[pin].at(index * 3 + 2) == b);
+  };
+  const uint32_t cheered = testMillis;
+  receive("CONFIG P1 false\nCHEER P2 P1 game\nCHEER P8 P8 hour\n");
+  expect_pixel(0, 0, 255, 255, 0);
+  expect_pixel(1, 23, 0, 255, 0);
+  testMillis = cheered + 150;
+  loop();
+  expect_pixel(0, 0, 255, 255, 0);
+  expect_pixel(1, 23, 255, 64, 160);
+  receive("CLEAR\n");
+  testMillis += led::FRAME_MS;
+  loop();
+  expect_dark();
   std::cout << "LED firmware startup and recovery checks passed\n";
 }

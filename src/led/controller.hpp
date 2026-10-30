@@ -24,6 +24,39 @@ inline Color pulse_pixel(Color color, bool incoming, uint16_t count,
           static_cast<uint8_t>((color.b * intensity + 127) / 255)};
 }
 
+// CHEERは8秒未満の0ms・150ms・…・7950msに、LIGHTと同じ光を1つずつ送り出す。
+constexpr uint32_t CHEER_INTERVAL_MS = 150;
+constexpr uint32_t CHEER_EMIT_MS = 8000;
+constexpr uint32_t CHEER_PULSES = (CHEER_EMIT_MS + CHEER_INTERVAL_MS - 1) / CHEER_INTERVAL_MS;
+static_assert(CHEER_INTERVAL_MS >= sizeof(TAIL) * FRAME_MS,
+              "CHEERの光の尾が次の光と重ならない間隔にする");
+
+// STYLEごとに送り出す光の色を順に並べる。ノードの色は使わない。
+struct CheerStyle {
+  const char* name;
+  uint8_t count;
+  Color colors[7];
+};
+constexpr CheerStyle CHEER_STYLES[] = {
+  {"game", 1, {{255, 255, 0}}},
+  {"hour", 2, {{0, 255, 0}, {255, 64, 160}}},
+  {"record", 7, {{255, 0, 0}, {255, 96, 0}, {255, 255, 0}, {0, 255, 0},
+                 {0, 128, 255}, {0, 0, 255}, {160, 0, 255}}},
+};
+
+// 受け付けからageMs後のCHEERのうち、pixelに尾が掛かる光を描く。
+inline Color cheer_pixel(const CheerStyle& style, bool incoming, uint16_t count,
+                         uint16_t pixel, uint32_t ageMs) {
+  if (pixel >= count) return {};
+  const uint32_t reachedMs = (incoming ? count - 1 - pixel : pixel) * FRAME_MS;
+  if (ageMs < reachedMs) return {};
+  // 間隔が尾より長いので、掛かり得るのは最後にpixelへ届いた光だけ。
+  uint32_t pulse = (ageMs - reachedMs) / CHEER_INTERVAL_MS;
+  if (pulse >= CHEER_PULSES) pulse = CHEER_PULSES - 1;
+  return pulse_pixel(style.colors[pulse % style.count], incoming, count, pixel,
+                     ageMs - pulse * CHEER_INTERVAL_MS);
+}
+
 class Controller {
 public:
   static constexpr size_t MAX_STRIPS = 7;
@@ -160,6 +193,11 @@ public:
     }
     if (std::strcmp(target.node, target.neighbor) == 0) return tower_;
     Color result;
+    const Cheer& cheer = cheers_[strip];
+    if (cheer.style) {
+      result = cheer_pixel(*cheer.style, cheer.incoming, target.count, index,
+                           nowMs - cheer.startedMs);
+    }
     for (size_t i = 0; i < lightCount_; ++i) {
       const Light& light = lights_[i];
       if (light.strip == strip) {
@@ -192,6 +230,7 @@ private:
   bool unconfigure() {
     const bool changed = ready();
     stripCount_ = lightCount_ = 0;
+    cheers_ = {};
     node_ = nullptr;
     tower_ = {};
     preview_ = false;
@@ -292,6 +331,13 @@ private:
     bool incoming;
   };
 
+  // テープごとのCHEER。styleがnullptrならCHEERなし。
+  struct Cheer {
+    const CheerStyle* style;
+    uint32_t startedMs;
+    bool incoming;
+  };
+
   void update(uint32_t nowMs) {
     for (size_t i = 0; i < lightCount_;) {
       if ((nowMs - lights_[i].startedMs) / FRAME_MS >=
@@ -299,6 +345,14 @@ private:
         lights_[i] = lights_[--lightCount_];
       } else {
         ++i;
+      }
+    }
+    // 最後の光が端から消えたら終え、millis()が周回しても描き直さない。
+    for (size_t strip = 0; strip < stripCount_; ++strip) {
+      Cheer& cheer = cheers_[strip];
+      if (cheer.style && nowMs - cheer.startedMs >= (CHEER_PULSES - 1) * CHEER_INTERVAL_MS +
+                         (route(strip).count + sizeof(TAIL) - 1) * FRAME_MS) {
+        cheer = {};
       }
     }
   }
@@ -322,6 +376,7 @@ private:
       for (const Route& route : ROUTES) found |= std::strcmp(route.node, args[1]) == 0;
       if (!found) return Command::Recover;
       stripCount_ = lightCount_ = 0;
+      cheers_ = {};
       tower_ = {};
       for (const Route& route : ROUTES) {
         if (std::strcmp(route.node, args[1]) == 0) routes_[stripCount_++] = &route;
@@ -332,13 +387,15 @@ private:
       previewClearedCycle_ = UINT32_MAX;
       return Command::Configured;
     }
-    if (std::strcmp(args[0], "LIGHT") != 0 && std::strcmp(args[0], "BUFFER") != 0 &&
-        std::strcmp(args[0], "CLEAR") != 0 && std::strcmp(args[0], "HELLO") != 0) {
+    if (std::strcmp(args[0], "LIGHT") != 0 && std::strcmp(args[0], "CHEER") != 0 &&
+        std::strcmp(args[0], "BUFFER") != 0 && std::strcmp(args[0], "CLEAR") != 0 &&
+        std::strcmp(args[0], "HELLO") != 0) {
       return Command::Recover;
     }
     if (!ready()) return Command::Ignored;
     if (std::strcmp(args[0], "CLEAR") == 0 && count == 1) {
       lightCount_ = 0;
+      cheers_ = {};
       tower_ = {};
       if (preview_) previewClearedCycle_ = (nowMs - previewStartedMs_) / PREVIEW_PERIOD_MS;
     } else if (std::strcmp(args[0], "BUFFER") == 0 && count == 2 && node_[0] == 'B') {
@@ -358,6 +415,24 @@ private:
         if (!preview_ && lightCount_ < MAX_LIGHTS) lights_[lightCount_++] = {nowMs, strip, destination, incoming};
         break;
       }
+    } else if (std::strcmp(args[0], "CHEER") == 0 && count == 4) {
+      const CheerStyle* style = nullptr;
+      for (const CheerStyle& candidate : CHEER_STYLES) {
+        if (std::strcmp(candidate.name, args[3]) == 0) style = &candidate;
+      }
+      // NODEはP1〜P8のうちこの基板かNEIGHBORで、光はNODEから外へ流す。
+      // タワーはNEIGHBORがこの基板になり、NODEがP1〜P8にならないので選ばれない。
+      const unsigned node = node_id(args[2]);
+      const bool incoming = std::strcmp(args[2], args[1]) == 0;
+      if (!style || !node || node > 8 || (!incoming && std::strcmp(args[2], node_) != 0)) {
+        return Command::Ignored;
+      }
+      for (size_t strip = 0; strip < stripCount_; ++strip) {
+        if (std::strcmp(route(strip).neighbor, args[1]) != 0) continue;
+        // 同じテープの前のCHEERは、流れている途中の光も含めて置き換える。
+        if (!preview_) cheers_[strip] = {style, nowMs, incoming};
+        break;
+      }
     }
     return Command::Ignored;
   }
@@ -367,6 +442,7 @@ private:
   size_t stripCount_ = 0;
   std::array<Light, MAX_LIGHTS> lights_{};
   size_t lightCount_ = 0;
+  std::array<Cheer, MAX_STRIPS> cheers_{};
   Color tower_{};
   bool preview_ = false;
   uint32_t previewStartedMs_ = 0;

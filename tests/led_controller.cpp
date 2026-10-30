@@ -511,6 +511,205 @@ int main() {
   poll();
   expect(pixel(0), 128, 0, 0);
 
+  // CHEERはNODEから外へ、150msごとに8秒間、STYLEの色の光を送り出す。
+  const led::Color yellow{255, 255, 0}, green{0, 255, 0}, pink{255, 64, 160};
+  const led::Color rainbow[] = {{255, 0, 0}, {255, 96, 0}, {255, 255, 0}, {0, 255, 0},
+                                {0, 128, 255}, {0, 0, 255}, {160, 0, 255}};
+  auto at = [&](size_t strip, uint16_t index) { return controller.pixel(strip, index, now); };
+  auto is = [](led::Color color, led::Color want) { expect(color, want.r, want.g, want.b); };
+  auto darkStrip = [&](size_t strip) {
+    for (uint16_t i = 0; i < controller.route(strip).count; ++i) expect(at(strip, i), 0, 0, 0);
+  };
+  now = 100000;
+  receive("CONFIG P1 false\n");
+  port.output.clear();
+  uint32_t started = now;
+  receive("CHEER P2 P1 game\nCHEER P8 P8 game\n");
+  assert(controller.ready() && port.output.empty());
+  // NODEがこの基板ならLED 0から（outgoing）、NEIGHBORなら最後のLEDから（incoming）。
+  is(at(0, 0), yellow);
+  expect(at(0, 23), 0, 0, 0);
+  is(at(1, 23), yellow);
+  expect(at(1, 0), 0, 0, 0);
+  // 光と光の間は暗い。
+  now = started + 450;
+  poll();
+  is(at(0, 0), yellow);
+  for (uint16_t i = 1; i <= 6; ++i) expect(at(0, i), 0, 0, 0);
+  is(at(0, 15), yellow);
+  is(at(1, 8), yellow);
+  // gameは黄色だけ。8秒未満に送り出した光は端まで流し、8秒以降は新しい光を出さない。
+  for (uint32_t t = 0; t < 8400; t += 10) {
+    now = started + t;
+    poll();
+    const led::Color source = at(0, 0);
+    if (t < 8000 && t % 150 == 0) is(source, yellow);
+    else assert(source.r < 255);
+    if (t % 150 >= 100 || t >= 8100) expect(source, 0, 0, 0);
+    if (t == 8180) {
+      is(at(0, 23), yellow);
+      is(at(1, 0), yellow);
+    }
+    if (t >= 8270) {
+      darkStrip(0);
+      darkStrip(1);
+    }
+  }
+  // 終えたCHEERは、millis()が一周して同じ値に戻っても描き直さない。
+  now = started;
+  poll();
+  darkStrip(0);
+  darkStrip(1);
+
+  // hourは緑とピンクを交互に、recordは虹の7色を順に巡り、紫の次は赤へ戻る。
+  started = now;
+  receive("CHEER P2 P1 hour\nCHEER P8 P8 record\n");
+  for (uint32_t k = 0; k < 54; ++k) {
+    now = started + k * 150;
+    poll();
+    is(at(0, 0), k % 2 ? pink : green);
+    is(at(1, 23), rainbow[k % 7]);
+  }
+
+  // 不正なCHEERはその行だけ捨て、設定・表示・実行中のCHEERを変えない。
+  now += 1000;
+  started = now;
+  receive("CHEER P8 P8 game\n");
+  now = started + 75;
+  port.output.clear();
+  receive("CHEER P2 P1\nCHEER P2 P1 game extra\nCHEER\nCHEER P4 P1 game\nCHEER P1 P1 game\n"
+          "CHEER P2 P3 game\nCHEER P2 P8 game\nCHEER P2 P1 gold\nCHEER P2 P1 GAME\n"
+          "CHEER P2 P01 game\nCHEER P2 B1 game\nCHEER P8 P8 Hour\nCHEER P8 P1 record extra\n");
+  assert(controller.ready() && controller.strip_count() == 2 && port.output.empty());
+  darkStrip(0);
+  expect(at(1, 23), 2, 2, 0);
+  is(at(1, 16), yellow);
+  now = started + 150;
+  poll();
+  darkStrip(0);
+  is(at(1, 23), yellow);
+  // Bot用の基板では、タワー・BotをNODEにしたもの・担当外を捨て、タワーとは独立して流す。
+  receive("CONFIG B1 false\nBUFFER 2\n");
+  started = now;
+  receive("CHEER B1 B1 game\nCHEER P1 B1 game\nCHEER P1 P2 game\nCHEER P3 P3 game\n");
+  assert(controller.ready() && port.output.empty());
+  expect(at(0, 0), 0, 255, 0);
+  for (size_t strip = 1; strip < controller.strip_count(); ++strip) darkStrip(strip);
+  receive("CHEER P1 P1 record\nBUFFER 4\n");
+  expect(at(0, 0), 255, 0, 0);
+  is(at(1, 25), rainbow[0]);
+  expect(at(1, 0), 0, 0, 0);
+  now = started + 150;
+  poll();
+  is(at(1, 25), rainbow[1]);
+
+  // CLEAR・CONFIG・identify・受信異常・切断では、流れている光もすぐに消す。
+  const std::string stoppers[] = {"CLEAR\n", "CONFIG P1 false\n", identify, "UNKNOWN\n", ""};
+  for (const auto& stopper : stoppers) {
+    receive("CONFIG P1 false\n");
+    started = now;
+    receive("CHEER P2 P1 game\nCHEER P8 P8 hour\n");
+    now = started + 460;
+    poll();
+    is(at(0, 1), yellow);
+    is(at(0, 16), yellow);
+    is(at(1, 7), green);
+    if (stopper.empty()) {
+      port.connected = false;
+      poll();
+      now += 100;
+      assert(poll() && !controller.ready());
+      port.connected = true;
+    } else {
+      receive(stopper);
+    }
+    if (!controller.ready()) receive("CONFIG P1 false\n");
+    darkStrip(0);
+    darkStrip(1);
+    now = started + 600;
+    poll();
+    darkStrip(0);
+    darkStrip(1);
+  }
+
+  // preview=trueの間は適用せず、確認表示にCHEERの色を混ぜない。
+  receive("CONFIG P1 true\n");
+  started = now;
+  port.output.clear();
+  receive("CHEER P2 P1 game\nCHEER P8 P8 game\n");
+  assert(controller.ready() && port.output.empty());
+  expect(at(0, 0), 255, 0, 0);
+  expect(at(1, 0), 255, 0, 0);
+  expect(at(1, 23), 0, 0, 0);
+  now = started + 1000;
+  poll();
+  expect(at(0, 0), 255, 0, 0);
+  expect(at(1, 23), 0, 0, 0);
+  receive("CONFIG P1 false\n");
+  now = started + 1050;
+  poll();
+  darkStrip(0);
+  darkStrip(1);
+
+  // 同じテープへの再送は、流れている途中の光を消して置き換え、8秒を数え直す。
+  started = now;
+  receive("CHEER P2 P1 game\nCHEER P8 P8 record\n");
+  now = started + 3075;
+  poll();
+  is(at(0, 7), yellow);
+  is(at(0, 22), yellow);
+  is(at(1, 16), rainbow[20 % 7]);
+  const uint32_t replaced = now;
+  receive("CHEER P2 P2 hour\n");
+  for (uint16_t i = 0; i < 23; ++i) expect(at(0, i), 0, 0, 0);
+  is(at(0, 23), green);
+  is(at(1, 16), rainbow[20 % 7]);
+  now = replaced + 7950;
+  poll();
+  is(at(0, 23), pink);
+  now = replaced + 8100;
+  poll();
+  expect(at(0, 23), 0, 0, 0);
+  is(at(0, 8), pink);
+  // 同じ内容の再送でも、最初の色から送り出し直す。
+  started = now;
+  receive("CHEER P8 P8 record\n");
+  now = started + 450;
+  poll();
+  is(at(1, 23), rainbow[3]);
+  is(at(1, 8), rainbow[2]);
+  receive("CHEER P8 P8 record\n");
+  is(at(1, 23), rainbow[0]);
+  expect(at(1, 8), 0, 0, 0);
+
+  // LIGHTとは止め合わず、重なった画素はRGB各成分を加算して255で飽和させる。
+  receive("CONFIG P1 false\n");
+  started = now;
+  receive("CHEER P2 P1 game\nLIGHT P2 P6 outgoing\n");
+  expect(at(0, 0), 255, 255, 255);
+  now = started + 10;
+  poll();
+  expect(at(0, 0), 128, 128, 128);
+  expect(at(0, 1), 255, 255, 255);
+  now = started + 150;
+  receive("LIGHT P2 P3 outgoing\n");
+  is(at(0, 0), yellow);
+  expect(at(0, 15), 255, 255, 255);
+  now = started + 160;
+  receive("CHEER P2 P2 hour\n");
+  is(at(0, 1), yellow);
+  expect(at(0, 16), 0, 0, 255);
+  is(at(0, 23), green);
+  // LIGHTの演出枠を使わない。CHEERの実行中も128件まで受け付け、満杯でもCHEERは受け付ける。
+  receive("CLEAR\nCHEER P2 P1 game\nCHEER P8 P8 game\n");
+  for (size_t i = 0; i + 1 < led::Controller::MAX_LIGHTS; ++i) receive("LIGHT P2 P1 outgoing\n");
+  receive("LIGHT P8 P6 outgoing\nLIGHT P8 P4 outgoing\n");
+  expect(at(1, 0), 0, 0, 255);
+  is(at(1, 23), yellow);
+  receive("CHEER P2 P2 hour\n");
+  expect(at(0, 0), 255, 0, 0);
+  is(at(0, 23), green);
+
   // 移動・尾・逆方向も実際の描画関数で確認。
   const led::Color red{255, 0, 0};
   expect(led::pulse_pixel(red, false, 4, 0, 0), 255, 0, 0);
