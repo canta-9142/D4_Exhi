@@ -24,6 +24,16 @@ struct FinalSummary {
   bool animate = false;
   // 上位何%か（1〜50）。0はnullで、上位%のページを出さない。
   uint8_t topPercent = 0;
+  // ベストスコア3種。NO_BESTはnullで、画面では「---」を出す。
+  int32_t gameBest = NO_BEST;
+  uint8_t gameBestNodes = 0; // bit n-1 がノードn（1〜8）。
+  int32_t hourBest = NO_BEST;
+  int8_t hourBestStart = -1; // 日本時間の0〜23。-1はnull。
+  bool hourBestMine = false;
+  int32_t allTimeBest = NO_BEST;
+  bool allTimeBestMine = false;
+
+  static constexpr int32_t NO_BEST = -1;
 };
 
 class FinishedAnimation {

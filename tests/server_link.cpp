@@ -508,6 +508,10 @@ static void test_ready() {
   assert(!ctx.link.ready_pending() && ctx.link.ready_progress_ms() == 0 && ctx.self == NodeId::None);
 }
 
+// 記録を使えず対象者もいないときのベストスコアの項目。summaryの必須項目。
+static const std::string NO_BESTS = R"("gameBest":null,"gameBestNodes":[],"hourBest":null,"hourBestStart":null,)"
+                                    R"("hourBestMine":false,"allTimeBest":null,"allTimeBestMine":false)";
+
 static void test_summary_and_preview() {
   const std::string a(32, 'A'), b(32, 'B');
   const auto config = message("config", R"({"node":1,"mode":"manual","preview":false})");
@@ -515,7 +519,7 @@ static void test_summary_and_preview() {
   const auto finished = message("phase", R"({"phase":"Finished"})");
   const auto status = message("status", R"({"score":9,"remaining":0,"ready":false,"countdown":0})");
   const auto summary = [&](const std::string& sync, const std::string& fields = R"("score":2147483647,"rank":2,"eligible":true,"topPercent":null)") {
-    return message("summary", "{\"sync\":\"" + sync + "\"," + fields + "}");
+    return message("summary", "{\"sync\":\"" + sync + "\"," + fields + "," + NO_BESTS + "}");
   };
   // 同じ遷移を一括・行単位・1バイトずつ受け取っても、終了演出の判定は同じ。
   for (unsigned delivery = 0; delivery < 3; ++delivery) {
@@ -658,6 +662,94 @@ static void test_summary_and_preview() {
   assert(!ctx.link.preview() && ctx.self == NodeId::None);
 }
 
+static void test_summary_bests() {
+  const std::string a(32, 'A');
+  const auto config = message("config", R"({"node":1,"mode":"manual","preview":false})");
+  const auto finished = message("phase", R"({"phase":"Finished"})");
+  const auto status = message("status", R"({"score":9,"remaining":0,"ready":false,"countdown":0})");
+  const std::string ranked = R"("score":520,"rank":1,"eligible":true,"topPercent":3,)";
+  const std::string unranked = R"("score":520,"rank":null,"eligible":false,"topPercent":null,)";
+  const auto summary = [&](const std::string& bests, const std::string& head) {
+    return message("summary", "{\"sync\":\"" + a + "\"," + head + bests + "}");
+  };
+  // 項目を1つずつ差し替える。値が空文字列ならその項目を省く。
+  const auto bests = [](std::initializer_list<std::pair<std::string, std::string>> changes) {
+    std::pair<std::string, std::string> fields[] = {
+      {"gameBest", "410"}, {"gameBestNodes", "[3]"}, {"hourBest", "410"}, {"hourBestStart", "13"},
+      {"hourBestMine", "false"}, {"allTimeBest", "600"}, {"allTimeBestMine", "false"}};
+    std::string out;
+    for (auto& field : fields) {
+      for (const auto& change : changes) if (change.first == field.first) field.second = change.second;
+      if (field.second.empty()) continue;
+      out += (out.empty() ? "\"" : ",\"") + field.first + "\":" + field.second;
+    }
+    return out;
+  };
+  TestContext ctx;
+  const auto accept = [&](const std::string& line) {
+    ctx.receive(config + reset(a, "[]") + finished + status + line);
+    assert(ctx.link.fifo_synced() && ctx.link.summary().known);
+    return ctx.link.summary();
+  };
+  auto r = accept(summary(bests({}), ranked));
+  assert(r.gameBest == 410 && r.gameBestNodes == 0x04 && r.hourBest == 410 && r.hourBestStart == 13);
+  assert(!r.hourBestMine && r.allTimeBest == 600 && !r.allTimeBestMine && r.topPercent == 3);
+  // 同点の全員、自分の時間帯・通算ベスト、日付の境目の時。
+  r = accept(summary(bests({{"gameBest", "520"}, {"gameBestNodes", "[1,3,8]"}, {"hourBest", "520"},
+                            {"hourBestStart", "0"}, {"hourBestMine", "true"}, {"allTimeBest", "520"},
+                            {"allTimeBestMine", "true"}}), ranked));
+  assert(r.gameBest == 520 && r.gameBestNodes == 0x85 && r.hourBestStart == 0 && r.hourBestMine && r.allTimeBestMine);
+  r = accept(summary(bests({{"gameBest", "2147483647"}, {"gameBestNodes", "[1,2,3,4,5,6,7,8]"},
+                            {"hourBestStart", "23"}, {"allTimeBest", "2147483647"}}), ranked));
+  assert(r.gameBest == INT32_MAX && r.gameBestNodes == 0xFF && r.hourBestStart == 23 && r.allTimeBest == INT32_MAX);
+  // 記録を使えない起動ではその回だけ。対象者のいないゲームはすべてnull。
+  r = accept(summary(bests({{"hourBest", "null"}, {"hourBestStart", "null"}, {"allTimeBest", "null"}}), ranked));
+  assert(r.gameBest == 410 && r.hourBest == FinalSummary::NO_BEST && r.hourBestStart == -1);
+  assert(r.allTimeBest == FinalSummary::NO_BEST);
+  r = accept(summary(NO_BESTS, unranked));
+  assert(r.gameBest == FinalSummary::NO_BEST && r.gameBestNodes == 0 && r.hourBest == FinalSummary::NO_BEST);
+  // 対象外の人にもベストを送り、*Mineはfalse。
+  r = accept(summary(bests({}), unranked));
+  assert(!r.eligible && r.gameBest == 410 && r.allTimeBest == 600);
+
+  const std::string bad[] = {
+    // 欠落。
+    bests({{"gameBest", ""}}), bests({{"gameBestNodes", ""}}), bests({{"hourBest", ""}}),
+    bests({{"hourBestStart", ""}}), bests({{"hourBestMine", ""}}), bests({{"allTimeBest", ""}}),
+    bests({{"allTimeBestMine", ""}}),
+    // 型と範囲。
+    bests({{"gameBest", "-1"}}), bests({{"gameBest", "2147483648"}}), bests({{"gameBest", "410.5"}}),
+    bests({{"gameBest", "\"410\""}}), bests({{"gameBest", "true"}}),
+    bests({{"hourBest", "-1"}}), bests({{"hourBest", "2147483648"}}), bests({{"hourBest", "\"410\""}}),
+    bests({{"allTimeBest", "-1"}}), bests({{"allTimeBest", "2147483648"}}), bests({{"allTimeBest", "1.5"}}),
+    bests({{"gameBestNodes", "null"}}), bests({{"gameBestNodes", "3"}}), bests({{"gameBestNodes", "[0]"}}),
+    bests({{"gameBestNodes", "[9]"}}), bests({{"gameBestNodes", "[3,2]"}}), bests({{"gameBestNodes", "[3,3]"}}),
+    bests({{"gameBestNodes", "[\"3\"]"}}), bests({{"gameBestNodes", "[3.5]"}}), bests({{"gameBestNodes", "[null]"}}),
+    bests({{"hourBestStart", "24"}}), bests({{"hourBestStart", "-1"}}), bests({{"hourBestStart", "\"13\""}}),
+    bests({{"hourBestStart", "13.5"}}),
+    bests({{"hourBestMine", "null"}}), bests({{"hourBestMine", "0"}}), bests({{"allTimeBestMine", "\"false\""}}),
+    // nullと空配列の組合せ。
+    bests({{"gameBest", "null"}}), bests({{"gameBestNodes", "[]"}}),
+    bests({{"hourBest", "null"}}), bests({{"hourBestStart", "null"}}),
+    // *Mineは自分の結果がそのベストのときだけ。
+    bests({{"hourBestMine", "true"}}), bests({{"allTimeBestMine", "true"}}),
+    bests({{"hourBest", "null"}, {"hourBestStart", "null"}, {"hourBestMine", "true"}}),
+    bests({{"allTimeBest", "null"}, {"allTimeBestMine", "true"}}),
+  };
+  for (const auto& fields : bad) {
+    accept(summary(bests({}), ranked));
+    ctx.receive(summary(fields, ranked));
+    assert(!ctx.link.fifo_synced()); // 不正なsummaryは再同期し、以前の正常値を保つ。
+    assert(ctx.link.summary().known && ctx.link.summary().gameBest == 410 && ctx.link.summary().allTimeBest == 600);
+  }
+  // 対象外の人の*Mineは、スコアが等しくてもtrueにできない。
+  for (const auto& mine : {"hourBestMine", "allTimeBestMine"}) {
+    accept(summary(bests({}), unranked));
+    ctx.receive(summary(bests({{"hourBest", "520"}, {"allTimeBest", "520"}, {mine, "true"}}), unranked));
+    assert(!ctx.link.fifo_synced());
+  }
+}
+
 static void test_countdown() {
   TestContext ctx;
   const std::string sync = "0000000000000000000000000000000A";
@@ -708,6 +800,7 @@ static void test_countdown() {
 int main() {
   test_countdown();
   test_summary_and_preview();
+  test_summary_bests();
   test_ready();
   test_status_and_mode();
   test_utf8_validation();

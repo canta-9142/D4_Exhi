@@ -7,8 +7,29 @@ import uuid
 from player_cdc import CDC
 
 
-def result(cdc, sync, score=2147483647, rank=2, eligible=True, top=None):
-    cdc.send("summary", sync=sync, score=score, rank=rank, eligible=eligible, topPercent=top)
+# ベストスコアの項目（summaryの必須項目）。nullは記録を使えず対象者もいないとき。
+NO_BESTS = {"gameBest": None, "gameBestNodes": [], "hourBest": None, "hourBestStart": None,
+            "hourBestMine": False, "allTimeBest": None, "allTimeBestMine": False}
+
+
+def sample_bests(kind, score, eligible):
+    """③の目視用。other: 他人のベスト、mine: 全部自分（ノードAとCの同点）、max: 最大幅、none: すべてnull。"""
+    if kind == "none":
+        return dict(NO_BESTS)
+    if kind == "max":
+        best, nodes, start = 2147483647, list(range(1, 9)), 0
+    elif kind == "mine":
+        best, nodes, start = score, [1, 3], 23
+    else:
+        best, nodes, start = 410, [3], 13
+    mine = kind == "mine" and eligible
+    return {"gameBest": best, "gameBestNodes": nodes, "hourBest": best, "hourBestStart": start,
+            "hourBestMine": mine, "allTimeBest": best if kind != "other" else 520, "allTimeBestMine": mine}
+
+
+def result(cdc, sync, score=2147483647, rank=2, eligible=True, top=None, bests=None):
+    cdc.send("summary", sync=sync, score=score, rank=rank, eligible=eligible, topPercent=top,
+             **(bests if bests is not None else NO_BESTS))
 
 
 def configure(cdc, mode="manual", preview=False):
@@ -61,6 +82,15 @@ def exercise(cdc):
         {"score": 1, "rank": 1, "eligible": True, "topPercent": "12"},
         {"score": 1, "rank": None, "eligible": False, "topPercent": 12},
     ]
+    invalid = [dict(NO_BESTS, **fields) for fields in invalid] + [
+        dict(NO_BESTS, score=1, rank=1, eligible=True, topPercent=None, **changes) for changes in (
+            {"gameBest": -1}, {"gameBest": 1}, {"gameBestNodes": [1]}, {"gameBestNodes": None},
+            {"gameBest": 1, "gameBestNodes": [2, 1]}, {"gameBest": 1, "gameBestNodes": [9]},
+            {"hourBest": 1}, {"hourBestStart": 13}, {"hourBest": 1, "hourBestStart": 24},
+            {"hourBestMine": True}, {"hourBestMine": None}, {"allTimeBest": 2, "allTimeBestMine": True},
+        )
+    ] + [{key: value for key, value in dict(NO_BESTS, score=1, rank=1, eligible=True, topPercent=None).items()
+          if key != missing} for missing in NO_BESTS]
     for fields in invalid:
         cdc.send("summary", sync=sync, **fields)
         cdc.expect("resync")
@@ -69,8 +99,10 @@ def exercise(cdc):
         cdc.quiet(.05)
     for top in (1, 50):
         result(cdc, sync, top=top)
+    for kind in ("other", "mine", "max"):
+        result(cdc, sync, bests=sample_bests(kind, 2147483647, True))
     cdc.quiet(.05)
-    print("PASS: invalid summary fields request resync; topPercent 1 and 50 accepted", flush=True)
+    print("PASS: invalid summary fields request resync; topPercent 1 and 50 and best scores accepted", flush=True)
 
     configure(cdc, "auto", True)
     sync = cdc.reset([], "Finished")

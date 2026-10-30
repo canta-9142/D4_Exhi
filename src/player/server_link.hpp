@@ -237,6 +237,50 @@ private:
     return true;
   }
 
+  // ベストスコアは0〜2147483647の整数かnull。nullはNO_BESTで持つ。欠落は不正。
+  static bool parse_best(JsonVariantConst value, int32_t& best) {
+    if (!value.isUnbound() && value.isNull()) {
+      best = FinalSummary::NO_BEST;
+      return true;
+    }
+    if (!value.is<int32_t>() || value.as<int32_t>() < 0) return false;
+    best = value.as<int32_t>();
+    return true;
+  }
+
+  // *Mineがtrueなら、対象者の結果で、そのベストがこの結果のスコアと等しい。
+  static bool parse_mine(JsonVariantConst value, bool eligible, int32_t score, int32_t best, bool& mine) {
+    if (!value.is<bool>()) return false;
+    mine = value.as<bool>();
+    return !mine || (eligible && best != FinalSummary::NO_BEST && best == score);
+  }
+
+  // summaryのベストスコアの項目を型・範囲・組合せまで検証してから返す。
+  static bool parse_bests(JsonObjectConst data, bool eligible, int32_t score, FinalSummary& bests) {
+    if (!parse_best(data["gameBest"], bests.gameBest) || !data["gameBestNodes"].is<JsonArrayConst>()) return false;
+    // 1〜8を昇順に重複なく並べる。gameBestがnullなら空、整数なら1個以上。
+    const JsonArrayConst nodes = data["gameBestNodes"].as<JsonArrayConst>();
+    if ((bests.gameBest == FinalSummary::NO_BEST) != (nodes.size() == 0)) return false;
+    unsigned previous = 0;
+    for (JsonVariantConst node : nodes) {
+      if (!node.is<uint8_t>() || node.as<unsigned>() <= previous || node.as<unsigned>() > 8) return false;
+      previous = node.as<unsigned>();
+      bests.gameBestNodes |= 1u << (previous - 1);
+    }
+    // hourBestStartはhourBestと一緒にnull、整数なら0〜23。
+    const JsonVariantConst start = data["hourBestStart"];
+    if (!parse_best(data["hourBest"], bests.hourBest)) return false;
+    if (bests.hourBest == FinalSummary::NO_BEST) {
+      if (start.isUnbound() || !start.isNull()) return false;
+    } else {
+      if (!start.is<uint8_t>() || start.as<unsigned>() > 23) return false;
+      bests.hourBestStart = start.as<int8_t>();
+    }
+    return parse_mine(data["hourBestMine"], eligible, score, bests.hourBest, bests.hourBestMine) &&
+           parse_best(data["allTimeBest"], bests.allTimeBest) &&
+           parse_mine(data["allTimeBestMine"], eligible, score, bests.allTimeBest, bests.allTimeBestMine);
+  }
+
   static GamePhase parse_phase(JsonVariantConst value) {
     if (!value.is<const char*>()) return GamePhase::Unknown;
     const JsonString phase = value.as<JsonString>();
@@ -493,15 +537,23 @@ private:
       const JsonVariantConst top = data["topPercent"];
       const bool validTop = (!top.isUnbound() && top.isNull()) ||
           (eligible && top.is<uint8_t>() && top.as<unsigned>() >= 1 && top.as<unsigned>() <= 50);
+      FinalSummary result;
       if (!valid_sync(data["sync"]) || !data["score"].is<int32_t>() || data["score"].as<int32_t>() < 0 ||
-          !data["eligible"].is<bool>() || !validRank || !validTop) {
+          !data["eligible"].is<bool>() || !validRank || !validTop ||
+          !parse_bests(data, eligible, data["score"].as<int32_t>(), result)) {
         request_resync();
       } else if (fifo_synced() && phase_ == GamePhase::Finished && !preview_ &&
                  std::strcmp(sync_, data["sync"].as<const char*>()) == 0) {
+        // 同じ世代の再通知では、演出の要否と世代番号を最初の通知のまま保つ。
         const bool first = !summary_.known;
-        summary_ = {data["score"].as<int32_t>(), eligible ? data["rank"].as<uint8_t>() : uint8_t(0),
-                    eligible, true, first ? ++summaryRevision_ : summary_.revision,
-                    first ? allowIntro_ : summary_.animate, top.isNull() ? uint8_t(0) : top.as<uint8_t>()};
+        result.revision = first ? ++summaryRevision_ : summary_.revision;
+        result.animate = first ? allowIntro_ : summary_.animate;
+        result.score = data["score"].as<int32_t>();
+        result.rank = eligible ? data["rank"].as<uint8_t>() : uint8_t(0);
+        result.eligible = eligible;
+        result.known = true;
+        result.topPercent = top.isNull() ? uint8_t(0) : top.as<uint8_t>();
+        summary_ = result;
         summaryTimerStarted_ = false;
         allowIntro_ = false;
       }
