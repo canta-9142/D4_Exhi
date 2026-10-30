@@ -1,21 +1,16 @@
 package app
 
-const (
-	// minTopPercentPopulation is the fewest scores that make a top percent
-	// meaningful (rules.md). A smaller population gives none.
-	minTopPercentPopulation = 30
-	// maxDeviceTopPercent is the largest top percent sent to a player MCU;
-	// anyone below it is shown no percent (player.md).
-	maxDeviceTopPercent = 50
-)
+// maxDeviceTopPercent is the largest top percent sent to a player MCU; anyone
+// below it is shown no percent (player.md).
+const maxDeviceTopPercent = 50
 
 // topPercent is the top percent of score within population, which includes
 // the score itself: ceil(100 * (scores above it + 1) / population), kept in
-// 1-100. A tie shares a value, since only higher scores count. It reports
-// false if the population is smaller than minTopPercentPopulation.
+// 1-100. A tie shares a value, since only higher scores count. Any population
+// size gives one (rules.md), but an empty population reports false.
 func topPercent(population []int, score int) (int, bool) {
 	n := len(population)
-	if n < minTopPercentPopulation {
+	if n == 0 {
 		return 0, false
 	}
 	higher := 0

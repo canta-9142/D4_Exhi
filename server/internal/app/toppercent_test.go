@@ -29,8 +29,11 @@ func TestTopPercent(t *testing.T) {
 		want         int
 		wantComputed bool
 	}{
-		{"29 scores are too few", 29, 0, 0, false},
-		{"30 scores are enough", 30, 29, 100, true},
+		{"a single score", 1, 0, 100, true},
+		{"the best of 2", 2, 0, 50, true},
+		{"the worst of 2", 2, 1, 100, true},
+		{"the best of 29", 29, 0, 4, true},
+		{"the worst of 30", 30, 29, 100, true},
 		{"the best of 30", 30, 0, 4, true},
 		{"the best of 100", 100, 0, 1, true},
 		{"the best of 99 is not yet 1", 99, 0, 2, true},
@@ -198,8 +201,10 @@ func TestTopPercentAtTimeout(t *testing.T) {
 		snapshot     int // Of each manual player; 0 for null.
 		summary      int
 	}{
-		{"29 scores", 0, 28, []NodeID{1}, nil, 0, 0},
-		{"30 scores", 0, 29, []NodeID{1}, nil, 4, 4},
+		{"the first game", 0, 0, []NodeID{1}, nil, 100, 0},
+		{"the best of 2", 0, 1, []NodeID{1}, nil, 50, 50},
+		{"the best of 29", 0, 28, []NodeID{1}, nil, 4, 4},
+		{"the best of 30", 0, 29, []NodeID{1}, nil, 4, 4},
 		{"the best of 100", 0, 99, []NodeID{1}, nil, 1, 1},
 		{"exactly 50", 49, 50, []NodeID{1}, nil, 50, 50},
 		{"just over 50", 50, 49, []NodeID{1}, nil, 51, 0},
@@ -260,25 +265,17 @@ func TestTopPercentAtTimeout(t *testing.T) {
 // Saved games that the best scores do not count are not in the population
 // either: a manual finish, another duration, and ineligible results.
 func TestTopPercentPopulationIgnoresUncountedRecords(t *testing.T) {
-	for _, tc := range []struct {
-		name  string
-		below int // Counted scores of earlier games.
-		want  int
-	}{
-		{"29 counted scores", 28, 0}, // The game's own makes 29.
-		{"30 counted scores", 29, 4},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			manual := testRecord(jst(11, 0, 0, 0), FinishManual, map[NodeID]int{1: 100, 2: 100}, nil)
-			longer := testRecord(jst(11, 10, 0, 0), FinishTimeout, map[NodeID]int{1: 100, 2: 100}, nil)
-			longer.Duration, longer.Elapsed = GameDuration+30*time.Second, GameDuration+30*time.Second
-			ineligible := testRecord(jst(11, 20, 0, 0), FinishTimeout, nil, map[NodeID]int{1: 100, 2: 100})
-			records := slices.Concat([]GameRecord{manual, longer, ineligible}, topPercentHistory(pastScores(0, tc.below)))
-			h := topPercentHarness(t, Options{Records: records}, []NodeID{1}, nil)
-			h.playToTimeout(map[NodeID]int{1: 7000})
-			wantPercent(t, "Snapshot topPercent", topPercentOf(h.state(), 1), tc.want)
-		})
-	}
+	// Each uncounted record has two scores above the player's 7000.
+	manual := testRecord(jst(11, 0, 0, 0), FinishManual, map[NodeID]int{1: 9000, 2: 9000}, nil)
+	longer := testRecord(jst(11, 10, 0, 0), FinishTimeout, map[NodeID]int{1: 9000, 2: 9000}, nil)
+	longer.Duration, longer.Elapsed = GameDuration+30*time.Second, GameDuration+30*time.Second
+	ineligible := testRecord(jst(11, 20, 0, 0), FinishTimeout, nil, map[NodeID]int{1: 9000, 2: 9000})
+	records := slices.Concat([]GameRecord{manual, longer, ineligible}, topPercentHistory(pastScores(0, 3)))
+	h := topPercentHarness(t, Options{Records: records}, []NodeID{1}, nil)
+	h.playToTimeout(map[NodeID]int{1: 7000})
+	// The 3 counted scores and the game's own make 4 with none above. With
+	// the uncounted ones, 6 of 10 would be above and give 70.
+	wantPercent(t, "Snapshot topPercent", topPercentOf(h.state(), 1), 25)
 }
 
 func TestManualFinishGivesNoTopPercent(t *testing.T) {
@@ -300,47 +297,42 @@ func TestManualFinishGivesNoTopPercent(t *testing.T) {
 }
 
 func TestManualFinishJoinsNoPopulation(t *testing.T) {
-	h := topPercentHarness(t, Options{Records: topPercentHistory(pastScores(0, 28))}, []NodeID{1}, nil)
+	h := topPercentHarness(t, Options{Records: topPercentHistory(pastScores(0, 3))}, []NodeID{1}, nil)
 	h.start()
 	h.tick(30 * time.Second)
+	h.do(func() { h.a.game.nodes[1].score = 9000 })
 	h.execute(Command{Operation: Finish})
 
-	// 28 earlier scores and this game's make 29. With the manual game's score
-	// counted, they would make 30.
+	// 3 earlier scores and this game's make 4 with none above. With the manual
+	// game's 9000 counted, 1 of 5 would be above and give 40.
 	h.execute(Command{Operation: Reset})
 	h.playToTimeout(map[NodeID]int{1: 7000})
-	wantPercent(t, "Snapshot topPercent of the second game", topPercentOf(h.state(), 1), 0)
+	wantPercent(t, "Snapshot topPercent of the second game", topPercentOf(h.state(), 1), 25)
+	// The second game's score joins: 5 with none above.
 	h.execute(Command{Operation: Reset})
 	h.playToTimeout(map[NodeID]int{1: 7000})
-	wantPercent(t, "Snapshot topPercent of the third game", topPercentOf(h.state(), 1), 4)
+	wantPercent(t, "Snapshot topPercent of the third game", topPercentOf(h.state(), 1), 20)
 }
 
 func TestTopPercentWithUnavailableRecords(t *testing.T) {
-	// The past scores are ignored. Only this process's games count, so the
-	// 30th game is the first with enough scores.
+	// The past scores are ignored. Only this process's games count: with the
+	// past ones, every score here would be in the bottom.
 	options := Options{
 		Records:            topPercentHistory(slices.Repeat([]int{1_000_000}, 100)),
 		RecordsUnavailable: "file is not a database",
 	}
 	h := topPercentHarness(t, options, []NodeID{1}, nil)
-	for i := 1; i <= 30; i++ {
-		if i > 1 {
-			h.execute(Command{Operation: Reset})
-		}
-		h.playToTimeout(map[NodeID]int{1: 100 * i})
-		switch i {
-		case 29:
-			wantPercent(t, "Snapshot topPercent of game 29", topPercentOf(h.state(), 1), 0)
-		case 30:
-			s := h.state()
-			wantPercent(t, "Snapshot topPercent of game 30", topPercentOf(s, 1), 4)
-			if s.Records.Available {
-				t.Fatal("records available")
-			}
-			if got := h.summary("P1"); !got.Eligible || got.TopPercent != nil {
-				t.Fatalf("summary with unavailable records: %+v", got)
-			}
-		}
+	h.playToTimeout(map[NodeID]int{1: 100})
+	wantPercent(t, "Snapshot topPercent of game 1", topPercentOf(h.state(), 1), 100)
+	h.execute(Command{Operation: Reset})
+	h.playToTimeout(map[NodeID]int{1: 200})
+	s := h.state()
+	wantPercent(t, "Snapshot topPercent of game 2", topPercentOf(s, 1), 50)
+	if s.Records.Available {
+		t.Fatal("records available")
+	}
+	if got := h.summary("P1"); !got.Eligible || got.TopPercent != nil {
+		t.Fatalf("summary with unavailable records: %+v", got)
 	}
 }
 
