@@ -287,7 +287,7 @@ finished_atはゲーム時間と同じ基準で求めるため、遅れたTick�
 - 対象者の値は、100 × （母集団でscoreが自分より大きい件数 ＋ 1）÷ 母数 を切り上げた整数とし、1〜100に収める。母集団に自分の結果が含まれるので、母数は1以上であり、通常は1〜100に収まる。
 - 求めた値はノードごとに保持し、Finished中のモード・割当の変更、切断・再接続・再同期、`State`では求め直さない。Finishedの間は母集団が変わらないが、値が変わらないことは母集団ではなく保持によって保証する。ゲームのResetで消す。Preparing・Playingでは、値を持たない。
 - 記録を使えない起動（3.5.3）では、母集団はこの起動中に終わったゲームだけになる。その値はSnapshotには含めるが、プレイヤーの`summary`には含めない。ファイルの記録と合わせた母集団ではないので、プレイヤーの画面に出す値としては信頼できないためである。
-- プレイヤーの`summary`へは、保持した値が50以下の場合だけその値を送る（定数）。51以上、値を持たない場合、およびランキング対象外では`null`とする。Snapshotには、51〜100を含む保持した値をそのまま返す。
+- プレイヤーの`summary`へは、保持した値が50以下の場合だけその値を`topPercent`で送る（定数）。51以上、値を持たない場合、およびランキング対象外では`topPercent`を`null`とする。保持した値が51以上の場合は、値を伏せて`bottomHalf`を`true`とし、それ以外では`false`とする。記録を使えない起動では、どちらも送らない（`topPercent`は`null`、`bottomHalf`は`false`）。Snapshotには、51〜100を含む保持した値をそのまま返す。
 
 #### 3.5.7. プレイヤーへ送るベストスコア
 
@@ -614,7 +614,7 @@ Start、Finish、ゲーム時間終了、およびResetによるフェーズ変�
 
 自動操作中のプレイヤーMCUについても、FIFO表示を同期する。MCUからのSENDによらず先頭が削除された場合は、`reset`で同期する。
 
-`summary`は3.1で確定した最終スコア・順位・ランキング資格と、3.5.6で確定した上位%（`topPercent`）と、3.5.7で確定したベストスコア（`gameBest`、`gameBestNodes`、`hourBest`、`hourBestStart`、`hourBestMine`、`allTimeBest`、`allTimeBestMine`）を、そのセッションの現在の同期世代とともに送る。`topPercent`は3.5.6のとおり、50以下の場合だけ値を送り、それ以外は`null`とする。ベストスコアの`*Mine`は送り先のノードごとに決める。eligibleとrankの対応・型・範囲、eligibleと`topPercent`の組合せ、およびベストスコアの項目の型・範囲・組合せはプレイヤー通信仕様に従う。Finishedの通常表示ではautoのプレイヤーも通知対象とし、現在のモードによって確定済みのランキング資格を上書きしない。Preparing・Playing・確認表示中・未割当MCUには送らない。終了演出の内容や時間はMCU側の実装に委ねる。
+`summary`は3.1で確定した最終スコア・順位・ランキング資格と、3.5.6で確定した上位%（`topPercent`、`bottomHalf`）と、3.5.7で確定したベストスコア（`gameBest`、`gameBestNodes`、`hourBest`、`hourBestStart`、`hourBestMine`、`allTimeBest`、`allTimeBestMine`）を、そのセッションの現在の同期世代とともに送る。`topPercent`は3.5.6のとおり、50以下の場合だけ値を送り、それ以外は`null`とする。51以上の場合は値の代わりに`bottomHalf=true`を送る。ベストスコアの`*Mine`は送り先のノードごとに決める。eligibleとrankの対応・型・範囲、eligibleと`topPercent`・`bottomHalf`の組合せ、およびベストスコアの項目の型・範囲・組合せはプレイヤー通信仕様に従う。Finishedの通常表示ではautoのプレイヤーも通知対象とし、現在のモードによって確定済みのランキング資格を上書きしない。Preparing・Playing・確認表示中・未割当MCUには送らない。終了演出の内容や時間はMCU側の実装に委ねる。
 
 正当なSENDによる送信元の先頭削除は対応する`result(ok=true)`で通知する。同期世代が一致した新規SENDを拒否した場合は、割当済みであれば`result(ok=false)`の後に新しい同期世代と現在のFIFOの`reset`を送信する。同期世代不一致の拒否では、先行するRESETによって新しい世代を通知済みのため追加のRESETは送信しない。
 

@@ -110,6 +110,7 @@
   - rank: ランキング対象者なら1〜8の整数、対象外ならnull
   - eligible: 当該ゲームのランキング対象か（boolean）。現在の操作モードとは独立した確定値
   - topPercent: 過去の対象ゲームを含めた上位何%か。上位50%以内なら1〜50の整数、それ以外はnull。[上位%の規則](../rules.md#上位)に従い、サーバーが決める
+  - bottomHalf: 上位%が51%以上で、下位50%であることだけを知らせる場合にtrue（boolean）。値そのものは送らない。それ以外はfalse
   - gameBest: その回のランキング対象者の最高点。0〜2147483647の整数。対象者がいなければnull
   - gameBestNodes: gameBestを取った対象者のノード番号（1〜8の整数）を昇順に重複なく並べた配列。同点なら全員を含む。gameBestがnullなら空配列
   - hourBest: このゲームが終わった時間帯（日本時間の正時で区切る）のベストスコア。0〜2147483647の整数またはnull
@@ -260,10 +261,10 @@ Finishedへの遷移時は、接続・識別・割当済みで通常表示のMCU
 ```json
 {"type":"phase","data":{"phase":"Finished"}}
 {"type":"status","data":{"score":345,"remaining":0,"ready":true,"countdown":0}}
-{"type":"summary","data":{"sync":"00000000000000000000000000000002","score":345,"rank":2,"eligible":true,"topPercent":12,"gameBest":410,"gameBestNodes":[3],"hourBest":410,"hourBestStart":13,"hourBestMine":false,"allTimeBest":520,"allTimeBestMine":false}}
+{"type":"summary","data":{"sync":"00000000000000000000000000000002","score":345,"rank":2,"eligible":true,"topPercent":12,"bottomHalf":false,"gameBest":410,"gameBestNodes":[3],"hourBest":410,"hourBestStart":13,"hourBestMine":false,"allTimeBest":520,"allTimeBestMine":false}}
 ```
 
-対象外の場合は、例えば`score=400, rank=null, eligible=false, topPercent=null`とし、スコアを保持して順位と上位%を付けない。全フィールドは必須とする。`summary.sync`の形式は`reset.sync`と同じで、`eligible=true`なら`rank`は1〜8の整数、falseならnullでなければ不正とする。`topPercent`は1〜50の整数またはnullとし、`eligible=false`ではnullでなければ不正とする。`eligible=true`ではnullも整数も正しい。上位50%を超える人、手動の終了、およびサーバーが過去の記録を使えないときは、`eligible=true`でも`topPercent`はnullになる。MCUはsync・score・rank・eligible・topPercentと、後述のベストスコアの項目の型・範囲・組合せを検証してから一括で適用する。
+対象外の場合は、例えば`score=400, rank=null, eligible=false, topPercent=null`とし、スコアを保持して順位と上位%を付けない。全フィールドは必須とする。`summary.sync`の形式は`reset.sync`と同じで、`eligible=true`なら`rank`は1〜8の整数、falseならnullでなければ不正とする。`topPercent`は1〜50の整数またはnullとし、`eligible=false`ではnullでなければ不正とする。`eligible=true`ではnullも整数も正しい。上位50%を超える人、手動の終了、およびサーバーが過去の記録を使えないときは、`eligible=true`でも`topPercent`はnullになる。`bottomHalf`はbooleanとし、上位50%を超える人だけtrueにする。trueなら`eligible=true`かつ`topPercent=null`でなければ不正とする。手動の終了とサーバーが過去の記録を使えないときはfalseである。MCUはsync・score・rank・eligible・topPercent・bottomHalfと、後述のベストスコアの項目の型・範囲・組合せを検証してから一括で適用する。
 
 ベストスコアの項目（gameBest、gameBestNodes、hourBest、hourBestStart、hourBestMine、allTimeBest、allTimeBestMine）は、[ベストスコアの規則](../rules.md#ベストスコア)に従ってサーバーが決め、Finishedへの遷移時に順位と同じ確定状態から1回だけ求めて、以後は変えない。値は[サーバー仕様](./server.md#357-プレイヤーへ送るベストスコア)の3.5.7に従う。組合せは次のとおりとし、満たさない`summary`は不正とする。
 
@@ -276,7 +277,7 @@ Finishedへの遷移時は、接続・識別・割当済みで通常表示のMCU
 
 これらの項目は`summary.data`の直下に平らに置き、配列は`gameBestNodes`の1段だけとする。`summary`全体のJSONの入れ子の深さは3（メッセージ、`data`、`gameBestNodes`）である。既存のファームウェアはJSONの入れ子の深さを4までに制限しており、それを超えるメッセージを受け取ると設定を捨てて再識別するため、`bests: {game: {...}}`のような入れ子にはしない。
 
-`topPercent`とベストスコアの項目は、それらを知らない既存のファームウェアが無視する追加の項目である。そのため、サーバーを先に更新してから、ファームウェアを更新してよい。不正な`summary`では既存の正常値を保持して再同期する。形式が正しくても、未設定・FIFO同期待ち・Finished以外・確認表示中の場合や、適用済み`reset`の同期世代と一致しない場合は無視する。
+`topPercent`・`bottomHalf`とベストスコアの項目は、それらを知らない既存のファームウェアが無視する追加の項目である。そのため、サーバーを先に更新してから、ファームウェアを更新してよい。不正な`summary`では既存の正常値を保持して再同期する。形式が正しくても、未設定・FIFO同期待ち・Finished以外・確認表示中の場合や、適用済み`reset`の同期世代と一致しない場合は無視する。
 
 通常表示でFIFO同期とFinishedの取得が両方成立してから3秒以内に、その同期世代の有効な`summary`を取得できなければ`resync`で復旧する。取得待ち中は`phase`・`status`の再通知や通常の`reset`で期限を延長しない。復旧の同期待ちでは既存の1秒間隔の再試行に従い、次の同期が成立してから改めて取得期限を開始する。結果取得済みの正常な無通信状態にはタイムアウトを設けない。
 
@@ -300,7 +301,7 @@ Preparingの表示と長押し操作は以下とする。長押し・要求・�
 
 Playingで`status.countdown`が1以上の間は、ゲーム開始までのカウントダウンとして、通知された数字（3・2・1）を大きく表示する。MCUは数字を独自に減らさず、`status`を受け取るたびに表示を置き換え、0を受け取ったら通常のPlaying画面に戻す。`countdown`が未取得の間は通常のPlaying画面とする。数字の大きさや演出は本仕様で固定しない。
 
-Finishedでは有効な`summary`の取得までは結果取得中とし、確定した最終スコアと順位を表示する。対象外はスコアと`NOT RANKED`を表示する。`topPercent`がnullのときは上位%を表示せず、スコアと順位だけを表示する。整数のときの表示内容は本仕様では固定しない。通常のPlayingからFinishedへの遷移で初めて結果を取得した場合に終了演出を行い、同じ結果の再通知では繰り返さない。Finished中の再接続・復旧では静止した結果画面を復元する。演出の内容・時間・具体的な描画手法は本仕様で固定しない。演出中も通信処理を継続し、Reset・再識別・フェーズ変更などに応じて表示を切り替える。画面内の演出のために`Finishing`などの通信フェーズは追加しない。結果画面のページ送りは次の「結果の表示」に従う。
+Finishedでは有効な`summary`の取得までは結果取得中とし、確定した最終スコアと順位を表示する。対象外はスコアと`NOT RANKED`を表示する。`topPercent`がnullで`bottomHalf`がfalseのときは上位%を表示せず、スコアと順位だけを表示する。上位%の表示内容は次の「結果の表示」に従う。通常のPlayingからFinishedへの遷移で初めて結果を取得した場合に終了演出を行い、同じ結果の再通知では繰り返さない。Finished中の再接続・復旧では静止した結果画面を復元する。演出の内容・時間・具体的な描画手法は本仕様で固定しない。演出中も通信処理を継続し、Reset・再識別・フェーズ変更などに応じて表示を切り替える。画面内の演出のために`Finishing`などの通信フェーズは追加しない。結果画面のページ送りは次の「結果の表示」に従う。
 
 #### 結果の表示
 
@@ -309,16 +310,18 @@ Finishedで有効な`summary`を取得した後の結果画面は、次のペー
 | ページ | 表示 |
 |---|---|
 | ① スコアと順位 | 確定した最終スコアと順位。対象外は`NOT RANKED` |
-| ② 上位% | `topPercent`の値。`topPercent`がnull（下位50%と対象外）なら②を飛ばし、①の次を③とする |
+| ② 上位% | `topPercent`が整数ならその値。`bottomHalf`がtrueなら`BOTTOM 50%`。どちらでもない（対象外・手動の終了・記録を使えない起動）なら②を飛ばし、①の次を③とする |
 | ③ ベストスコア | その回・時間帯・通算のベストスコアの3行 |
 
 - ページは筐体だけの表示状態とし、ページ送りではサーバーへ何も送らない。操作モード（manual・auto）に関係なく送れる。
 - Finishedでは、右端以外の3つのボタンは何もしない。ボタンによる`send`はPlayingでだけ送る。
-- 右端のボタンの枠には`NEXT`、大きな右向きの矢印、ページの位置を示す点を描く。点は実際に送れるページの数（`topPercent`がnullなら2つ、整数なら3つ）だけ並べ、現在のページを塗る。他の3つの枠は空にする。
+- 右端のボタンの枠には`NEXT`、大きな右向きの矢印、ページの位置を示す点を描く。点は実際に送れるページの数（②を飛ばすなら2つ、②を出すなら3つ）だけ並べ、現在のページを塗る。他の3つの枠は空にする。
 - 終了演出は①で行う。演出中に押した場合は、演出を終えて次のページへ進む。①へ戻ったとき、およびFinished中の再接続・復旧で取得した結果では静止画とし、演出を繰り返さない。
 - 結果を取得していない間（同期待ち・STATUSの取得待ち・結果の取得待ち）の押下ではページを送らない。
 - 次の場合はページを①へ戻す: Finishedに入ったとき、`summary.sync`が変わったとき（新しい同期世代の結果を取得したとき）、`identify`・`config`を受けたとき。
 - Finished以外のフェーズ（ゲームのResetでPreparingになった場合を含む）では、ページの状態を使わず、そのフェーズの画面を表示する。全員が結果を見終わっていなくても、管理画面のResetで準備画面へ戻る。
+
+②は画面のボタン枠より上（y=81〜239）に描く。`topPercent`が整数のときの表示内容は本仕様では固定しない。`bottomHalf`がtrueのときは、`BOTTOM 50%`の文字と、ベルカーブ（標準正規分布の曲線）の左半分を自ノードの色で塗った図だけを出す。値を送らないので、自分の位置を示す印や、100人中の位置を示す図は出さず、演出もしない。
 
 ③は画面のボタン枠より上（y=81〜239）に、次の3行を描く。文字はFont0だけを使い、日本語は使わない。
 

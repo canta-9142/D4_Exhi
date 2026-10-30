@@ -126,7 +126,7 @@ JSONはUTF-8とし、APIが生成する応答のContent-Typeは`application/json
 
 `rank`は`app`がFinishedへの遷移時に確定した順位をそのまま返す。順位の決め方は[ゲームのルール](../rules.md#最終順位)に従い、同点の対象者は同順位とする。`rankingEligible`と同じく、Finishedでのモード・割当変更から再計算しない。Reset後はPreparingの`null`へ戻す。Playing中は途中の順位を返さず、常にnullとする。Finishedでは、この値はプレイヤーの`summary`の`rank`と同じであり、`rank`が整数であることと`rankingEligible`が`true`であることは同値となる。
 
-`topPercent`は`app`がFinishedへの遷移時に確定した上位%をそのまま返す。求め方（母集団、切り上げ）は[ゲームのルール](../rules.md#上位)と[サーバー仕様3.5.6](./server.md#356-上位の計算)に従い、`web`は計算しない。`rank`と同じく、Finishedでのモード・割当変更から再計算せず、Reset後はnullへ戻す。プレイヤーの`summary`の`topPercent`は50以下の値だけを送るが、この値は51〜100も含めて全員分を返す。そのため、`summary`の`topPercent`が整数のとき、この値は`summary`と同じである。`records.available`がfalseの起動では、この起動中に終わったゲームだけを母集団として求めた値を返す。その場合も`summary`の`topPercent`はnullになる。
+`topPercent`は`app`がFinishedへの遷移時に確定した上位%をそのまま返す。求め方（母集団、切り上げ）は[ゲームのルール](../rules.md#上位)と[サーバー仕様3.5.6](./server.md#356-上位の計算)に従い、`web`は計算しない。`rank`と同じく、Finishedでのモード・割当変更から再計算せず、Reset後はnullへ戻す。プレイヤーの`summary`の`topPercent`は50以下の値だけを送り、51以上の人には値を伏せて`bottomHalf=true`だけを送るが、この値は51〜100も含めて全員分を返す。そのため、`summary`の`topPercent`が整数のとき、この値は`summary`と同じである。`records.available`がfalseの起動では、この起動中に終わったゲームだけを母集団として求めた値を返す。その場合も`summary`の`topPercent`はnull、`bottomHalf`はfalseになる。
 
 | botsの各要素 | 型と意味 |
 |---|---|
