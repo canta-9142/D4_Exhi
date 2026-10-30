@@ -41,19 +41,20 @@ inline void draw_result_accent(FrameBuffer& frame, const DisplaySnapshot& s) {
   if (width) frame.fillRect(40, 192, width, 4, nodeVisuals[static_cast<int>(s.selfId)].color);
 }
 
-// 右端のボタン枠に、押すと次のページへ進むことと現在のページを示す。上位%がなければ何も出さない。
+// 右端のボタン枠に、押すと次のページへ進むことと現在のページを示す。英語が読めなくても分かるよう矢印を大きくする。
 inline void draw_next_hint(FrameBuffer& frame, const DisplaySnapshot& s) {
   frame.fillRect(361, 241, 119, 79, TFT_BLACK);
-  if (!s.summary.topPercent) return;
   frame.setFont(&fonts::Font0);
   frame.setTextSize(2);
   frame.setTextColor(TFT_WHITE, TFT_BLACK);
-  frame.drawString("NEXT", 420 - frame.textWidth("NEXT") / 2, 250);
-  frame.fillTriangle(404, 272, 404, 300, 436, 286, TFT_WHITE);
-  for (int page = 0; page < 2; ++page) {
-    const int x = 412 + page * 16;
-    if (page == static_cast<int>(s.resultPage)) frame.fillCircle(x, 310, 3, TFT_WHITE);
-    else frame.drawCircle(x, 310, 3, TFT_WHITE);
+  frame.drawString("NEXT", 374, 264);
+  frame.fillTriangle(430, 254, 430, 290, 466, 272, TFT_WHITE);
+  const int count = result_page_count(s.summary);
+  const int current = result_page_index(s.summary, s.resultPage);
+  for (int page = 0; page < count; ++page) {
+    const int x = 420 - (count - 1) * 8 + page * 16;
+    if (page == current) frame.fillCircle(x, 306, 4, TFT_WHITE);
+    else frame.drawCircle(x, 306, 4, TFT_WHITE);
   }
 }
 
@@ -120,6 +121,59 @@ inline void draw_top_body(FrameBuffer& frame, const DisplaySnapshot& s) {
   draw_next_hint(frame, s);
 }
 
+// ③の行頭の絵。8×8のドット絵を3倍で描く。各行の最上位ビットが左端。
+constexpr uint8_t BEST_ICONS[3][8] = {
+  {0xFE, 0xFC, 0xFE, 0xFC, 0x80, 0x80, 0x80, 0xE0}, // 旗（その回）
+  {0x3C, 0x42, 0x91, 0x91, 0x9D, 0x81, 0x42, 0x3C}, // 時計（時間帯）
+  {0x99, 0x99, 0xDB, 0xFF, 0xFF, 0xFF, 0x00, 0xFF}, // 王冠（通算）
+};
+
+inline void draw_best_row(FrameBuffer& frame, const DisplaySnapshot& s, int row, const char* label,
+                          int32_t best, bool mine, uint8_t nodes) {
+  const uint16_t self = nodeVisuals[static_cast<int>(s.selfId)].color;
+  const uint16_t accent = mine ? self : TFT_WHITE;
+  const int x = BEST_ROW_X, y = BEST_ROW_Y + row * BEST_ROW_PITCH;
+  // 自分のベストは行を自ノードの色の太枠で囲み、YOU!を出す。
+  frame.drawRect(x, y, BEST_ROW_WIDTH, BEST_ROW_HEIGHT, mine ? self : TOP_DIM);
+  if (mine) frame.drawRect(x + 1, y + 1, BEST_ROW_WIDTH - 2, BEST_ROW_HEIGHT - 2, self);
+  for (int line = 0; line < 8; ++line)
+    for (int column = 0; column < 8; ++column)
+      if (BEST_ICONS[row][line] & (0x80u >> column)) frame.fillRect(x + 10 + column * 3, y + 12 + line * 3, 3, 3, accent);
+  frame.setFont(&fonts::Font0);
+  frame.setTextSize(2);
+  frame.setTextColor(accent, TFT_BLACK);
+  frame.drawString(label, x + 44, y + 4);
+  if (mine) frame.drawString("YOU!", x + BEST_ROW_WIDTH - 10 - frame.textWidth("YOU!"), y + 4);
+  char text[12] = "---";
+  if (best != FinalSummary::NO_BEST) snprintf(text, sizeof(text), "%ld", static_cast<long>(best));
+  frame.setTextSize(3);
+  frame.setTextColor(TFT_WHITE, TFT_BLACK);
+  frame.drawString(text, x + 44, y + 22);
+  // その回のベストを取ったノードを、ノードの色の札で並べる。
+  int tagX = x + 44 + frame.textWidth(text) + 12;
+  frame.setTextSize(2);
+  for (int node = 1; node <= 8; ++node) {
+    if (!(nodes & (1u << (node - 1)))) continue;
+    const auto& visual = nodeVisuals[node];
+    frame.fillRect(tagX, y + 22, 18, 24, visual.color);
+    frame.setTextColor(TFT_BLACK, visual.color);
+    frame.drawChar(visual.name, tagX + 3, y + 26);
+    tagX += 22;
+  }
+}
+
+inline void draw_best_body(FrameBuffer& frame, const DisplaySnapshot& s) {
+  const FinalSummary& r = s.summary;
+  const unsigned self = static_cast<unsigned>(s.selfId);
+  const bool gameMine = self >= 1 && self <= 8 && (r.gameBestNodes & (1u << (self - 1)));
+  char hour[16] = "THIS HOUR";
+  if (r.hourBestStart >= 0) snprintf(hour, sizeof(hour), "%02d:00-%02d:59", r.hourBestStart, r.hourBestStart);
+  draw_best_row(frame, s, 0, "THIS GAME", r.gameBest, gameMine, r.gameBestNodes);
+  draw_best_row(frame, s, 1, hour, r.hourBest, r.hourBestMine, 0);
+  draw_best_row(frame, s, 2, "ALL TIME", r.allTimeBest, r.allTimeBestMine, 0);
+  draw_next_hint(frame, s);
+}
+
 inline void render_finished(FrameBuffer& frame, const DisplaySnapshot& s, const DisplayChanges& changes) {
   const auto state = finished_state(s);
   if (changes.resultHeader) {
@@ -138,6 +192,10 @@ inline void render_finished(FrameBuffer& frame, const DisplaySnapshot& s, const 
     } else if (s.resultPage == ResultPage::Score) preparing_text(frame, "FINAL SCORE", 96, 2);
   }
   if (state != FinishedState::Ready) return;
+  if (s.resultPage == ResultPage::Bests) {
+    if (changes.resultBody) draw_best_body(frame, s);
+    return;
+  }
   if (s.resultPage == ResultPage::TopPercent) {
     if (changes.topBody) draw_top_body(frame, s);
     else {

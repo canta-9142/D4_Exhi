@@ -57,6 +57,11 @@ inline FinishedState finished_state(const DisplaySnapshot& s) {
   if (s.awaitingStatus || !s.status.known) return FinishedState::Status;
   return s.summary.known ? FinishedState::Ready : FinishedState::Result;
 }
+inline bool same_bests(const FinalSummary& a, const FinalSummary& b) {
+  return a.gameBest == b.gameBest && a.gameBestNodes == b.gameBestNodes && a.hourBest == b.hourBest &&
+         a.hourBestStart == b.hourBestStart && a.hourBestMine == b.hourBestMine &&
+         a.allTimeBest == b.allTimeBest && a.allTimeBestMine == b.allTimeBestMine;
+}
 inline int32_t displayed_final_score(const DisplaySnapshot& s) {
   const uint64_t left = 1000 - std::min<unsigned>(s.finishedProgress, 1000);
   return static_cast<int32_t>(uint64_t(s.summary.score) * (1000000000 - left * left * left) / 1000000000);
@@ -128,14 +133,16 @@ inline DisplayChanges display_changes(const DisplaySnapshot& previous, const Dis
   if (display_screen(next) == DisplayScreen::Finished) {
     changes.resultHeader = changes.label || previous.status.known != next.status.known;
     changes.label = false;
+    // ページ位置の点の数は上位%の有無で変わる。③は自ノードの色と値が変わったときだけ描き直す。
     changes.resultBody = first || finished_state(previous) != finished_state(next) ||
-        previous.resultPage != next.resultPage || previous.summary.topPercent != next.summary.topPercent;
+        previous.resultPage != next.resultPage || previous.summary.topPercent != next.summary.topPercent ||
+        (next.resultPage == ResultPage::Bests && (changes.self || !same_bests(previous.summary, next.summary)));
     if (finished_state(next) == FinishedState::Ready && next.resultPage == ResultPage::TopPercent) {
       changes.topBody = changes.resultBody || changes.self;
       changes.topCurve = changes.topBody || previous.topProgress != next.topProgress;
       // 自分のマスは確認表示と同じ500msの周期で点滅させる。
       if (changes.topCurve || previous.previewLit != next.previewLit) changes.topCell = next.summary.topPercent;
-    } else if (finished_state(next) == FinishedState::Ready) {
+    } else if (finished_state(next) == FinishedState::Ready && next.resultPage == ResultPage::Score) {
       changes.resultScore = changes.resultBody || displayed_final_score(previous) != displayed_final_score(next);
       changes.resultRank = changes.resultBody || previous.summary.rank != next.summary.rank ||
           previous.summary.eligible != next.summary.eligible ||

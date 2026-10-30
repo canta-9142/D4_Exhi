@@ -3,7 +3,7 @@
 from contextlib import redirect_stdout
 import io
 from unittest.mock import patch
-from finished_cdc import visual
+from finished_cdc import NO_BESTS, visual
 
 
 class FakeCDC:
@@ -62,15 +62,25 @@ def main():
         assert restored[4][1]["topPercent"] is None
 
     # top Nは上位%付きの結果を出し、animate・duplicate・resyncでも同じ値を送る。不正な値は無視する。
+    # bests KINDは③の値を変え、以後の結果にも付ける。対象外では*Mineをfalseにする。
     cdc = FakeCDC(False)
-    stream = io.StringIO("top 12\ntop 0\ntop 51\nanimate\nduplicate\nresync\nunranked\nstop\n")
+    stream = io.StringIO("top 12\ntop 0\ntop 51\nanimate\nduplicate\nresync\nbests mine\nbests bogus\n"
+                         "unranked\nstop\n")
     with patch("finished_cdc.sys.stdin", stream), \
          patch("finished_cdc.select.select", return_value=([stream], [], [])), \
          redirect_stdout(io.StringIO()):
         visual(cdc)
-    tops = [data["topPercent"] for kind, data in cdc.messages if kind == "summary"]
-    assert tops == [None, 12, 12, 12, 12, None], tops
-    print("PASS: preview ends on command/MCU resync; auto mode, fresh generation and final result restored; top N")
+    summaries = [data for kind, data in cdc.messages if kind == "summary"]
+    assert all(set(NO_BESTS) <= set(data) for data in summaries)
+    tops = [data["topPercent"] for data in summaries]
+    assert tops == [None, 12, 12, 12, 12, 12, None], tops
+    assert summaries[0]["gameBest"] == 410 and summaries[0]["gameBestNodes"] == [3]
+    mine = summaries[5]
+    assert mine["hourBestMine"] and mine["allTimeBestMine"] and mine["allTimeBest"] == mine["score"] == 345
+    assert mine["gameBestNodes"] == [1, 3] and mine["hourBestStart"] == 23
+    assert not summaries[6]["eligible"] and not summaries[6]["hourBestMine"] and not summaries[6]["allTimeBestMine"]
+    print("PASS: preview ends on command/MCU resync; auto mode, fresh generation and final result restored; "
+          "top N; bests KIND")
 
 
 if __name__ == "__main__":

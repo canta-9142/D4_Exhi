@@ -748,6 +748,11 @@ static void test_summary_bests() {
     ctx.receive(summary(bests({{"hourBest", "520"}, {"allTimeBest", "520"}, {mine, "true"}}), unranked));
     assert(!ctx.link.fifo_synced());
   }
+
+  // Finishedではボタンを押してもSENDしない（押下は結果のページ送りに使う）。
+  ctx.receive(config + reset(a, R"([{"pid":10,"dst":2}])") + finished + status + summary(bests({}), ranked));
+  ctx.port.output.clear();
+  assert(ctx.queue.size() == 1 && !ctx.link.send(ctx.port, ctx.queue, NodeId::P2, ctx.now) && ctx.port.output.empty());
 }
 
 static void test_countdown() {

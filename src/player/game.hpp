@@ -135,6 +135,7 @@ void loop() {
     return;
   }
   const uint8_t pressedEdges = psw_update();
+  bool sendButtons = true;
 #ifdef PLAYER_PACKET_DEMO
   packetDemo.update(packetQueue, selfId, nowMs);
 #else
@@ -142,9 +143,12 @@ void loop() {
     packetAnimation = PacketAnimation{};
   }
   serverLink.update_ready(Serial, pswPressedMask, nowMs);
-  resultPageEdges |= pressedEdges;
+  // ボタンでSENDするのはPlayingだけ。Finishedの押下は結果のページ送りにだけ使い、両者を混ぜない。
+  // Playingの最後に押したボタンで、終了直後のページを送らないようにする。
+  if (serverLink.phase() == GamePhase::Finished) resultPageEdges |= pressedEdges;
+  sendButtons = serverLink.phase() == GamePhase::Playing;
 #endif
-  if (pressedEdges && packetQueue.size() != 0) {
+  if (pressedEdges && sendButtons && packetQueue.size() != 0) {
     for (int i = 0; i < 4; ++i) {
       if (!(pressedEdges & (1u << i))) continue;
       const NodeId to = nodeLayouts[static_cast<int>(selfId)].neighbors[i];

@@ -60,7 +60,13 @@ private:
   bool running_ = false;
 };
 
-enum class ResultPage : uint8_t { Score, TopPercent };
+enum class ResultPage : uint8_t { Score, TopPercent, Bests };
+
+// 送り順の何ページ目か（0〜）と、全部で何ページか。上位%がなければ②を飛ばす。
+inline uint8_t result_page_count(const FinalSummary& summary) { return summary.topPercent ? 3 : 2; }
+inline uint8_t result_page_index(const FinalSummary& summary, ResultPage page) {
+  return page == ResultPage::Bests && !summary.topPercent ? 1 : static_cast<uint8_t>(page);
+}
 
 // 結果画面のページ。筐体だけの表示状態で、サーバーへは何も送らない。
 class ResultPager {
@@ -70,14 +76,18 @@ public:
 
   // finished: 確認表示でないFinished。ready: 確定結果を表示できる。next: 右端ボタンを押した。
   void update(const FinalSummary& summary, bool finished, bool ready, bool next, uint32_t nowMs) {
-    // Finishedから離れたとき・設定の無効化・別世代の結果では1ページ目へ戻す。再同期中は保つ。
-    if (!finished || !summary.known || !summary.topPercent || summary.revision != revision_) {
+    // Finishedから離れたとき・設定の無効化・別世代の結果では①へ戻す。
+    if (!finished || !summary.known || summary.revision != revision_) {
       page_ = ResultPage::Score;
       introShown_ = running_ = false;
       revision_ = summary.revision;
     }
-    if (next && ready && summary.known && summary.topPercent) {
-      page_ = page_ == ResultPage::Score ? ResultPage::TopPercent : ResultPage::Score;
+    // 上位%のない結果では②を出さない。
+    if (page_ == ResultPage::TopPercent && !summary.topPercent) page_ = ResultPage::Bests;
+    if (next && ready && summary.known) {
+      // ①→②→③→①。②は上位%がなければ飛ばす。
+      page_ = page_ == ResultPage::Score ? (summary.topPercent ? ResultPage::TopPercent : ResultPage::Bests) :
+              page_ == ResultPage::TopPercent ? ResultPage::Bests : ResultPage::Score;
       // 終了演出と同じく、通常の終了遷移で初めて見るときだけ演出する。
       if (page_ == ResultPage::TopPercent && summary.animate && !introShown_) {
         introShown_ = running_ = true;

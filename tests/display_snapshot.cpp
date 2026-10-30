@@ -152,7 +152,7 @@ int main() {
   assert(top_fill_x(bell_x(0), 0) == BELL_X + BELL_WIDTH && top_fill_x(bell_x(0), 1000) == bell_x(0));
   assert(top_filled_cells(12, 0) == 0 && top_filled_cells(12, 1000) == 12 && top_filled_cells(50, 1000) == 50);
 
-  // 右端のボタンで1・2ページ目を行き来し、上位%がなければ送らない。
+  // 右端のボタンで①→②→③→①と送る。②の演出は通常の終了遷移で初めて開いたときだけ。
   ResultPager pager;
   FinalSummary top = ranked.summary;
   pager.update(top, true, true, false, 0);
@@ -162,8 +162,10 @@ int main() {
   pager.update(top, true, true, false, 10 + ResultPager::INTRO_MS / 2);
   assert(pager.progress() == 500);
   pager.update(top, true, true, true, 20 + ResultPager::INTRO_MS / 2);
-  assert(pager.page() == ResultPage::Score && pager.progress() == 1000);
+  assert(pager.page() == ResultPage::Bests && pager.progress() == 1000); // 演出中に押すと演出を終えて進む。
   pager.update(top, true, true, true, 30 + ResultPager::INTRO_MS / 2);
+  assert(pager.page() == ResultPage::Score && pager.progress() == 1000); // ③の次は①。
+  pager.update(top, true, true, true, 40 + ResultPager::INTRO_MS / 2);
   assert(pager.page() == ResultPage::TopPercent && pager.progress() == 1000); // 2回目は静止画。
   pager.update(top, true, false, true, 2000);
   assert(pager.page() == ResultPage::TopPercent); // 再同期中は押下を無視し、ページを保つ。
@@ -172,36 +174,80 @@ int main() {
   auto renewed = top;
   renewed.revision = 2;
   pager.update(renewed, true, true, false, 2002);
-  assert(pager.page() == ResultPage::Score); // 別世代の結果では1ページ目へ戻す。
+  assert(pager.page() == ResultPage::Score); // syncが変わった結果（別の世代）では①へ戻す。
   pager.update(renewed, true, true, true, 2003);
   assert(pager.page() == ResultPage::TopPercent && pager.progress() == 0);
   pager.update(renewed, true, false, false, 2004);
   assert(pager.progress() == 1000); // 演出中の再同期で取り消し、復旧後は静止画。
   pager.update(renewed, true, true, false, 2005);
   assert(pager.page() == ResultPage::TopPercent && pager.progress() == 1000);
-  pager.update(renewed, false, false, false, 2006);
-  assert(pager.page() == ResultPage::Score); // Finishedから離れると1ページ目。
+  pager.update(renewed, true, true, true, 2006);
+  assert(pager.page() == ResultPage::Bests);
+  pager.update(renewed, false, false, false, 2007);
+  assert(pager.page() == ResultPage::Score); // Finishedから離れると①。
   renewed.revision = 3;
   renewed.animate = false;
   pager.update(renewed, true, true, true, UINT32_MAX);
   assert(pager.page() == ResultPage::TopPercent && pager.progress() == 1000); // 再接続後の結果は演出しない。
+  pager.update(renewed, true, true, true, 0);
+  assert(pager.page() == ResultPage::Bests);
   renewed.known = false;
-  pager.update(renewed, true, false, false, 0);
-  assert(pager.page() == ResultPage::Score); // 設定の無効化・Resetで結果を破棄したとき。
+  pager.update(renewed, true, false, false, 1);
+  assert(pager.page() == ResultPage::Score); // identify・config・Resetで結果を破棄したとき。
+  // 下位50%・対象外は②を飛ばして①と③を行き来する。
   auto unranked = renewed;
   unranked.known = true;
   unranked.revision = 4;
   unranked.topPercent = 0;
+  assert(result_page_count(unranked) == 2 && result_page_count(top) == 3);
   pager.update(unranked, true, true, true, 10);
-  assert(pager.page() == ResultPage::Score);
+  assert(pager.page() == ResultPage::Bests && result_page_index(unranked, pager.page()) == 1);
   pager.update(unranked, true, true, true, 20);
-  assert(pager.page() == ResultPage::Score); // 下位50%・対象外はスコアと順位だけ。
+  assert(pager.page() == ResultPage::Score && result_page_index(unranked, pager.page()) == 0);
+  assert(result_page_index(top, ResultPage::TopPercent) == 1 && result_page_index(top, ResultPage::Bests) == 2);
+  pager.update(unranked, true, true, false, 30);
+  assert(pager.page() == ResultPage::Score); // 押さなければ動かない。
   // 2ページ目の間は1ページ目の終了演出を止め、戻っても再演しない。
   FinishedAnimation scoreAnimation;
   top.revision = 9;
   assert(scoreAnimation.update(top, true, 0) == 0);
   assert(scoreAnimation.update(top, false, 100) == 1000);
   assert(scoreAnimation.update(top, true, 200) == 1000);
+
+  // ③は本文とボタン枠を1度だけ描き、値・ページ・自ノードが変わったときだけ描き直す。
+  auto bestPage = ranked;
+  bestPage.summary.gameBest = 410;
+  bestPage.summary.gameBestNodes = 0x05;
+  bestPage.resultPage = ResultPage::Bests;
+  diff = display_changes(topPage, bestPage, false);
+  assert(diff.resultBody && !diff.full && !diff.topBody && !diff.resultScore && !diff.resultRank && !diff.resultAccent);
+  area = display_damage(diff, false);
+  assert(area.containsPixel(0, 81) && area.containsPixel(420, 300) && !area.containsPixel(0, 0) && !area.containsPixel(400, 40));
+  auto bestStill = bestPage;
+  bestStill.previewLit = !bestPage.previewLit;
+  bestStill.finishedProgress = 300;
+  bestStill.topProgress = 300;
+  bestStill.pressedMask = 8;
+  assert(!display_changes(bestPage, bestStill, false).any()); // 点滅・演出・押下だけでは描かない。
+  auto bestMine = bestPage;
+  bestMine.summary.allTimeBestMine = true;
+  assert(display_changes(bestPage, bestMine, false).resultBody);
+  bestMine = bestPage;
+  bestMine.selfId = NodeId::P3;
+  assert(display_changes(bestPage, bestMine, false).resultBody);
+  auto backToScore = bestPage;
+  backToScore.resultPage = ResultPage::Score;
+  diff = display_changes(bestPage, backToScore, false);
+  assert(diff.resultBody && diff.resultScore && diff.resultRank && diff.resultAccent && !diff.full);
+  assert(BEST_ROW_Y > 80 && BEST_ROW_Y + 2 * BEST_ROW_PITCH + BEST_ROW_HEIGHT <= 240); // ボタン枠より上。
+  // Finished以外では、ページの状態を使わずにそのフェーズの画面を出す（リセットで準備画面へ戻る）。
+  auto resetToPrep = bestPage;
+  resetToPrep.phase = GamePhase::Preparing;
+  assert(display_screen(resetToPrep) == DisplayScreen::Preparing);
+  diff = display_changes(bestPage, resetToPrep, false);
+  assert(diff.full && diff.preparingBody && !diff.resultBody);
+  resetToPrep.phase = GamePhase::Playing;
+  assert(display_screen(resetToPrep) == DisplayScreen::Playing);
 
   auto preview = result;
   preview.preview = true;
@@ -290,5 +336,5 @@ int main() {
   plan = plan_transfer(timing, blocks, 3);
   assert(!plan.feasible && std::isfinite(plan.startDelayFromScanUs));
   assert(!plan_transfer(timing, blocks, 0).feasible);
-  std::puts("PASS: state-driven damage, old/new card rows, clipping, no-op frames, countdown screen, top percent page and pager, sparse transfer timing");
+  std::puts("PASS: state-driven damage, old/new card rows, clipping, no-op frames, countdown screen, top percent page, three-page pager and best scores, sparse transfer timing");
 }
