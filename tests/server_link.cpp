@@ -888,7 +888,44 @@ static void test_rank_and_gains() {
   assert(!ctx.link.status().known && ctx.link.status().rank == 0 && ctx.link.take_gains().count == 0);
 }
 
+static void test_combo() {
+  TestContext ctx;
+  const std::string sync = "0000000000000000000000000000000A";
+  const std::string fifo = reset(sync, R"([{"pid":10,"dst":2}])");
+  const std::string resync = message("resync", "{}");
+  const auto status = [](const std::string& combo) {
+    return message("status", R"({"score":23,"remaining":87,"ready":true,"countdown":0,"rank":2,"gains":[],"combo":)" +
+                   combo + "}");
+  };
+  ctx.receive(message("config", R"({"node":1,"mode":"manual","preview":false})") + fifo +
+              message("phase", R"({"phase":"Playing"})"));
+  // 値はSTATUSのまま持ち、同じ値の再通知も、減った値（コンボが切れた）も受け付ける。
+  for (unsigned value : {0u, 1u, 12u, 12u, 999u, 5u}) {
+    ctx.receive(status(std::to_string(value)));
+    assert(ctx.link.status().combo == value && ctx.link.fifo_synced() && !ctx.link.awaiting_status());
+  }
+  const std::string bad[] = {"-1", "1000", "65535", "65536", "1.0", "true", "\"3\"", "null", "[3]", "{}"};
+  for (const auto& value : bad) {
+    ctx.receive(fifo + status("7"));
+    ctx.port.output.clear();
+    ctx.receive(status(value));
+    // 不正なSTATUSは再同期し、以前の表示値を保持する。
+    assert(ctx.port.output == resync && !ctx.link.fifo_synced() && ctx.queue.size() == 1);
+    assert(ctx.link.status().combo == 7 && ctx.link.status().rank == 2);
+  }
+  ctx.receive(fifo + status("7"));
+  ctx.port.output.clear();
+  ctx.receive(message("status", R"({"score":23,"remaining":87,"ready":true,"countdown":0,"rank":2,"gains":[]})")); // 欠落も不正。
+  assert(ctx.port.output == resync && !ctx.link.fifo_synced() && ctx.link.status().combo == 7);
+  ctx.receive(fifo + status("8"));
+  assert(ctx.link.fifo_synced() && ctx.link.status().combo == 8);
+  // 設定の無効化では未取得に戻す。
+  ctx.receive(message("identify", "{}"));
+  assert(!ctx.link.status().known && ctx.link.status().combo == 0);
+}
+
 int main() {
+  test_combo();
   test_rank_and_gains();
   test_countdown();
   test_summary_and_preview();

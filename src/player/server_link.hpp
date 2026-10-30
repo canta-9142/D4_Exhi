@@ -22,6 +22,7 @@ public:
   static constexpr uint32_t RECEIVE_TIMEOUT_MS = 1000;
   static constexpr uint32_t DISCONNECT_GRACE_MS = 100;
   static constexpr unsigned MAX_GAIN = 15;
+  static constexpr unsigned MAX_COMBO = 999;
 
   // FIFOの置換・設定の無効化でtrueを返し、描画アニメーションも初期化する。
   template<class Port>
@@ -541,13 +542,14 @@ private:
           !data["remaining"].is<uint8_t>() || data["remaining"].as<unsigned>() > 120 ||
           !data["ready"].is<bool>() ||
           !data["countdown"].is<uint8_t>() || data["countdown"].as<unsigned>() > 3 ||
-          !valid_rank(data["rank"]) || !valid_gains(data["gains"])) {
+          !valid_rank(data["rank"]) || !valid_gains(data["gains"]) ||
+          !data["combo"].is<uint16_t>() || data["combo"].as<unsigned>() > MAX_COMBO) {
         request_resync();
       } else if (state_ != State::AwaitConfig) {
-        // comboは後の作業で表示する。今は読まない。
         status_ = {data["score"].as<int32_t>(), data["remaining"].as<uint8_t>(),
                    data["ready"].as<bool>(), true, data["countdown"].as<uint8_t>(),
-                   data["rank"].isNull() ? uint8_t(0) : data["rank"].as<uint8_t>()};
+                   data["rank"].isNull() ? uint8_t(0) : data["rank"].as<uint8_t>(),
+                   data["combo"].as<uint16_t>()};
         for (JsonVariantConst gain : data["gains"].as<JsonArrayConst>()) gains_.push(gain.as<uint8_t>());
         if (status_.ready) cancel_ready();
         if (statusSync_ == StatusSync::AwaitStatus) {

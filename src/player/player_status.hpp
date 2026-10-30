@@ -14,6 +14,8 @@ struct PlayerStatus {
   uint8_t countdown = 0;
   // 暫定順位（1〜8）。0はnullで、対象外・Preparing・カウントダウン中。
   uint8_t rank = 0;
+  // 送信成功コンボ（0〜999）。表示専用で、筐体では数えない。減ったらコンボが切れたと解釈する。
+  uint16_t combo = 0;
 };
 
 // status.gainsで受け取った点（1〜15）を、描画側へ渡すまで溜める短命なキュー。

@@ -210,7 +210,7 @@ Playingのmanualでは、ボタン押下時に先頭パケットの`send`要求�
 
 `status.countdown`は0〜3の整数を必須とし、欠落・範囲外・型違いは他の不正な`status`と同じく以前の表示値を保持して再同期する。カウントダウン中のFIFOは空のはずだが、取得済みの`countdown`が1以上の間はボタンの`send`を送らない。再同期によるSTATUSの取得待ちでは、保持中の値で`send`を止めない。
 
-`status.rank`はnullか1〜8の整数、`status.gains`は1〜15の整数を0〜16個並べた配列を必須とし、欠落・範囲外・型違いは他の不正な`status`と同じく以前の表示値を保持して再同期する。`status.combo`はまだ読まない。
+`status.rank`はnullか1〜8の整数、`status.gains`は1〜15の整数を0〜16個並べた配列を必須とし、欠落・範囲外・型違いは他の不正な`status`と同じく以前の表示値を保持して再同期する。`status.combo`も0〜999の整数を必須とし、同じく扱う。
 
 `config.preview`は必須のbooleanとし、trueはautoでのみ受け付ける。欠落・型違い・manualとの組合せは設定全体を無効化し、`hello`から再識別する。
 

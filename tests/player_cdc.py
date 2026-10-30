@@ -257,6 +257,12 @@ def exercise(cdc, buttons, idle_seconds):
         ("status", {"score": 0, "remaining": 120, "ready": False, "countdown": 0, "rank": None, "gains": [16], "combo": 0}),
         ("status", {"score": 0, "remaining": 120, "ready": False, "countdown": 0, "rank": None, "gains": [8.0], "combo": 0}),
         ("status", {"score": 0, "remaining": 120, "ready": False, "countdown": 0, "rank": None, "gains": [8] * 17, "combo": 0}),
+        ("status", {"score": 0, "remaining": 120, "ready": False, "countdown": 0, "rank": None, "gains": []}),
+        ("status", {"score": 0, "remaining": 120, "ready": False, "countdown": 0, "rank": None, "gains": [], "combo": -1}),
+        ("status", {"score": 0, "remaining": 120, "ready": False, "countdown": 0, "rank": None, "gains": [], "combo": 1000}),
+        ("status", {"score": 0, "remaining": 120, "ready": False, "countdown": 0, "rank": None, "gains": [], "combo": 1.0}),
+        ("status", {"score": 0, "remaining": 120, "ready": False, "countdown": 0, "rank": None, "gains": [], "combo": "3"}),
+        ("status", {"score": 0, "remaining": 120, "ready": False, "countdown": 0, "rank": None, "gains": [], "combo": None}),
     ]
     for kind, data in invalid:
         cdc.send(kind, **data)
