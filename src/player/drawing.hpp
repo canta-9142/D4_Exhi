@@ -94,7 +94,7 @@ const char* connection_label(const DisplaySnapshot& snapshot) {
 }
 
 void draw_game_status(const DisplaySnapshot& snapshot) {
-  frame.fillRect(361, 81, 118, 36, TFT_BLACK);
+  frame.fillRect(INFO_X, 81, INFO_WIDTH, INFO_HEADER_HEIGHT, TFT_BLACK);
   frame.setFont(&fonts::Font0);
   frame.setTextColor(TFT_WHITE, TFT_BLACK);
   frame.setTextSize(2);
@@ -113,17 +113,50 @@ void draw_info_number(int32_t value, bool known, int y) {
   frame.drawString(number, 438 - frame.textWidth(number), y + (24 - 8 * size) / 2);
 }
 
-void draw_info(const PlayerStatus& status, const DisplayChanges& changes) {
+// 暫定順位。対象外・null・未取得は「--」。順位が上がった直後は白地に黒で光らせる。
+void draw_info_rank(const DisplaySnapshot& snapshot) {
+  const bool flash = displayed_rank_flash(snapshot);
+  const uint16_t background = flash ? TFT_WHITE : TFT_BLACK;
+  char text[4] = "--";
+  if (snapshot.status.known && snapshot.status.rank) snprintf(text, sizeof(text), "#%u", unsigned(snapshot.status.rank));
+  frame.fillRect(INFO_RANK_X, INFO_RANK_Y, INFO_RANK_WIDTH, INFO_RANK_HEIGHT, background);
+  frame.setTextSize(4);
+  frame.setTextColor(flash ? TFT_BLACK : TFT_WHITE, background);
+  frame.drawString(text, INFO_RANK_X + INFO_RANK_WIDTH - 4 - frame.textWidth(text), INFO_RANK_Y + 2);
+}
+
+// 獲得点を帯の中だけに描く。発信者の点は自ノードの色、中継の点は白。
+void draw_info_gains(const DisplaySnapshot& snapshot) {
+  frame.fillRect(INFO_X, GAIN_LANE_Y, INFO_WIDTH, GAIN_LANE_HEIGHT, TFT_BLACK);
+  const auto& gains = displayed_gains(snapshot);
+  frame.setClipRect(INFO_X, GAIN_LANE_Y, INFO_WIDTH, GAIN_LANE_HEIGHT);
+  frame.setTextSize(2);
+  for (size_t i = 0; i < gains.size(); ++i) {
+    const GainFloat& gain = gains[i];
+    if (!gain.active) continue;
+    char text[4];
+    snprintf(text, sizeof(text), "+%u", unsigned(gain.value));
+    const uint16_t color = gain.value == RELAY_GAIN ? TFT_WHITE : nodeVisuals[static_cast<int>(snapshot.selfId)].color;
+    frame.setTextColor(dim565(color, gain_level(gain))); // 背景は透過し、帯の黒の上に重ねる。
+    frame.drawString(text, GAIN_COLUMN_X + int(i) * GAIN_COLUMN_PITCH, GAIN_START_Y - gain_offset(gain));
+  }
+  frame.clearClipRect();
+}
+
+void draw_info(const DisplaySnapshot& snapshot, const DisplayChanges& changes) {
+  const PlayerStatus& status = snapshot.status;
   frame.setFont(&fonts::Font0);
   frame.setTextColor(TFT_WHITE, TFT_BLACK);
-  if (changes.score) draw_info_number(status.score, status.known, 121);
-  if (changes.remaining) draw_info_number(status.remaining, status.known, 174);
+  if (changes.score) draw_info_number(status.score, status.known, INFO_SCORE_Y);
+  if (changes.remaining) draw_info_number(status.remaining, status.known, INFO_REMAINING_Y);
   if (changes.ready) {
     const char* label = !status.known ? "READY: --" : status.ready ? "READY" : "NOT READY";
-    frame.fillRect(366, 151, 108, 12, TFT_BLACK);
+    frame.fillRect(366, INFO_READY_Y, 108, 8, TFT_BLACK);
     frame.setTextSize(1);
-    frame.drawString(label, 366, 151);
+    frame.drawString(label, 366, INFO_READY_Y);
   }
+  if (changes.rank) draw_info_rank(snapshot);
+  if (changes.gains) draw_info_gains(snapshot);
 }
 
 void draw_static_layout() {
@@ -138,8 +171,10 @@ void draw_static_layout() {
   frame.drawChar('3', 51, 28);
   frame.drawChar('2', 51, 108);
   frame.drawChar('1', 51, 188);
-  frame.drawString("pt", 438, 121);
-  frame.drawString("s", 438, 174);
+  frame.drawString("pt", 438, INFO_SCORE_Y);
+  frame.drawString("s", 438, INFO_REMAINING_Y);
+  frame.setTextSize(1);
+  frame.drawString("RANK", 366, INFO_RANK_Y + 13);
 }
 
 void draw_screen_layout(const DisplaySnapshot& snapshot) {
@@ -187,7 +222,7 @@ void render_snapshot(const DisplaySnapshot& snapshot, const DisplayChanges& chan
   if (changes.self) draw_button(360, 0, snapshot.selfId, false);
   draw_neighbor_buttons(snapshot.selfId, snapshot.pressedMask, changes.buttons);
   if (changes.label) draw_game_status(snapshot);
-  draw_info(snapshot.status, changes);
+  draw_info(snapshot, changes);
 }
 
 DisplayFrameStats draw_snapshot(const DisplaySnapshot& snapshot) {

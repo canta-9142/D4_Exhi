@@ -6,6 +6,7 @@
 #include <type_traits>
 #include "display_layout.hpp"
 #include "packet_animation.hpp"
+#include "gain_animation.hpp"
 #include "game_phase.hpp"
 #include "player_status.hpp"
 #include "frame_damage.hpp"
@@ -30,6 +31,8 @@ struct DisplaySnapshot {
   bool countdownGo = false;
   ResultPage resultPage = ResultPage::Score;
   uint16_t topProgress = 1000;
+  GainAnimation::Snapshot gains{};
+  bool rankFlash = false;
 };
 
 static_assert(std::is_trivially_copyable<DisplaySnapshot>::value, "FreeRTOS queues copy snapshots as bytes");
@@ -50,6 +53,21 @@ inline DisplayScreen display_screen(const DisplaySnapshot& s) {
   return DisplayScreen::Playing;
 }
 inline bool preparing_screen(const DisplaySnapshot& s) { return display_screen(s) == DisplayScreen::Preparing; }
+
+// 獲得点を流し、順位を光らせるのは、表示値が揃った通常のPlaying画面だけ。カウントダウン・GO!・確認表示中は流さない。
+inline bool gains_enabled(const DisplaySnapshot& s) {
+  return countdown_enabled(s) && display_screen(s) == DisplayScreen::Playing;
+}
+inline const GainAnimation::Snapshot& displayed_gains(const DisplaySnapshot& s) {
+  static const GainAnimation::Snapshot empty{};
+  return gains_enabled(s) ? s.gains : empty;
+}
+inline bool displayed_rank_flash(const DisplaySnapshot& s) { return s.rankFlash && s.status.rank && gains_enabled(s); }
+inline bool same_gain_pixels(const GainFloat& previous, const GainFloat& next) {
+  if (previous.active != next.active) return false;
+  return !next.active || (previous.value == next.value && gain_offset(previous) == gain_offset(next) &&
+                          gain_level(previous) == gain_level(next));
+}
 
 enum class FinishedState : uint8_t { Syncing, Status, Result, Ready };
 inline FinishedState finished_state(const DisplaySnapshot& s) {
@@ -101,14 +119,14 @@ inline void mark_card_rows(PacketDirtyRows& rows, const PacketCard& card) {
 struct DisplayChanges {
   PacketDirtyRows cards;
   uint8_t buttons = 0;
-  bool self = false, label = false, score = false, remaining = false, ready = false;
+  bool self = false, label = false, score = false, remaining = false, ready = false, rank = false, gains = false;
   bool full = false, preparingHeader = false, preparingBody = false, preparingBar = false, preparingArrows = false;
   bool resultHeader = false, resultBody = false, resultScore = false, resultRank = false, resultAccent = false;
   bool previewBody = false, countdownBody = false;
   bool topBody = false, topCurve = false; // topCurveはベルカーブとマスの両方を描き直す。
   uint8_t topCell = 0; // 点滅で描き直すマスの番号（1〜50）。0は描き直さない。
   bool any() const {
-    return resultHeader || resultBody || resultScore || resultRank || resultAccent || topBody || topCurve || topCell || previewBody || countdownBody || full || preparingHeader || preparingBody || preparingBar || preparingArrows || cards.any() || buttons || self || label || score || remaining || ready;
+    return resultHeader || resultBody || resultScore || resultRank || resultAccent || topBody || topCurve || topCell || previewBody || countdownBody || full || preparingHeader || preparingBody || preparingBar || preparingArrows || cards.any() || buttons || self || label || score || remaining || ready || rank || gains;
   }
 };
 
@@ -179,6 +197,13 @@ inline DisplayChanges display_changes(const DisplaySnapshot& previous, const Dis
   changes.score = validity || previous.status.score != next.status.score;
   changes.remaining = validity || previous.status.remaining != next.status.remaining;
   changes.ready = validity || previous.status.ready != next.status.ready;
+  changes.rank = validity || previous.status.rank != next.status.rank ||
+                 displayed_rank_flash(previous) != displayed_rank_flash(next);
+  // 流れる点は自ノードの色で描くので、自ノードが変わったときも描き直す。
+  const auto& oldGains = displayed_gains(previous);
+  const auto& newGains = displayed_gains(next);
+  changes.gains = first || changes.self;
+  for (size_t i = 0; i < newGains.size(); ++i) changes.gains |= !same_gain_pixels(oldGains[i], newGains[i]);
   return changes;
 }
 
@@ -212,10 +237,12 @@ inline FrameDamage display_damage(const DisplayChanges& changes, bool first) {
   if (changes.self) damage.markRect(361, 1, 119, 79);
   for (unsigned i = 0; i < 4; ++i)
     if (changes.buttons & (1u << i)) damage.markRect(i * 120 + 1, 241, 119, 79);
-  if (changes.label) damage.markRect(361, 81, 118, 36);
-  if (changes.score) damage.markRect(366, 121, 72, 24);
-  if (changes.remaining) damage.markRect(366, 174, 72, 24);
-  if (changes.ready) damage.markRect(366, 151, 108, 12);
+  if (changes.label) damage.markRect(INFO_X, 81, INFO_WIDTH, INFO_HEADER_HEIGHT);
+  if (changes.gains) damage.markRect(INFO_X, GAIN_LANE_Y, INFO_WIDTH, GAIN_LANE_HEIGHT);
+  if (changes.score) damage.markRect(366, INFO_SCORE_Y, 72, 24);
+  if (changes.remaining) damage.markRect(366, INFO_REMAINING_Y, 72, 24);
+  if (changes.ready) damage.markRect(366, INFO_READY_Y, 108, 8);
+  if (changes.rank) damage.markRect(INFO_RANK_X, INFO_RANK_Y, INFO_RANK_WIDTH, INFO_RANK_HEIGHT);
   return damage;
 }
 

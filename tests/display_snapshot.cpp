@@ -1,6 +1,7 @@
 #include <cassert>
 #include <cstdio>
 #include <cmath>
+#include <initializer_list>
 #include "../src/player/display_snapshot.hpp"
 #include "../src/player/scan_timing.hpp"
 
@@ -349,6 +350,142 @@ int main() {
   assert(!goAnimation.update(0, false, 4002)); // Reset・Finish・再同期などで取り消す。
   assert(!goAnimation.update(0, true, 4003));
 
+  // 獲得点は経過時間で進み、約1.5秒で消える。列ごとに1件で、新しい点は最も古い列を上書きする。
+  const auto batch = [](std::initializer_list<uint8_t> values) {
+    GainBatch gains;
+    for (uint8_t value : values) gains.push(value);
+    return gains;
+  };
+  GainAnimation gainAnimation;
+  gainAnimation.update(batch({15, 8}), true, 16);
+  auto floats = gainAnimation.snapshot();
+  assert(floats[0].active && floats[0].value == 15 && floats[0].ageMs == 0);
+  assert(floats[1].active && floats[1].value == 8 && floats[1].ageMs == 0 && !floats[2].active);
+  gainAnimation.update({}, true, 700);
+  gainAnimation.update(batch({10}), true, 100);
+  floats = gainAnimation.snapshot();
+  assert(floats[0].ageMs == 800 && floats[1].ageMs == 800 && floats[2].value == 10 && floats[2].ageMs == 0);
+  gainAnimation.update({}, true, GAIN_DURATION_MS - 801);
+  floats = gainAnimation.snapshot();
+  assert(floats[0].active && floats[0].ageMs == GAIN_DURATION_MS - 1 && floats[2].active);
+  gainAnimation.update({}, true, 1);
+  floats = gainAnimation.snapshot();
+  assert(!floats[0].active && !floats[1].active && floats[2].active && floats[2].ageMs == GAIN_DURATION_MS - 800);
+  // 同時に流すのは最新の3件まで。次の列は0から始まり、古い点の列を順に上書きする。
+  gainAnimation.update(batch({1, 2, 3, 4, 5}), true, 0);
+  floats = gainAnimation.snapshot();
+  assert(floats[0].value == 4 && floats[1].value == 5 && floats[2].value == 3);
+  for (const auto& gain : floats) assert(gain.active && gain.ageMs == 0);
+  gainAnimation.update(batch({8}), false, 16); // 流せない間の点は捨て、流れている点も消す。
+  for (const auto& gain : gainAnimation.snapshot()) assert(!gain.active);
+  gainAnimation.update({}, true, 16);
+  for (const auto& gain : gainAnimation.snapshot()) assert(!gain.active);
+  gainAnimation.update({}, true, UINT32_MAX); // 長い間隔でも桁あふれしない。
+  for (const auto& gain : gainAnimation.snapshot()) assert(!gain.active);
+  // 下から上へ等速で上がり、最後の0.5秒で暗くなる。消える直前も真っ黒にはしない。
+  assert(gain_offset({15, 0, true}) == 0 && gain_offset({15, GAIN_DURATION_MS - 1, true}) == GAIN_RISE - 1);
+  assert(gain_level({15, 0, true}) == GAIN_LEVELS && gain_level({15, GAIN_DURATION_MS - GAIN_FADE_MS, true}) == GAIN_LEVELS);
+  assert(gain_level({15, GAIN_DURATION_MS - GAIN_FADE_MS + 1, true}) == GAIN_LEVELS);
+  assert(gain_level({15, GAIN_DURATION_MS - 1, true}) == 1);
+  for (uint16_t age = 1; age < GAIN_DURATION_MS; ++age)
+    assert(gain_level({15, age, true}) <= gain_level({15, uint16_t(age - 1), true}));
+  assert(dim565(0xffff, GAIN_LEVELS) == 0xffff && dim565(0xffff, 0) == 0 && dim565(0xf800, 4) == 0x7800);
+  assert(dim565(0x07e0, 4) == 0x03e0 && dim565(0x001f, 4) == 0x000f);
+  // 帯・各列・順位の枠は情報欄の中に収まり、他の行と重ならない。
+  assert(GAIN_LANE_Y > 81 + INFO_HEADER_HEIGHT - 1 && GAIN_LANE_Y + GAIN_LANE_HEIGHT <= INFO_SCORE_Y);
+  assert(GAIN_START_Y - GAIN_RISE + GAIN_TEXT_HEIGHT > GAIN_LANE_Y); // 消える直前も文字の下側が帯に残る。
+  assert(GAIN_COLUMN_X >= INFO_X && GAIN_COLUMN_X + 2 * GAIN_COLUMN_PITCH + 36 <= INFO_X + INFO_WIDTH);
+  assert(INFO_SCORE_Y + 24 <= INFO_READY_Y && INFO_READY_Y + 8 <= INFO_REMAINING_Y);
+  assert(INFO_REMAINING_Y + 24 <= INFO_RANK_Y && INFO_RANK_Y + INFO_RANK_HEIGHT <= 240);
+  assert(INFO_RANK_X >= 366 + 4 * 6 && INFO_RANK_X + INFO_RANK_WIDTH <= INFO_X + INFO_WIDTH); // 「RANK」の右。
+
+  // 順位は上がったときだけ短く光らせる。
+  RankFlash flash;
+  assert(!flash.update(0, true, 0) && !flash.update(3, true, 10)); // nullから順位が付いても光らせない。
+  assert(flash.update(2, true, 20) && flash.update(2, true, 20 + RankFlash::FLASH_MS - 1));
+  assert(!flash.update(2, true, 20 + RankFlash::FLASH_MS));
+  assert(!flash.update(4, true, 1000)); // 下がったときは光らせない。
+  assert(flash.update(1, true, UINT32_MAX - 10) && flash.update(1, true, RankFlash::FLASH_MS - 12)); // 周回。
+  assert(!flash.update(1, true, RankFlash::FLASH_MS - 11));
+  flash.update(5, true, 4000);
+  assert(flash.update(3, true, 4010));
+  assert(!flash.update(0, true, 4020)); // nullになったら止める。
+  assert(!flash.update(2, true, 4030));
+  flash.update(5, true, 5000);
+  assert(!flash.update(3, false, 5010)); // 流せない画面では比べない。
+  assert(!flash.update(2, true, 5020));
+  assert(flash.update(1, true, 5030));
+  assert(!flash.update(1, false, 5040) && !flash.update(1, true, 5050));
+
+  // 獲得点・順位の変化は情報欄の帯・順位の枠だけを描き直す。
+  DisplaySnapshot info{};
+  info.selfId = NodeId::P3;
+  info.phase = GamePhase::Playing;
+  info.mode = ControlMode::Manual;
+  info.synced = true;
+  info.status = {40, 80, true, true, 0, 3};
+  assert(gains_enabled(info));
+  auto gained = info;
+  gained.gains[1] = {15, 0, true};
+  auto infoChanges = display_changes(info, gained, false);
+  assert(infoChanges.gains && !infoChanges.score && !infoChanges.rank && infoChanges.cards.none() && !infoChanges.label);
+  auto infoDamage = display_damage(infoChanges, false);
+  assert(infoDamage.containsPixel(INFO_X, GAIN_LANE_Y) && infoDamage.containsPixel(478, GAIN_LANE_Y + GAIN_LANE_HEIGHT - 1));
+  assert(!infoDamage.containsPixel(351, GAIN_LANE_Y) && !infoDamage.containsPixel(400, 200) && infoDamage.changedTiles() <= 24);
+  auto older = gained;
+  older.gains[1].ageMs = 10; // 画素が同じなら描き直さない。
+  assert(!display_changes(gained, older, false).any());
+  older.gains[1].ageMs = GAIN_DURATION_MS / GAIN_RISE;
+  assert(display_changes(gained, older, false).gains);
+  older = gained;
+  older.gains[1].value = 8; // 色が変わる。
+  assert(display_changes(gained, older, false).gains);
+  older = gained;
+  older.selfId = NodeId::P4;
+  assert(display_changes(gained, older, false).gains);
+  auto rankUp = info;
+  rankUp.status.rank = 2;
+  infoChanges = display_changes(info, rankUp, false);
+  assert(infoChanges.rank && !infoChanges.gains && !infoChanges.score && !infoChanges.remaining);
+  infoDamage = display_damage(infoChanges, false);
+  assert(infoDamage.containsPixel(INFO_RANK_X, INFO_RANK_Y) && infoDamage.containsPixel(477, 238));
+  assert(!infoDamage.containsPixel(400, 150) && !infoDamage.containsPixel(300, 220));
+  auto flashing = rankUp;
+  flashing.rankFlash = true;
+  assert(display_changes(rankUp, flashing, false).rank && !display_changes(rankUp, flashing, false).gains);
+  assert(display_changes(flashing, rankUp, false).rank);
+  flashing.status.rank = 0; // nullの「--」は光らせない。
+  rankUp.status.rank = 0;
+  assert(!display_changes(rankUp, flashing, false).any());
+  // スコアは獲得点を足さず、statusの値をそのまま描き直す。
+  auto scored = gained;
+  scored.status.score = 55;
+  infoChanges = display_changes(gained, scored, false);
+  assert(infoChanges.score && !infoChanges.gains);
+  // カウントダウン・GO!・確認表示・同期待ち・STATUS待ちでは流さず、順位も光らせない。
+  for (int i = 0; i < 6; ++i) {
+    auto hidden = gained;
+    hidden.rankFlash = true;
+    if (i == 0) hidden.status.countdown = 2;
+    if (i == 1) hidden.countdownGo = true;
+    if (i == 2) hidden.preview = true;
+    if (i == 3) hidden.synced = false;
+    if (i == 4) hidden.awaitingStatus = true;
+    if (i == 5) hidden.status.known = false;
+    assert(!gains_enabled(hidden) && !displayed_rank_flash(hidden));
+    for (const auto& gain : displayed_gains(hidden)) assert(!gain.active);
+  }
+  // Finished・Preparingでも流さない。
+  auto finishedInfo = gained;
+  finishedInfo.phase = GamePhase::Finished;
+  assert(!gains_enabled(finishedInfo));
+  finishedInfo.phase = GamePhase::Preparing;
+  assert(!gains_enabled(finishedInfo));
+  // STATUS待ちへ移ると帯を空に描き直し、戻ると描く。
+  auto waiting = gained;
+  waiting.awaitingStatus = true;
+  assert(display_changes(gained, waiting, false).gains && display_changes(waiting, gained, false).gains);
+
   ScanTiming timing;
   timing.locked = true;
   std::array<ScanTransferBlock, 3> blocks{{{112, 16, 0, 500}, {304, 16, 400, 1200}, {464, 16, 800, 2000}}};
@@ -364,5 +501,5 @@ int main() {
   plan = plan_transfer(timing, blocks, 3);
   assert(!plan.feasible && std::isfinite(plan.startDelayFromScanUs));
   assert(!plan_transfer(timing, blocks, 0).feasible);
-  std::puts("PASS: state-driven damage, old/new card rows, clipping, no-op frames, countdown screen, top percent page, three-page pager and best scores, sparse transfer timing");
+  std::puts("PASS: rank and gains in the info column, state-driven damage, old/new card rows, clipping, no-op frames, countdown screen, top percent page, three-page pager and best scores, sparse transfer timing");
 }

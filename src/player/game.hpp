@@ -17,6 +17,7 @@
 #endif
 #endif
 #include "packet_animation.hpp"
+#include "gain_animation.hpp"
 #include "drawing.hpp"
 
 PacketQueue packetQueue;
@@ -28,6 +29,8 @@ ServerLink serverLink;
 char nodeUid[13]{};
 FinishedAnimation finishedAnimation;
 CountdownAnimation countdownAnimation;
+GainAnimation gainAnimation;
+RankFlash rankFlash;
 ResultPager resultPager;
 // スナップショットの発行までに押された右端ボタン。発行の間隔より短い押下も取りこぼさない。
 uint8_t resultPageEdges = 0;
@@ -42,7 +45,7 @@ bool displayReady = false;
 constexpr uint32_t DISPLAY_FRAME_MS = 16;
 constexpr BaseType_t DISPLAY_CORE = 1 - ARDUINO_RUNNING_CORE;
 
-void publish_display_snapshot() {
+void publish_display_snapshot(uint32_t elapsedMs) {
 #ifdef PLAYER_PACKET_DEMO
   const GamePhase phase = GamePhase::Playing;
   const bool synced = true;
@@ -75,6 +78,13 @@ void publish_display_snapshot() {
       resultReady && snapshot.resultPage == ResultPage::Score, millis());
   snapshot.previewLit = millis() / 500 % 2 == 0;
   snapshot.countdownGo = countdownAnimation.update(snapshot.status.countdown, countdown_enabled(snapshot), millis());
+  // 画面の種類が決まってから流すかを判定する。流せない間に入った点は捨て、後から流し直さない。
+  const bool gainsEnabled = gains_enabled(snapshot);
+  gainAnimation.update(serverLink.take_gains(), gainsEnabled, elapsedMs);
+  snapshot.gains = gainAnimation.snapshot();
+  snapshot.rankFlash = rankFlash.update(snapshot.status.rank, gainsEnabled, millis());
+#else
+  (void)elapsedMs;
 #endif
   xQueueOverwrite(displayQueue, &snapshot);
 }
@@ -111,7 +121,7 @@ void setup() {
   }
   packetAnimation.update(packetQueue, 0, ANIMATION_HEIGHT);
 #endif
-  publish_display_snapshot();
+  publish_display_snapshot(0);
   drawingContext = {displayQueue, xTaskGetCurrentTaskHandle()};
   if (xTaskCreatePinnedToCore(display_task, "display", 4096, &drawingContext, 1, nullptr, DISPLAY_CORE) != pdPASS) {
     log_e("Display task creation failed");
@@ -166,7 +176,7 @@ void loop() {
   if (elapsedMs >= DISPLAY_FRAME_MS) {
     previousFrameMs = nowMs;
     packetAnimation.update(packetQueue, elapsedMs, ANIMATION_HEIGHT);
-    publish_display_snapshot();
+    publish_display_snapshot(elapsedMs);
   }
   vTaskDelay(1);
 }

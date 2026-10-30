@@ -29,8 +29,13 @@ DisplaySnapshot snapshot(unsigned scene, unsigned index) {
   if (scene == 2 || scene == 4) s.pressedMask = index & 1 ? 5 : 0;
   if (scene == 3 || scene == 4) {
     constexpr int32_t scores[] = {0, 9, 10, 99, 100, 1000, 2147483647, 0};
-    s.status = {scores[index % 8], uint8_t(120 - index), bool(index & 1), index % 8 != 0};
+    s.status = {scores[index % 8], uint8_t(120 - index), bool(index & 1), index % 8 != 0, 0, uint8_t(index % 9)};
     s.awaitingStatus = !s.status.known;
+    // 順位の点滅と、列ごとに年齢の違う獲得点（発信者・中継・明るさの段階）も部分描画で検証する。
+    constexpr uint8_t gains[] = {15, 8, 10};
+    s.rankFlash = index & 2;
+    for (unsigned i = 0; i < s.gains.size(); ++i)
+      s.gains[i] = {gains[(index + i) % 3], uint16_t((index * 97 + i * 500) % GAIN_DURATION_MS), (index + i) % 4 != 0};
   }
   if (scene == 4 && index >= 16) s.selfId = NodeId::P8;
   if (scene == 5 || scene == 6) {
