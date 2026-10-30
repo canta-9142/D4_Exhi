@@ -1,7 +1,7 @@
 package app
 
 // maxDeviceTopPercent is the largest top percent sent to a player MCU; anyone
-// below it is shown no percent (player.md).
+// below it is told only that they are in the bottom half (player.md).
 const maxDeviceTopPercent = 50
 
 // topPercent is the top percent of score within population, which includes
@@ -48,6 +48,13 @@ func (a *App) deviceTopPercent(n *node) *int {
 		return nil
 	}
 	return optionalPercent(n.topPercent)
+}
+
+// deviceBottomHalf reports whether n's summary says only that n is in the
+// bottom half, hiding the value. Like deviceTopPercent, it needs the records
+// file, so that a player is not told so from this process's games alone.
+func (a *App) deviceBottomHalf(n *node) bool {
+	return a.options.RecordsUnavailable == "" && n.topPercent > maxDeviceTopPercent
 }
 
 // optionalPercent is a copy of percent for a Snapshot or message, so that it

@@ -232,7 +232,7 @@ func TestSummaryJSONDepth(t *testing.T) {
 	if depth := jsonDepth(t, line); depth > 3 {
 		t.Fatalf("summary %s nests %d deep, want at most 3", line, depth)
 	}
-	want := `{"type":"summary","data":{"sync":"S","score":900,"rank":1,"eligible":true,"topPercent":12,"gameBest":900,"gameBestNodes":[1,2,3,4,5,6,7,8],"hourBest":900,"hourBestStart":9,"hourBestMine":true,"allTimeBest":900,"allTimeBestMine":true}}`
+	want := `{"type":"summary","data":{"sync":"S","score":900,"rank":1,"eligible":true,"topPercent":12,"bottomHalf":false,"gameBest":900,"gameBestNodes":[1,2,3,4,5,6,7,8],"hourBest":900,"hourBestStart":9,"hourBestMine":true,"allTimeBest":900,"allTimeBestMine":true}}`
 	if string(line) != want {
 		t.Fatalf("summary\n got %s\nwant %s", line, want)
 	}

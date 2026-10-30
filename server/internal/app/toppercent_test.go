@@ -76,22 +76,28 @@ func TestDeviceTopPercent(t *testing.T) {
 		percent     int
 		unavailable string
 		want        int // 0 for nil.
+		bottomHalf  bool
 	}{
-		{"none", 0, "", 0},
-		{"the best", 1, "", 1},
-		{"exactly 50", 50, "", 50},
-		{"just over 50", 51, "", 0},
-		{"the worst", 100, "", 0},
-		{"records unavailable", 10, "file is not a database", 0},
+		{"none", 0, "", 0, false},
+		{"the best", 1, "", 1, false},
+		{"exactly 50", 50, "", 50, false},
+		{"just over 50", 51, "", 0, true},
+		{"the worst", 100, "", 0, true},
+		{"records unavailable", 10, "file is not a database", 0, false},
+		{"bottom half with records unavailable", 80, "file is not a database", 0, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			a := &App{options: Options{RecordsUnavailable: tc.unavailable}}
-			got := a.deviceTopPercent(&node{topPercent: tc.percent})
+			n := &node{topPercent: tc.percent}
+			got := a.deviceTopPercent(n)
 			switch {
 			case tc.want == 0 && got != nil:
 				t.Fatalf("deviceTopPercent = %d, want nil", *got)
 			case tc.want != 0 && (got == nil || *got != tc.want):
 				t.Fatalf("deviceTopPercent = %v, want %d", got, tc.want)
+			}
+			if got := a.deviceBottomHalf(n); got != tc.bottomHalf {
+				t.Fatalf("deviceBottomHalf = %t, want %t", got, tc.bottomHalf)
 			}
 		})
 	}
@@ -105,11 +111,13 @@ func TestSummaryTopPercentJSON(t *testing.T) {
 		want string
 	}{
 		{"within the top half", SummaryData{Sync: "S", Score: 345, Rank: &rank, Eligible: true, TopPercent: &percent, GameBestNodes: []int{}},
-			`{"type":"summary","data":{"sync":"S","score":345,"rank":2,"eligible":true,"topPercent":12,"gameBest":null,"gameBestNodes":[],"hourBest":null,"hourBestStart":null,"hourBestMine":false,"allTimeBest":null,"allTimeBestMine":false}}`},
-		{"outside the top half", SummaryData{Sync: "S", Score: 345, Rank: &rank, Eligible: true, GameBestNodes: []int{}},
-			`{"type":"summary","data":{"sync":"S","score":345,"rank":2,"eligible":true,"topPercent":null,"gameBest":null,"gameBestNodes":[],"hourBest":null,"hourBestStart":null,"hourBestMine":false,"allTimeBest":null,"allTimeBestMine":false}}`},
+			`{"type":"summary","data":{"sync":"S","score":345,"rank":2,"eligible":true,"topPercent":12,"bottomHalf":false,"gameBest":null,"gameBestNodes":[],"hourBest":null,"hourBestStart":null,"hourBestMine":false,"allTimeBest":null,"allTimeBestMine":false}}`},
+		{"in the bottom half", SummaryData{Sync: "S", Score: 345, Rank: &rank, Eligible: true, BottomHalf: true, GameBestNodes: []int{}},
+			`{"type":"summary","data":{"sync":"S","score":345,"rank":2,"eligible":true,"topPercent":null,"bottomHalf":true,"gameBest":null,"gameBestNodes":[],"hourBest":null,"hourBestStart":null,"hourBestMine":false,"allTimeBest":null,"allTimeBestMine":false}}`},
+		{"no top percent", SummaryData{Sync: "S", Score: 345, Rank: &rank, Eligible: true, GameBestNodes: []int{}},
+			`{"type":"summary","data":{"sync":"S","score":345,"rank":2,"eligible":true,"topPercent":null,"bottomHalf":false,"gameBest":null,"gameBestNodes":[],"hourBest":null,"hourBestStart":null,"hourBestMine":false,"allTimeBest":null,"allTimeBestMine":false}}`},
 		{"not eligible", SummaryData{Sync: "S", Score: 400, GameBestNodes: []int{}},
-			`{"type":"summary","data":{"sync":"S","score":400,"rank":null,"eligible":false,"topPercent":null,"gameBest":null,"gameBestNodes":[],"hourBest":null,"hourBestStart":null,"hourBestMine":false,"allTimeBest":null,"allTimeBestMine":false}}`},
+			`{"type":"summary","data":{"sync":"S","score":400,"rank":null,"eligible":false,"topPercent":null,"bottomHalf":false,"gameBest":null,"gameBestNodes":[],"hourBest":null,"hourBestStart":null,"hourBestMine":false,"allTimeBest":null,"allTimeBestMine":false}}`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			line, err := Message{Type: "summary", Data: tc.data}.MarshalLine()
@@ -246,12 +254,16 @@ func TestTopPercentAtTimeout(t *testing.T) {
 				if !strings.Contains(string(encoded), want) {
 					t.Errorf("%s summary %s lacks %s", name, encoded, want)
 				}
+				// Above 50 the summary hides the value and says only the bottom half.
+				if bottom := tc.snapshot > maxDeviceTopPercent; got.BottomHalf != bottom {
+					t.Errorf("%s summary bottomHalf = %t, want %t", name, got.BottomHalf, bottom)
+				}
 			}
 			for _, id := range tc.automatic {
 				name := id.wireName()
 				wantPercent(t, name+" Snapshot topPercent", topPercentOf(s, id), 0)
 				got := h.summary(SessionID(name))
-				if got.Eligible || got.TopPercent != nil || got.Rank != nil {
+				if got.Eligible || got.TopPercent != nil || got.Rank != nil || got.BottomHalf {
 					t.Errorf("%s summary of an ineligible player: %+v", name, got)
 				}
 				if encoded, _ := json.Marshal(got); !strings.Contains(string(encoded), `"topPercent":null`) {
@@ -291,7 +303,7 @@ func TestManualFinishGivesNoTopPercent(t *testing.T) {
 		t.Fatalf("phase = %s", s.Phase)
 	}
 	wantPercent(t, "Snapshot topPercent", topPercentOf(s, 1), 0)
-	if got := h.summary("P1"); !got.Eligible || got.Rank == nil || got.TopPercent != nil {
+	if got := h.summary("P1"); !got.Eligible || got.Rank == nil || got.TopPercent != nil || got.BottomHalf {
 		t.Fatalf("summary after a manual Finish: %+v", got)
 	}
 }
@@ -324,6 +336,10 @@ func TestTopPercentWithUnavailableRecords(t *testing.T) {
 	h := topPercentHarness(t, options, []NodeID{1}, nil)
 	h.playToTimeout(map[NodeID]int{1: 100})
 	wantPercent(t, "Snapshot topPercent of game 1", topPercentOf(h.state(), 1), 100)
+	// 100 would be the bottom half, but the summary says nothing without the records file.
+	if got := h.summary("P1"); !got.Eligible || got.TopPercent != nil || got.BottomHalf {
+		t.Fatalf("summary of game 1 with unavailable records: %+v", got)
+	}
 	h.execute(Command{Operation: Reset})
 	h.playToTimeout(map[NodeID]int{1: 200})
 	s := h.state()

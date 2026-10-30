@@ -88,6 +88,9 @@ type SummaryData struct {
 	// TopPercent is 1-50, or nil when the player is not within the top half
 	// or the server cannot tell (player.md).
 	TopPercent *int `json:"topPercent"`
+	// BottomHalf is true when the player is in the bottom half: the summary
+	// then says only that, with TopPercent nil.
+	BottomHalf bool `json:"bottomHalf"`
 	// The best scores of server.md 3.5.7 stay flat in data, because the
 	// player firmware limits JSON nesting to 4 (player.md).
 	GameBest *int `json:"gameBest"`
