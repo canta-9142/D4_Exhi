@@ -519,7 +519,7 @@ static void test_summary_and_preview() {
   const auto finished = message("phase", R"({"phase":"Finished"})");
   const auto status = message("status", R"({"score":9,"remaining":0,"ready":false,"countdown":0})");
   const auto summary = [&](const std::string& sync, const std::string& fields = R"("score":2147483647,"rank":2,"eligible":true,"topPercent":null)") {
-    return message("summary", "{\"sync\":\"" + sync + "\"," + fields + "," + NO_BESTS + "}");
+    return message("summary", "{\"sync\":\"" + sync + "\"," + fields + ",\"bottomHalf\":false," + NO_BESTS + "}");
   };
   // 同じ遷移を一括・行単位・1バイトずつ受け取っても、終了演出の判定は同じ。
   for (unsigned delivery = 0; delivery < 3; ++delivery) {
@@ -667,8 +667,8 @@ static void test_summary_bests() {
   const auto config = message("config", R"({"node":1,"mode":"manual","preview":false})");
   const auto finished = message("phase", R"({"phase":"Finished"})");
   const auto status = message("status", R"({"score":9,"remaining":0,"ready":false,"countdown":0})");
-  const std::string ranked = R"("score":520,"rank":1,"eligible":true,"topPercent":3,)";
-  const std::string unranked = R"("score":520,"rank":null,"eligible":false,"topPercent":null,)";
+  const std::string ranked = R"("score":520,"rank":1,"eligible":true,"topPercent":3,"bottomHalf":false,)";
+  const std::string unranked = R"("score":520,"rank":null,"eligible":false,"topPercent":null,"bottomHalf":false,)";
   const auto summary = [&](const std::string& bests, const std::string& head) {
     return message("summary", "{\"sync\":\"" + a + "\"," + head + bests + "}");
   };
@@ -741,6 +741,26 @@ static void test_summary_bests() {
     ctx.receive(summary(fields, ranked));
     assert(!ctx.link.fifo_synced()); // 不正なsummaryは再同期し、以前の正常値を保つ。
     assert(ctx.link.summary().known && ctx.link.summary().gameBest == 410 && ctx.link.summary().allTimeBest == 600);
+  }
+  // 下位50%は値を伏せてbottomHalfだけを送る。trueは対象者で、topPercentがnullのときだけ。
+  r = accept(summary(bests({}), R"("score":520,"rank":1,"eligible":true,"topPercent":null,"bottomHalf":true,)"));
+  assert(r.bottomHalf && r.topPercent == 0 && has_top_page(r));
+  r = accept(summary(bests({}), ranked));
+  assert(!r.bottomHalf && r.topPercent == 3);
+  r = accept(summary(bests({}), R"("score":520,"rank":1,"eligible":true,"topPercent":null,"bottomHalf":false,)"));
+  assert(!r.bottomHalf && !has_top_page(r)); // 手動の終了・記録を使えない起動。
+  const std::string badBottom[] = {
+    R"("score":520,"rank":1,"eligible":true,"topPercent":3,)", // 欠落。
+    R"("score":520,"rank":1,"eligible":true,"topPercent":3,"bottomHalf":null,)",
+    R"("score":520,"rank":1,"eligible":true,"topPercent":3,"bottomHalf":0,)",
+    R"("score":520,"rank":1,"eligible":true,"topPercent":3,"bottomHalf":"false",)",
+    R"("score":520,"rank":1,"eligible":true,"topPercent":3,"bottomHalf":true,)",
+    R"("score":520,"rank":null,"eligible":false,"topPercent":null,"bottomHalf":true,)",
+  };
+  for (const auto& head : badBottom) {
+    accept(summary(bests({}), ranked));
+    ctx.receive(summary(bests({}), head));
+    assert(!ctx.link.fifo_synced() && ctx.link.summary().topPercent == 3 && !ctx.link.summary().bottomHalf);
   }
   // 対象外の人の*Mineは、スコアが等しくてもtrueにできない。
   for (const auto& mine : {"hourBestMine", "allTimeBestMine"}) {

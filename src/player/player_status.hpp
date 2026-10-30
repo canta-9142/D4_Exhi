@@ -24,6 +24,8 @@ struct FinalSummary {
   bool animate = false;
   // 上位何%か（1〜50）。0はnullで、上位%のページを出さない。
   uint8_t topPercent = 0;
+  // 上位%が51%以上で、値を伏せて下位50%であることだけを知らせる。topPercentは0。
+  bool bottomHalf = false;
   // ベストスコア3種。NO_BESTはnullで、画面では「---」を出す。
   int32_t gameBest = NO_BEST;
   uint8_t gameBestNodes = 0; // bit n-1 がノードn（1〜8）。
@@ -62,10 +64,13 @@ private:
 
 enum class ResultPage : uint8_t { Score, TopPercent, Bests };
 
-// 送り順の何ページ目か（0〜）と、全部で何ページか。上位%がなければ②を飛ばす。
-inline uint8_t result_page_count(const FinalSummary& summary) { return summary.topPercent ? 3 : 2; }
+// ②を出すか。上位50%以内なら値、下位50%なら「下位50%」だけを出す。
+inline bool has_top_page(const FinalSummary& summary) { return summary.topPercent || summary.bottomHalf; }
+
+// 送り順の何ページ目か（0〜）と、全部で何ページか。②がなければ飛ばす。
+inline uint8_t result_page_count(const FinalSummary& summary) { return has_top_page(summary) ? 3 : 2; }
 inline uint8_t result_page_index(const FinalSummary& summary, ResultPage page) {
-  return page == ResultPage::Bests && !summary.topPercent ? 1 : static_cast<uint8_t>(page);
+  return page == ResultPage::Bests && !has_top_page(summary) ? 1 : static_cast<uint8_t>(page);
 }
 
 // 結果画面のページ。筐体だけの表示状態で、サーバーへは何も送らない。
@@ -82,14 +87,14 @@ public:
       introShown_ = running_ = false;
       revision_ = summary.revision;
     }
-    // 上位%のない結果では②を出さない。
-    if (page_ == ResultPage::TopPercent && !summary.topPercent) page_ = ResultPage::Bests;
+    // 上位%も下位50%の知らせもない結果では②を出さない。
+    if (page_ == ResultPage::TopPercent && !has_top_page(summary)) page_ = ResultPage::Bests;
     if (next && ready && summary.known) {
-      // ①→②→③→①。②は上位%がなければ飛ばす。
-      page_ = page_ == ResultPage::Score ? (summary.topPercent ? ResultPage::TopPercent : ResultPage::Bests) :
+      // ①→②→③→①。②を出さない結果では飛ばす。
+      page_ = page_ == ResultPage::Score ? (has_top_page(summary) ? ResultPage::TopPercent : ResultPage::Bests) :
               page_ == ResultPage::TopPercent ? ResultPage::Bests : ResultPage::Score;
-      // 終了演出と同じく、通常の終了遷移で初めて見るときだけ演出する。
-      if (page_ == ResultPage::TopPercent && summary.animate && !introShown_) {
+      // 終了演出と同じく、通常の終了遷移で初めて見るときだけ演出する。下位50%は値がないので演出しない。
+      if (page_ == ResultPage::TopPercent && summary.topPercent && summary.animate && !introShown_) {
         introShown_ = running_ = true;
         startedMs_ = nowMs;
       }

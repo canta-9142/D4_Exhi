@@ -136,10 +136,12 @@ inline DisplayChanges display_changes(const DisplaySnapshot& previous, const Dis
     // ページ位置の点の数は上位%の有無で変わる。③は自ノードの色と値が変わったときだけ描き直す。
     changes.resultBody = first || finished_state(previous) != finished_state(next) ||
         previous.resultPage != next.resultPage || previous.summary.topPercent != next.summary.topPercent ||
+        previous.summary.bottomHalf != next.summary.bottomHalf ||
         (next.resultPage == ResultPage::Bests && (changes.self || !same_bests(previous.summary, next.summary)));
     if (finished_state(next) == FinishedState::Ready && next.resultPage == ResultPage::TopPercent) {
       changes.topBody = changes.resultBody || changes.self;
-      changes.topCurve = changes.topBody || previous.topProgress != next.topProgress;
+      // 下位50%の②には演出も点滅もなく、本文を描くときだけ描く。
+      changes.topCurve = changes.topBody || (next.summary.topPercent && previous.topProgress != next.topProgress);
       // 自分のマスは確認表示と同じ500msの周期で点滅させる。
       if (changes.topCurve || previous.previewLit != next.previewLit) changes.topCell = next.summary.topPercent;
     } else if (finished_state(next) == FinishedState::Ready && next.resultPage == ResultPage::Score) {

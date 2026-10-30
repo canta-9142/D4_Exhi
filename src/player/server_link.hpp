@@ -537,9 +537,12 @@ private:
       const JsonVariantConst top = data["topPercent"];
       const bool validTop = (!top.isUnbound() && top.isNull()) ||
           (eligible && top.is<uint8_t>() && top.as<unsigned>() >= 1 && top.as<unsigned>() <= 50);
+      // bottomHalfも必須。trueは下位50%の対象者だけで、topPercentはnull。
+      const bool validBottom = data["bottomHalf"].is<bool>() &&
+          (!data["bottomHalf"].as<bool>() || (eligible && top.isNull()));
       FinalSummary result;
       if (!valid_sync(data["sync"]) || !data["score"].is<int32_t>() || data["score"].as<int32_t>() < 0 ||
-          !data["eligible"].is<bool>() || !validRank || !validTop ||
+          !data["eligible"].is<bool>() || !validRank || !validTop || !validBottom ||
           !parse_bests(data, eligible, data["score"].as<int32_t>(), result)) {
         request_resync();
       } else if (fifo_synced() && phase_ == GamePhase::Finished && !preview_ &&
@@ -553,6 +556,7 @@ private:
         result.eligible = eligible;
         result.known = true;
         result.topPercent = top.isNull() ? uint8_t(0) : top.as<uint8_t>();
+        result.bottomHalf = data["bottomHalf"].as<bool>();
         summary_ = result;
         summaryTimerStarted_ = false;
         allowIntro_ = false;

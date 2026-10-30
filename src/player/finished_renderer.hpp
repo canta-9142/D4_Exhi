@@ -71,24 +71,29 @@ inline const uint8_t* bell_heights() {
   return heights;
 }
 
+// ベルカーブをleftから描き、fillFrom〜fillTo（列番号、終端を含まない）を自ノードの色、残りを暗い灰色で塗る。
+inline void draw_bell(FrameBuffer& frame, int left, int fillFrom, int fillTo, uint16_t color) {
+  const uint8_t* heights = bell_heights();
+  int previousTop = BELL_BASE - heights[0];
+  for (int column = 0; column < BELL_WIDTH; ++column) {
+    const int x = left + column;
+    const int top = BELL_BASE - heights[column];
+    frame.drawFastVLine(x, top, BELL_BASE - top, column >= fillFrom && column < fillTo ? color : TOP_DIM);
+    frame.drawLine(x - 1, previousTop, x, top, TFT_WHITE);
+    frame.drawLine(x - 1, previousTop - 1, x, top - 1, TFT_WHITE);
+    previousTop = top;
+  }
+  frame.drawFastHLine(left, BELL_BASE, BELL_WIDTH, TFT_WHITE);
+}
+
 inline void draw_top_curve(FrameBuffer& frame, const DisplaySnapshot& s) {
   const uint16_t color = nodeVisuals[static_cast<int>(s.selfId)].color;
   const int zx = bell_x(top_percent_z_milli(s.summary.topPercent));
   const int fillX = top_fill_x(zx, s.topProgress);
   frame.fillRect(BELL_AREA_X, BELL_AREA_Y, BELL_AREA_W, BELL_AREA_H, TFT_BLACK);
-  const uint8_t* heights = bell_heights();
-  int previousTop = BELL_BASE - heights[0];
-  for (int column = 0; column < BELL_WIDTH; ++column) {
-    const int x = BELL_X + column;
-    const int top = BELL_BASE - heights[column];
-    frame.drawFastVLine(x, top, BELL_BASE - top, x >= fillX ? color : TOP_DIM);
-    frame.drawLine(x - 1, previousTop, x, top, TFT_WHITE);
-    frame.drawLine(x - 1, previousTop - 1, x, top - 1, TFT_WHITE);
-    previousTop = top;
-  }
-  frame.drawFastHLine(BELL_X, BELL_BASE, BELL_WIDTH, TFT_WHITE);
+  draw_bell(frame, BELL_X, fillX - BELL_X, BELL_WIDTH, color);
   // 自分の位置に縦線と人のアイコンを立てる。
-  const int top = BELL_BASE - heights[zx - BELL_X];
+  const int top = BELL_BASE - bell_heights()[zx - BELL_X];
   frame.drawFastVLine(zx, top - 4, BELL_BASE - top + 4, TFT_WHITE);
   frame.fillTriangle(zx, top - 13, zx - 5, top - 4, zx + 5, top - 4, TFT_WHITE);
   frame.fillCircle(zx, top - 17, 3, TFT_WHITE);
@@ -107,7 +112,22 @@ inline void draw_top_grid(FrameBuffer& frame, const DisplaySnapshot& s) {
   for (int index = 0; index < 100; ++index) draw_top_cell(frame, s, index);
 }
 
+// 下位50%は値を送られないので、文字とベルカーブの左半分だけを中央に描く。位置の印・マス・演出はない。
+inline void draw_bottom_body(FrameBuffer& frame, const DisplaySnapshot& s) {
+  const uint16_t color = nodeVisuals[static_cast<int>(s.selfId)].color;
+  frame.setFont(&fonts::Font0);
+  frame.setTextSize(4);
+  frame.setTextColor(color, TFT_BLACK);
+  frame.drawString("BOTTOM 50%", (FrameBuffer::WIDTH - frame.textWidth("BOTTOM 50%")) / 2, 88);
+  draw_bell(frame, (FrameBuffer::WIDTH - BELL_WIDTH) / 2, 0, BELL_WIDTH / 2, color);
+  draw_next_hint(frame, s);
+}
+
 inline void draw_top_body(FrameBuffer& frame, const DisplaySnapshot& s) {
+  if (!s.summary.topPercent) {
+    draw_bottom_body(frame, s);
+    return;
+  }
   char text[32];
   snprintf(text, sizeof(text), "TOP %u%%", unsigned(s.summary.topPercent));
   frame.setFont(&fonts::Font0);

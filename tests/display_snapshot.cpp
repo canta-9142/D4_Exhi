@@ -207,6 +207,19 @@ int main() {
   assert(result_page_index(top, ResultPage::TopPercent) == 1 && result_page_index(top, ResultPage::Bests) == 2);
   pager.update(unranked, true, true, false, 30);
   assert(pager.page() == ResultPage::Score); // 押さなければ動かない。
+  // 下位50%は②に「下位50%」だけを出す。値がないので演出しない。
+  auto bottom = unranked;
+  bottom.revision = 5;
+  bottom.animate = true;
+  bottom.bottomHalf = true;
+  assert(has_top_page(bottom) && result_page_count(bottom) == 3);
+  pager.update(bottom, true, true, true, 40);
+  assert(pager.page() == ResultPage::TopPercent && pager.progress() == 1000);
+  assert(result_page_index(bottom, pager.page()) == 1);
+  pager.update(bottom, true, true, true, 50);
+  assert(pager.page() == ResultPage::Bests && result_page_index(bottom, pager.page()) == 2);
+  pager.update(bottom, true, true, true, 60);
+  assert(pager.page() == ResultPage::Score);
   // 2ページ目の間は1ページ目の終了演出を止め、戻っても再演しない。
   FinishedAnimation scoreAnimation;
   top.revision = 9;
@@ -214,6 +227,21 @@ int main() {
   assert(scoreAnimation.update(top, false, 100) == 1000);
   assert(scoreAnimation.update(top, true, 200) == 1000);
 
+  // 下位50%の②は本文を1度だけ描き、点滅や進捗では描き直さない。
+  auto bottomPage = ranked;
+  bottomPage.summary.topPercent = 0;
+  bottomPage.summary.bottomHalf = true;
+  bottomPage.resultPage = ResultPage::TopPercent;
+  diff = display_changes(ranked, bottomPage, false);
+  assert(diff.resultBody && diff.topBody && !diff.topCell && !diff.full);
+  auto bottomStill = bottomPage;
+  bottomStill.previewLit = !bottomPage.previewLit;
+  bottomStill.topProgress = 300;
+  assert(!display_changes(bottomPage, bottomStill, false).any());
+  auto noBottom = bottomPage;
+  noBottom.summary.bottomHalf = false;
+  noBottom.resultPage = ResultPage::Score;
+  assert(display_changes(bottomPage, noBottom, false).resultBody); // 点の数が変わる。
   // ③は本文とボタン枠を1度だけ描き、値・ページ・自ノードが変わったときだけ描き直す。
   auto bestPage = ranked;
   bestPage.summary.gameBest = 410;

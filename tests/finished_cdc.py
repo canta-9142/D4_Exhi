@@ -27,8 +27,8 @@ def sample_bests(kind, score, eligible):
             "hourBestMine": mine, "allTimeBest": best if kind != "other" else 520, "allTimeBestMine": mine}
 
 
-def result(cdc, sync, score=2147483647, rank=2, eligible=True, top=None, bests=None):
-    cdc.send("summary", sync=sync, score=score, rank=rank, eligible=eligible, topPercent=top,
+def result(cdc, sync, score=2147483647, rank=2, eligible=True, top=None, bests=None, bottom=False):
+    cdc.send("summary", sync=sync, score=score, rank=rank, eligible=eligible, topPercent=top, bottomHalf=bottom,
              **(bests if bests is not None else NO_BESTS))
 
 
@@ -82,15 +82,18 @@ def exercise(cdc):
         {"score": 1, "rank": 1, "eligible": True, "topPercent": "12"},
         {"score": 1, "rank": None, "eligible": False, "topPercent": 12},
     ]
-    invalid = [dict(NO_BESTS, **fields) for fields in invalid] + [
-        dict(NO_BESTS, score=1, rank=1, eligible=True, topPercent=None, **changes) for changes in (
+    valid = {**NO_BESTS, "score": 1, "rank": 1, "eligible": True, "topPercent": None, "bottomHalf": False}
+    invalid = [{**NO_BESTS, "bottomHalf": False, **fields} for fields in invalid] + [
+        {**valid, **changes} for changes in (
             {"gameBest": -1}, {"gameBest": 1}, {"gameBestNodes": [1]}, {"gameBestNodes": None},
             {"gameBest": 1, "gameBestNodes": [2, 1]}, {"gameBest": 1, "gameBestNodes": [9]},
             {"hourBest": 1}, {"hourBestStart": 13}, {"hourBest": 1, "hourBestStart": 24},
             {"hourBestMine": True}, {"hourBestMine": None}, {"allTimeBest": 2, "allTimeBestMine": True},
+            # bottomHalfは対象者でtopPercentがnullのときだけtrue。
+            {"bottomHalf": 1}, {"bottomHalf": None}, {"topPercent": 12, "bottomHalf": True},
+            {"rank": None, "eligible": False, "bottomHalf": True},
         )
-    ] + [{key: value for key, value in dict(NO_BESTS, score=1, rank=1, eligible=True, topPercent=None).items()
-          if key != missing} for missing in NO_BESTS]
+    ] + [{key: value for key, value in valid.items() if key != missing} for missing in [*NO_BESTS, "bottomHalf"]]
     for fields in invalid:
         cdc.send("summary", sync=sync, **fields)
         cdc.expect("resync")
@@ -101,8 +104,10 @@ def exercise(cdc):
         result(cdc, sync, top=top)
     for kind in ("other", "mine", "max"):
         result(cdc, sync, bests=sample_bests(kind, 2147483647, True))
+    result(cdc, sync, bottom=True)
     cdc.quiet(.05)
-    print("PASS: invalid summary fields request resync; topPercent 1 and 50 and best scores accepted", flush=True)
+    print("PASS: invalid summary fields request resync; topPercent 1 and 50, bottomHalf and best scores accepted",
+          flush=True)
 
     configure(cdc, "auto", True)
     sync = cdc.reset([], "Finished")
@@ -129,12 +134,13 @@ def exercise(cdc):
 def visual(cdc):
     phase, score, rank, eligible, preview = "Finished", 2147483647, 2, True, False
     top = None
+    bottom = False
     best_kind = "other"
     mode = "manual"
     sync = ""
 
     def send_result():
-        result(cdc, sync, score, rank, eligible, top, sample_bests(best_kind, score, eligible))
+        result(cdc, sync, score, rank, eligible, top, sample_bests(best_kind, score, eligible), bottom)
 
     def synchronize():
         nonlocal sync
@@ -152,7 +158,7 @@ def visual(cdc):
     configure(cdc, mode)
     synchronize()
     print("READY: final score 2147483647 / RANK 2", flush=True)
-    print("Commands: animate/unranked/preview/result/top N/bests KIND/reset/duplicate/resync/stop", flush=True)
+    print("Commands: animate/unranked/preview/result/top N/bottom/bests KIND/reset/duplicate/resync/stop", flush=True)
     while True:
         if select.select([sys.stdin], [], [], 0)[0]:
             line = sys.stdin.readline()
@@ -174,13 +180,20 @@ def visual(cdc):
                 preview = command == "preview"
                 phase = "Preparing" if command == "reset" else "Finished"
                 score, rank, eligible = (400, None, False) if command == "unranked" else (2147483647, 2, True)
-                top = None
+                top, bottom = None, False
                 mode = "auto" if preview else "manual"
                 configure(cdc, mode, preview)
                 synchronize()
             elif command.startswith("top ") and command[4:].isdigit() and 1 <= int(command[4:]) <= 50:
                 # 上位%を付けた結果を静止表示で出す。animateはこの値を保って終了遷移を演出する。
                 preview, phase, score, rank, eligible, top = False, "Finished", 345, 2, True, int(command[4:])
+                bottom = False
+                mode = "manual"
+                configure(cdc, mode)
+                synchronize()
+            elif command == "bottom":
+                # 下位50%の結果（値を伏せてbottomHalfだけ）を静止表示で出す。animateもこの値を保つ。
+                preview, phase, score, rank, eligible, top, bottom = False, "Finished", 345, 2, True, None, True
                 mode = "manual"
                 configure(cdc, mode)
                 synchronize()
@@ -190,8 +203,8 @@ def visual(cdc):
                 synchronize()
             elif command == "resync":
                 resynchronize()
-            print(f"STATE: {phase} preview={preview} score={score} rank={rank} topPercent={top} bests={best_kind}",
-                  flush=True)
+            print(f"STATE: {phase} preview={preview} score={score} rank={rank} topPercent={top} bottomHalf={bottom} "
+                  f"bests={best_kind}", flush=True)
         message = cdc.read(.05)
         if message:
             assert message["type"] == "resync", message
