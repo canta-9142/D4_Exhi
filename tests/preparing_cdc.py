@@ -1,6 +1,8 @@
-"""通常ファームウェアの長押し実機確認。標準入力: start/reset/auto/manual/accept/reject/ignore/stop。
+"""通常ファームウェアの長押し実機確認。標準入力: start/reset/auto/manual/accept/reject/ignore/rank/gain/stop。
 
 startではサーバーと同じく、status.countdownを3・2・1・0と1秒ごとに送ってからパケットを追加する。
+カウントダウンが終わると暫定順位を4位とし、受理したSENDごとに発信者の15点をgainsで送る。
+rank N（1〜8、noneでnull）で順位を、gain N...（1〜15を16個まで）で獲得点を送る。gainはscoreにも足す。
 """
 
 import argparse
@@ -15,7 +17,7 @@ from player_cdc import CDC
 
 
 def run(cdc, args):
-    mode, phase, ready, score = "manual", "Preparing", False, 0
+    mode, phase, ready, score, rank = "manual", "Preparing", False, 0, None
     countdown, countdown_at = 0, None
     sync = ""
     ids = []
@@ -29,8 +31,8 @@ def run(cdc, args):
             with args.log.open("a") as output:
                 output.write(json.dumps(message, separators=(",", ":")) + "\n")
 
-    def status():
-        cdc.status(score=score, remaining=120, ready=ready, countdown=countdown)
+    def status(gains=()):
+        cdc.status(score=score, remaining=120, ready=ready, countdown=countdown, rank=rank, gains=gains)
 
     def synchronize():
         nonlocal sync, ack_at
@@ -49,7 +51,7 @@ def run(cdc, args):
     cdc.expect("resync")
     synchronize()
     print("READY: Preparing/manual. Release both ends, then hold both for 2 seconds.", flush=True)
-    print("Commands: start/reset/auto/manual/accept/reject/ignore/stop", flush=True)
+    print("Commands: start/reset/auto/manual/accept/reject/ignore/rank N|none/gain N.../stop", flush=True)
     started = time.monotonic()
     input_buffer = ""
     while time.monotonic() - started < args.seconds:
@@ -61,10 +63,19 @@ def run(cdc, args):
             while "\n" in input_buffer:
                 command, input_buffer = input_buffer.split("\n", 1)
                 command = command.strip()
+                words = command.split()
                 if command == "stop":
                     return
                 if command in ("accept", "reject", "ignore"):
                     ack = command
+                elif len(words) == 2 and words[0] == "rank" and words[1] in ("none", *"12345678"):
+                    rank = None if words[1] == "none" else int(words[1])
+                    status()
+                elif (2 <= len(words) <= 17 and words[0] == "gain" and
+                      all(word.isdigit() and 1 <= int(word) <= 15 for word in words[1:])):
+                    gains = [int(word) for word in words[1:]]
+                    score += sum(gains)
+                    status(gains)
                 elif command == "start":
                     if mode == "manual" and not ready:
                         print("Start refused: manual node is not ready", flush=True)
@@ -75,7 +86,7 @@ def run(cdc, args):
                     cdc.send("phase", phase=phase)
                     status()
                 elif command in ("reset", "auto", "manual"):
-                    phase, ready, score, ids = "Preparing", False, 0, []
+                    phase, ready, score, rank, ids = "Preparing", False, 0, None, []
                     countdown, countdown_at = 0, None
                     if command != "reset":
                         mode = command
@@ -85,7 +96,7 @@ def run(cdc, args):
                 else:
                     continue
                 record({"type": "command", "data": {"command": command}})
-                print(f"STATE: {phase}/{mode} ready={ready}", flush=True)
+                print(f"STATE: {phase}/{mode} ready={ready} score={score} rank={rank}", flush=True)
         message = cdc.read(.05)
         if message:
             record(message)
@@ -110,8 +121,8 @@ def run(cdc, args):
                 last_rid = data["rid"]
                 cdc.result(data)
                 ids.pop(0)
-                score += 10
-                status()
+                score += 15
+                status([15])
                 print("PASS: Playing SEND/RESULT", flush=True)
             else:
                 raise AssertionError(message)
@@ -122,6 +133,8 @@ def run(cdc, args):
         if countdown_at is not None and time.monotonic() >= countdown_at:
             countdown -= 1
             countdown_at = countdown_at + 1 if countdown else None
+            if not countdown:
+                rank = 4
             status()
             print(f"STATUS countdown={countdown}", flush=True)
             if not countdown and not ids:

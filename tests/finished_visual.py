@@ -27,11 +27,12 @@ class FakeCDC:
         sync = f"{self.generation:032X}"
         self.send("reset", sync=sync, packets=packets)
         self.send("phase", phase=phase)
-        self.send("status", score=0, remaining=120, ready=False, countdown=0)
+        self.status()
         return sync
 
-    def status(self, score=0, remaining=120, ready=False, countdown=0):
-        self.send("status", score=score, remaining=remaining, ready=ready, countdown=countdown)
+    def status(self, score=0, remaining=120, ready=False, countdown=0, rank=None, gains=()):
+        self.send("status", score=score, remaining=remaining, ready=ready, countdown=countdown,
+                  rank=rank, gains=list(gains), combo=0)
 
     def read(self, timeout):
         if self.request_resync and self.preview:

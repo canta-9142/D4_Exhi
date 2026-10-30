@@ -69,8 +69,9 @@ class CDC:
             if not os.read(self.fd, 4096):
                 raise ConnectionError("USB CDC disconnected")
 
-    def status(self, score=0, remaining=120, ready=False, countdown=0):
-        self.send("status", score=score, remaining=remaining, ready=ready, countdown=countdown)
+    def status(self, score=0, remaining=120, ready=False, countdown=0, rank=None, gains=()):
+        self.send("status", score=score, remaining=remaining, ready=ready, countdown=countdown,
+                  rank=rank, gains=list(gains), combo=0)
 
     def reset(self, packets, phase="Playing", with_status=True):
         sync = uuid.uuid4().hex.upper()
@@ -195,6 +196,8 @@ def exercise(cdc, buttons, idle_seconds):
     cdc.quiet(3.2)
     cdc.status(2147483647, 120, False)
     cdc.status(0, 0, True)
+    cdc.status(23, 87, True, rank=1, gains=[15, 8, 10])
+    cdc.status(23, 87, True, rank=8, gains=[15] * 16)
     cdc.status()
     cdc.quiet()
     print("PASS: fresh STATUS acquisition, 3-second deadline, full-range absolute values", flush=True)
@@ -232,18 +235,28 @@ def exercise(cdc, buttons, idle_seconds):
         ("result", {"sync": sync, "rid": 0, "ok": 1}),
         ("result", {"sync": sync, "rid": 0x100000000, "ok": True}),
         ("result", {"ok": True}),
-        ("status", {"score": -1, "remaining": 120, "ready": False, "countdown": 0}),
-        ("status", {"score": 2147483648, "remaining": 120, "ready": False, "countdown": 0}),
-        ("status", {"score": 1.0, "remaining": 120, "ready": False, "countdown": 0}),
-        ("status", {"score": 0, "remaining": 121, "ready": False, "countdown": 0}),
-        ("status", {"score": 0, "remaining": "120", "ready": False, "countdown": 0}),
-        ("status", {"score": 0, "remaining": 120, "ready": 1, "countdown": 0}),
-        ("status", {"score": 0, "remaining": 120, "countdown": 0}),
-        ("status", {"score": 0, "remaining": 120, "ready": False, "countdown": -1}),
-        ("status", {"score": 0, "remaining": 120, "ready": False, "countdown": 4}),
-        ("status", {"score": 0, "remaining": 120, "ready": False, "countdown": 1.0}),
-        ("status", {"score": 0, "remaining": 120, "ready": False, "countdown": "1"}),
-        ("status", {"score": 0, "remaining": 120, "ready": False}),
+        ("status", {"score": -1, "remaining": 120, "ready": False, "countdown": 0, "rank": None, "gains": [], "combo": 0}),
+        ("status", {"score": 2147483648, "remaining": 120, "ready": False, "countdown": 0, "rank": None, "gains": [], "combo": 0}),
+        ("status", {"score": 1.0, "remaining": 120, "ready": False, "countdown": 0, "rank": None, "gains": [], "combo": 0}),
+        ("status", {"score": 0, "remaining": 121, "ready": False, "countdown": 0, "rank": None, "gains": [], "combo": 0}),
+        ("status", {"score": 0, "remaining": "120", "ready": False, "countdown": 0, "rank": None, "gains": [], "combo": 0}),
+        ("status", {"score": 0, "remaining": 120, "ready": 1, "countdown": 0, "rank": None, "gains": [], "combo": 0}),
+        ("status", {"score": 0, "remaining": 120, "countdown": 0, "rank": None, "gains": [], "combo": 0}),
+        ("status", {"score": 0, "remaining": 120, "ready": False, "countdown": -1, "rank": None, "gains": [], "combo": 0}),
+        ("status", {"score": 0, "remaining": 120, "ready": False, "countdown": 4, "rank": None, "gains": [], "combo": 0}),
+        ("status", {"score": 0, "remaining": 120, "ready": False, "countdown": 1.0, "rank": None, "gains": [], "combo": 0}),
+        ("status", {"score": 0, "remaining": 120, "ready": False, "countdown": "1", "rank": None, "gains": [], "combo": 0}),
+        ("status", {"score": 0, "remaining": 120, "ready": False, "rank": None, "gains": [], "combo": 0}),
+        ("status", {"score": 0, "remaining": 120, "ready": False, "countdown": 0, "gains": [], "combo": 0}),
+        ("status", {"score": 0, "remaining": 120, "ready": False, "countdown": 0, "rank": 0, "gains": [], "combo": 0}),
+        ("status", {"score": 0, "remaining": 120, "ready": False, "countdown": 0, "rank": 9, "gains": [], "combo": 0}),
+        ("status", {"score": 0, "remaining": 120, "ready": False, "countdown": 0, "rank": "1", "gains": [], "combo": 0}),
+        ("status", {"score": 0, "remaining": 120, "ready": False, "countdown": 0, "rank": None, "combo": 0}),
+        ("status", {"score": 0, "remaining": 120, "ready": False, "countdown": 0, "rank": None, "gains": None, "combo": 0}),
+        ("status", {"score": 0, "remaining": 120, "ready": False, "countdown": 0, "rank": None, "gains": [0], "combo": 0}),
+        ("status", {"score": 0, "remaining": 120, "ready": False, "countdown": 0, "rank": None, "gains": [16], "combo": 0}),
+        ("status", {"score": 0, "remaining": 120, "ready": False, "countdown": 0, "rank": None, "gains": [8.0], "combo": 0}),
+        ("status", {"score": 0, "remaining": 120, "ready": False, "countdown": 0, "rank": None, "gains": [8] * 17, "combo": 0}),
     ]
     for kind, data in invalid:
         cdc.send(kind, **data)

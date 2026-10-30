@@ -21,6 +21,7 @@ public:
   static constexpr uint32_t READY_TIMEOUT_MS = 3000;
   static constexpr uint32_t RECEIVE_TIMEOUT_MS = 1000;
   static constexpr uint32_t DISCONNECT_GRACE_MS = 100;
+  static constexpr unsigned MAX_GAIN = 15;
 
   // FIFOの置換・設定の無効化でtrueを返し、描画アニメーションも初期化する。
   template<class Port>
@@ -127,6 +128,12 @@ public:
   GamePhase phase() const { return phase_; }
   ControlMode mode() const { return mode_; }
   const PlayerStatus& status() const { return status_; }
+  // 前回取り出してから受け取った獲得点を古い順に返し、空にする。流すかどうかは表示側が決める。
+  GainBatch take_gains() {
+    const GainBatch gains = gains_;
+    gains_ = {};
+    return gains;
+  }
   bool awaiting_status() const { return statusSync_ != StatusSync::Complete; }
   // カウントダウン中のFIFOは空のはずだが、念のため入力も無視する。
   // STATUSの取得待ちでは以前の値を使わず、SENDに追加の制限を設けない。
@@ -221,6 +228,7 @@ private:
     phase_ = GamePhase::Unknown;
     mode_ = ControlMode::Auto;
     status_ = {};
+    gains_ = {};
     preview_ = false;
     summary_ = {};
     sync_[0] = '\0';
@@ -279,6 +287,21 @@ private:
     return parse_mine(data["hourBestMine"], eligible, score, bests.hourBest, bests.hourBestMine) &&
            parse_best(data["allTimeBest"], bests.allTimeBest) &&
            parse_mine(data["allTimeBestMine"], eligible, score, bests.allTimeBest, bests.allTimeBestMine);
+  }
+
+  // rankは必須で、nullか1〜8の整数。
+  static bool valid_rank(JsonVariantConst value) {
+    return (!value.isUnbound() && value.isNull()) ||
+           (value.is<uint8_t>() && value.as<unsigned>() >= 1 && value.as<unsigned>() <= 8);
+  }
+
+  // gainsは必須で、0〜16個の1〜15の整数の配列。
+  static bool valid_gains(JsonVariantConst value) {
+    if (!value.is<JsonArrayConst>() || value.as<JsonArrayConst>().size() > GainBatch::CAPACITY) return false;
+    for (JsonVariantConst gain : value.as<JsonArrayConst>()) {
+      if (!gain.is<uint8_t>() || gain.as<unsigned>() < 1 || gain.as<unsigned>() > MAX_GAIN) return false;
+    }
+    return true;
   }
 
   static GamePhase parse_phase(JsonVariantConst value) {
@@ -517,11 +540,15 @@ private:
       if (!data["score"].is<int32_t>() || data["score"].as<int32_t>() < 0 ||
           !data["remaining"].is<uint8_t>() || data["remaining"].as<unsigned>() > 120 ||
           !data["ready"].is<bool>() ||
-          !data["countdown"].is<uint8_t>() || data["countdown"].as<unsigned>() > 3) {
+          !data["countdown"].is<uint8_t>() || data["countdown"].as<unsigned>() > 3 ||
+          !valid_rank(data["rank"]) || !valid_gains(data["gains"])) {
         request_resync();
       } else if (state_ != State::AwaitConfig) {
+        // comboは後の作業で表示する。今は読まない。
         status_ = {data["score"].as<int32_t>(), data["remaining"].as<uint8_t>(),
-                   data["ready"].as<bool>(), true, data["countdown"].as<uint8_t>()};
+                   data["ready"].as<bool>(), true, data["countdown"].as<uint8_t>(),
+                   data["rank"].isNull() ? uint8_t(0) : data["rank"].as<uint8_t>()};
+        for (JsonVariantConst gain : data["gains"].as<JsonArrayConst>()) gains_.push(gain.as<uint8_t>());
         if (status_.ready) cancel_ready();
         if (statusSync_ == StatusSync::AwaitStatus) {
           statusSync_ = StatusSync::Complete;
@@ -620,6 +647,7 @@ private:
   GamePhase phase_ = GamePhase::Unknown;
   ControlMode mode_ = ControlMode::Auto;
   PlayerStatus status_{};
+  GainBatch gains_{};
   bool preview_ = false;
   FinalSummary summary_{};
   uint32_t summaryRevision_ = 0;

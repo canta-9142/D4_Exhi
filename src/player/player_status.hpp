@@ -12,6 +12,25 @@ struct PlayerStatus {
   bool known = false;
   // ゲーム時間の起点までの秒数。サーバーの値をそのまま表示し、MCUでは減らさない。
   uint8_t countdown = 0;
+  // 暫定順位（1〜8）。0はnullで、対象外・Preparing・カウントダウン中。
+  uint8_t rank = 0;
+};
+
+// status.gainsで受け取った点（1〜15）を、描画側へ渡すまで溜める短命なキュー。
+// 表示専用で、スコアはstatus.scoreをそのまま使い、この値を足さない。
+struct GainBatch {
+  static constexpr uint8_t CAPACITY = 16;
+  uint8_t count = 0;
+  uint8_t values[CAPACITY]{};
+
+  // あふれたら古い点を捨て、最新のCAPACITY件を残す。
+  void push(uint8_t value) {
+    if (count == CAPACITY) {
+      for (uint8_t i = 1; i < CAPACITY; ++i) values[i - 1] = values[i];
+      --count;
+    }
+    values[count++] = value;
+  }
 };
 
 // 結果の正本はsummary。statusや現在の操作モードから補完しない。
