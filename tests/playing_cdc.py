@@ -22,7 +22,7 @@ def run(cdc, records):
         assert message, "Playing benchmark timed out"
         records.append(message)
         if message["type"] == "playing_done":
-            assert message["data"] == {"samples": 320, "reference_match": True, "buffer_states_valid": True}, message
+            assert message["data"] == {"samples": 352, "reference_match": True, "buffer_states_valid": True}, message
             break
         assert message["type"] == "playing_sample", message
         data = message["data"]
@@ -37,9 +37,10 @@ def run(cdc, records):
             assert data["bytes"] < 307200, data
         assert data["frame_us"] >= data["draw_us"] + data["scan_read_us"] + data["scan_wait_us"] + data["transfer_us"], data
         cases[data["scene"]].append(data)
-    assert set(cases) == {"idle", "cards", "buttons", "numbers", "mixed", "preparing", "phases", "finished", "results", "preview"}, cases.keys()
+    assert set(cases) == {"idle", "cards", "buttons", "numbers", "mixed", "preparing", "phases", "finished", "results", "preview", "effects"}, cases.keys()
     assert all(len(rows) == 32 for rows in cases.values())
-    print("PASS: 320 partial frames match a fresh full redraw, including Preparing, Finished, preview and phase changes; both buffer histories valid")
+    print("PASS: 352 partial frames match a fresh full redraw, including Preparing, Finished, preview, phase changes and the playing effects; both buffer histories valid")
+    print("Compare cards (no effects) with effects (same card motion plus flame, mascots and celebrations) for the flame cost.")
     print("scene    draw/ms pack/ms scan-wait/ms transfer/ms frame/ms p95/ms bytes")
     for scene, rows in cases.items():
         median = lambda key: statistics.median(row[key] for row in rows)

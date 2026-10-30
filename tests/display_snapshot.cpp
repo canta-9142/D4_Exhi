@@ -399,23 +399,7 @@ int main() {
   assert(INFO_REMAINING_Y + 24 <= INFO_RANK_Y && INFO_RANK_Y + INFO_RANK_HEIGHT <= 240);
   assert(INFO_RANK_X >= 366 + 4 * 6 && INFO_RANK_X + INFO_RANK_WIDTH <= INFO_X + INFO_WIDTH); // 「RANK」の右。
 
-  // 順位は上がったときだけ短く光らせる。
-  RankFlash flash;
-  assert(!flash.update(0, true, 0) && !flash.update(3, true, 10)); // nullから順位が付いても光らせない。
-  assert(flash.update(2, true, 20) && flash.update(2, true, 20 + RankFlash::FLASH_MS - 1));
-  assert(!flash.update(2, true, 20 + RankFlash::FLASH_MS));
-  assert(!flash.update(4, true, 1000)); // 下がったときは光らせない。
-  assert(flash.update(1, true, UINT32_MAX - 10) && flash.update(1, true, RankFlash::FLASH_MS - 12)); // 周回。
-  assert(!flash.update(1, true, RankFlash::FLASH_MS - 11));
-  flash.update(5, true, 4000);
-  assert(flash.update(3, true, 4010));
-  assert(!flash.update(0, true, 4020)); // nullになったら止める。
-  assert(!flash.update(2, true, 4030));
-  flash.update(5, true, 5000);
-  assert(!flash.update(3, false, 5010)); // 流せない画面では比べない。
-  assert(!flash.update(2, true, 5020));
-  assert(flash.update(1, true, 5030));
-  assert(!flash.update(1, false, 5040) && !flash.update(1, true, 5050));
+  // 順位が上がったときの緑の点滅は、RANK UPの演出と一緒にtests/playing_effects.cppで検証する。
 
   // 獲得点・順位の変化は情報欄の帯・順位の枠だけを描き直す。
   DisplaySnapshot info{};
@@ -486,6 +470,91 @@ int main() {
   waiting.awaitingStatus = true;
   assert(display_changes(gained, waiting, false).gains && display_changes(waiting, gained, false).gains);
 
+  // 炎・マスコット・コンボの演出は通常のPlaying画面だけで出し、左の列とカード欄の右の余白だけを描き直す。
+  PlayingEffects effects;
+  uint32_t now = 100;
+  for (; now < 2000; now += 16) effects.update(12, 3, true, now);
+  auto lively = info;
+  lively.status.combo = 12;
+  lively.effects = effects.frame();
+  assert(displayed_effects(lively) == effects.frame() && displayed_combo(lively) == 12);
+  assert(displayed_crown(lively) == Crown::Bronze && lively.effects.flameLit && lively.effects.form == MascotForm::Pair);
+  assert(display_changes(info, lively, true).leftColumn && display_changes(info, lively, true).rightMargin);
+  auto stepped = lively;
+  effects.update(12, 3, true, now + 1); // 同じ1段の間の発行では状態が変わらない。
+  stepped.effects = effects.frame();
+  assert(!display_changes(lively, stepped, false).any());
+  effects.update(12, 3, true, now += FLAME_STEP_MS);
+  stepped.effects = effects.frame();
+  auto fx = display_changes(lively, stepped, false);
+  assert(fx.leftColumn && fx.rightMargin && !fx.full && fx.cards.none() && !fx.rank && !fx.gains && !fx.score && !fx.self);
+  auto fxDamage = display_damage(fx, false);
+  assert(fxDamage.containsPixel(1, 0) && fxDamage.containsPixel(119, 239) && fxDamage.containsPixel(320, 0) &&
+         fxDamage.containsPixel(359, 239));
+  assert(!fxDamage.containsPixel(200, 100) && !fxDamage.containsPixel(400, 100) && !fxDamage.containsPixel(10, 260));
+  // 何も変わらないときは差分が出ない。
+  assert(!display_changes(stepped, stepped, false).any());
+  // コンボ数・冠だけが変わったら左の列だけ。冠が変わらない順位の変化では左の列を描き直さない。
+  auto counted = stepped;
+  counted.status.combo = 13;
+  fx = display_changes(stepped, counted, false);
+  assert(fx.leftColumn && !fx.rightMargin);
+  auto crowned = stepped;
+  crowned.status.rank = 1;
+  fx = display_changes(stepped, crowned, false);
+  assert(fx.leftColumn && fx.rank && !fx.rightMargin);
+  auto lower = stepped;
+  lower.status.rank = 5;
+  auto lowest = stepped;
+  lowest.status.rank = 6;
+  fx = display_changes(lower, lowest, false);
+  assert(!fx.leftColumn && fx.rank);
+  // コンボ数は3以上でだけ出す。マスコットがいなければ冠もない。
+  auto small = info;
+  small.status.combo = 2;
+  small.status.rank = 1;
+  PlayingEffects quiet;
+  quiet.update(2, 1, true, 0);
+  quiet.update(2, 1, true, 1000);
+  small.effects = quiet.frame();
+  assert(displayed_combo(small) == 0 && displayed_crown(small) == Crown::None && small.effects.flameLit);
+  auto smallRanked = small;
+  smallRanked.status.rank = 2;
+  assert(!display_changes(small, smallRanked, false).leftColumn);
+  // Playing以外（カウントダウン・GO!・確認表示・同期待ち・STATUS待ち・未取得・Preparing・Finished）では出さない。
+  for (int i = 0; i < 8; ++i) {
+    auto hidden = stepped;
+    if (i == 0) hidden.status.countdown = 2;
+    if (i == 1) hidden.countdownGo = true;
+    if (i == 2) hidden.preview = true;
+    if (i == 3) hidden.synced = false;
+    if (i == 4) hidden.awaitingStatus = true;
+    if (i == 5) hidden.status.known = false;
+    if (i == 6) hidden.phase = GamePhase::Preparing;
+    if (i == 7) hidden.phase = GamePhase::Finished;
+    assert(displayed_effects(hidden) == EffectsFrame{} && displayed_combo(hidden) == 0);
+    assert(displayed_crown(hidden) == Crown::None);
+  }
+  // カウントダウン画面へ切り替わると演出を消す。戻ったときは空の状態から描き直す。
+  auto counting2 = stepped;
+  counting2.status.countdown = 3;
+  fx = display_changes(stepped, counting2, false);
+  assert(fx.full && fx.countdownBody && !fx.leftColumn && !fx.rightMargin);
+  effects.update(12, 3, false, now + 16);
+  assert(!effects.running() && effects.frame() == EffectsFrame{});
+  counting2.effects = effects.frame();
+  auto back = counting2;
+  back.status.countdown = 0;
+  fx = display_changes(counting2, back, false);
+  assert(fx.full && fx.leftColumn && fx.rightMargin && displayed_effects(back) == EffectsFrame{});
+  effects.update(12, 3, true, now + 32); // 戻った直後は段階の姿を下端から出し、炎は根元から育てる。
+  assert(effects.frame().flightMs == 0 && effects.frame().flameStep == 0 && effects.frame().milestoneMs == EFFECT_OFF);
+  // STATUS待ちへ移ると左の列を空に描き直す。
+  auto waitingFx = stepped;
+  waitingFx.awaitingStatus = true;
+  assert(display_changes(stepped, waitingFx, false).leftColumn && display_changes(stepped, waitingFx, false).rightMargin);
+  static_assert(std::is_trivially_copyable<EffectsFrame>::value, "effects travel inside the snapshot");
+
   ScanTiming timing;
   timing.locked = true;
   std::array<ScanTransferBlock, 3> blocks{{{112, 16, 0, 500}, {304, 16, 400, 1200}, {464, 16, 800, 2000}}};
@@ -501,5 +570,5 @@ int main() {
   plan = plan_transfer(timing, blocks, 3);
   assert(!plan.feasible && std::isfinite(plan.startDelayFromScanUs));
   assert(!plan_transfer(timing, blocks, 0).feasible);
-  std::puts("PASS: rank and gains in the info column, state-driven damage, old/new card rows, clipping, no-op frames, countdown screen, top percent page, three-page pager and best scores, sparse transfer timing");
+  std::puts("PASS: rank and gains in the info column, playing effects only on the normal Playing screen with left-column and right-margin damage, state-driven damage, old/new card rows, clipping, no-op frames, countdown screen, top percent page, three-page pager and best scores, sparse transfer timing");
 }

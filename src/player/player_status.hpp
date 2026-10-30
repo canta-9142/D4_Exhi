@@ -164,30 +164,4 @@ private:
   bool running_ = false;
 };
 
-// 暫定順位が上がったときに短く光らせる期間を返す。nullから順位が付いたときや、下がったときは光らせない。
-class RankFlash {
-public:
-  static constexpr uint32_t FLASH_MS = 400;
-
-  bool update(uint8_t rank, bool enabled, uint32_t nowMs) {
-    // 画面を離れている間の変化は比べず、戻ったときに光らせない。
-    if (!enabled) {
-      rank_ = 0;
-      running_ = false;
-      return false;
-    }
-    if (rank && rank_ && rank < rank_) {
-      running_ = true;
-      startedMs_ = nowMs;
-    }
-    rank_ = rank;
-    if (running_ && (!rank || nowMs - startedMs_ >= FLASH_MS)) running_ = false;
-    return running_;
-  }
-private:
-  uint32_t startedMs_ = 0;
-  uint8_t rank_ = 0;
-  bool running_ = false;
-};
-
 #endif // PLAYER_STATUS_HPP_

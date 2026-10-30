@@ -7,6 +7,8 @@
 
 namespace playing_bench {
 constexpr unsigned SAMPLES = 32;
+constexpr unsigned SCENES = 11;
+constexpr unsigned EFFECTS_SCENE = 10;
 bool ready = false;
 lgfx::swap565_t* reference = nullptr;
 PacketQueue queue;
@@ -21,10 +23,53 @@ DisplaySnapshot snapshot(unsigned scene, unsigned index) {
   s.status = {123, 120, true, true};
   for (unsigned i = 0; i < 3; ++i)
     s.cards[i] = {{uint16_t(1001 + i), NodeId(unsigned(NodeId::P2) + i)}, float(170 - i * 80), int(170 - i * 80), true, PACKET_FADE_MS};
-  if (scene == 1 || scene == 4) {
+  if (scene == 1 || scene == 4 || scene == EFFECTS_SCENE) {
     if (index == 8 || index == 24) queue.pop();
     animation.update(queue, 16, ANIMATION_HEIGHT);
     s.cards = animation.snapshot();
+  }
+  if (scene == EFFECTS_SCENE) {
+    // cardsと同じカードの動きに、毎フレーム進む演出を重ねる（炎あり・なしの比較）。左の列と右の余白を毎回描き直す最悪の場合。
+    // 炎の格子は描画側が持つので、全描画との比較でも同じ格子になるよう炎の段は固定し、正規化と火の粉で右の余白も描き直す。
+    s.status.combo = 25;
+    s.status.rank = 1;
+    EffectsFrame& f = s.effects;
+    f.epoch = 1;
+    f.flameStep = FLAME_ROWS;
+    f.flameLit = true;
+    f.flameFuel = 232;
+    f.flameScale = uint8_t(232 - index % 2);
+    f.flameRows = 58;
+    f.flameHot = true;
+    f.sparks = true;
+    f.sparkAge = 100 + index;
+    f.form = MascotForm::Blaze;
+    f.flightMs = index * FLAME_STEP_MS;
+    f.blink = index % 8 == 3 ? 1 : 0;
+    if (index >= 8 && index < 17) {
+      f.milestoneMs = uint16_t((index - 8) * FLAME_STEP_MS);
+      f.milestone = 20;
+    }
+    if (index >= 12 && index < 24) {
+      f.rankUpMs = uint16_t((index - 12) * FLAME_STEP_MS);
+      f.rankUpRank = 1;
+      s.rankFlash = f.rankUpMs / RANK_BLINK_MS % 2 == 0;
+    }
+    if (index >= 24) {
+      // コンボが切れた: しょんぼりの顔で落ちて煙になる。BREAKと炎の煙も出す。
+      s.status.combo = 0;
+      f.form = MascotForm::None;
+      f.sparks = false;
+      f.flameFuel = 0;
+      f.flameRows = 0;
+      f.flameHot = false;
+      f.breakMs = uint16_t((index - 24) * FLAME_STEP_MS * 2);
+      f.brokenForm = MascotForm::Blaze;
+      f.brokenFlightMs = 24 * FLAME_STEP_MS;
+      f.smokeMs = uint16_t(std::min<unsigned>((index - 24) * FLAME_STEP_MS, SMOKE_MS - 1));
+      f.smokeRows = 58;
+      if (f.breakMs < BREAK_TEXT_MS) f.breakTextMs = f.breakMs;
+    }
   }
   if (scene == 2 || scene == 4) s.pressedMask = index & 1 ? 5 : 0;
   if (scene == 3 || scene == 4) {
@@ -55,7 +100,7 @@ DisplaySnapshot snapshot(unsigned scene, unsigned index) {
       if (index >= 28) { s.readyHoldMs = 0; s.pressedMask = 0; }
     }
   }
-  if (scene >= 7) {
+  if (scene >= 7 && scene < EFFECTS_SCENE) {
     s.phase = GamePhase::Finished;
     s.status = {INT32_MAX, 0, true, true};
     s.summary = {INT32_MAX, 2, true, true, 1, true};
@@ -108,11 +153,15 @@ void report_ready() {
 }
 
 void benchmark() {
-  constexpr const char* names[] = {"idle", "cards", "buttons", "numbers", "mixed", "preparing", "phases", "finished", "results", "preview"};
-  for (unsigned scene = 0; scene < 10; ++scene) {
+  constexpr const char* names[SCENES] = {"idle", "cards", "buttons", "numbers", "mixed", "preparing", "phases", "finished", "results", "preview", "effects"};
+  for (unsigned scene = 0; scene < SCENES; ++scene) {
     queue.clear();
     animation = PacketAnimation{};
     for (unsigned i = 0; i < 6; ++i) queue.push({uint16_t(1001 + i), NodeId(unsigned(NodeId::P2) + i)});
+    // 演出の場面では、最初のフレームで炎を上端まで育てる（同じ格子のまま場面を通す）。
+    flameEpoch = 1;
+    flameLeft.reset();
+    flameRight.reset();
     draw_static_layout();
     displayDrawn = false;
     backDisplayDrawn = false;
@@ -149,7 +198,8 @@ void benchmark() {
                     (unsigned long)t.scanWaitUs, (unsigned long)t.transferUs, (unsigned long)t.frameUs,
                     (unsigned long)t.bytes, (unsigned long)t.spans);
   }
-  Serial.println("{\"type\":\"playing_done\",\"data\":{\"samples\":320,\"reference_match\":true,\"buffer_states_valid\":true}}");
+  Serial.printf("{\"type\":\"playing_done\",\"data\":{\"samples\":%u,\"reference_match\":true,\"buffer_states_valid\":true}}\n",
+                SCENES * SAMPLES);
 }
 }
 

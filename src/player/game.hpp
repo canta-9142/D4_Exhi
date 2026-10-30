@@ -18,6 +18,7 @@
 #endif
 #include "packet_animation.hpp"
 #include "gain_animation.hpp"
+#include "playing_effects.hpp"
 #include "drawing.hpp"
 
 PacketQueue packetQueue;
@@ -30,7 +31,7 @@ char nodeUid[13]{};
 FinishedAnimation finishedAnimation;
 CountdownAnimation countdownAnimation;
 GainAnimation gainAnimation;
-RankFlash rankFlash;
+PlayingEffects playingEffects;
 ResultPager resultPager;
 // スナップショットの発行までに押された右端ボタン。発行の間隔より短い押下も取りこぼさない。
 uint8_t resultPageEdges = 0;
@@ -82,7 +83,10 @@ void publish_display_snapshot(uint32_t elapsedMs) {
   const bool gainsEnabled = gains_enabled(snapshot);
   gainAnimation.update(serverLink.take_gains(), gainsEnabled, elapsedMs);
   snapshot.gains = gainAnimation.snapshot();
-  snapshot.rankFlash = rankFlash.update(snapshot.status.rank, gainsEnabled, millis());
+  // 炎・マスコット・コンボと順位の演出。流せない画面では状態を消し、戻ったときに画面を離れていた間の変化を演出しない。
+  playingEffects.update(snapshot.status.combo, snapshot.status.rank, gainsEnabled, millis());
+  snapshot.effects = playingEffects.frame();
+  snapshot.rankFlash = playingEffects.rank_flash();
 #else
   (void)elapsedMs;
 #endif

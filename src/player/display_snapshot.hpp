@@ -7,6 +7,7 @@
 #include "display_layout.hpp"
 #include "packet_animation.hpp"
 #include "gain_animation.hpp"
+#include "playing_effects.hpp"
 #include "game_phase.hpp"
 #include "player_status.hpp"
 #include "frame_damage.hpp"
@@ -32,7 +33,8 @@ struct DisplaySnapshot {
   ResultPage resultPage = ResultPage::Score;
   uint16_t topProgress = 1000;
   GainAnimation::Snapshot gains{};
-  bool rankFlash = false;
+  bool rankFlash = false; // 順位が上がった後、情報欄の数字を緑で描く間
+  EffectsFrame effects{};
 };
 
 static_assert(std::is_trivially_copyable<DisplaySnapshot>::value, "FreeRTOS queues copy snapshots as bytes");
@@ -63,6 +65,28 @@ inline const GainAnimation::Snapshot& displayed_gains(const DisplaySnapshot& s) 
   return gains_enabled(s) ? s.gains : empty;
 }
 inline bool displayed_rank_flash(const DisplaySnapshot& s) { return s.rankFlash && s.status.rank && gains_enabled(s); }
+// 炎・マスコット・コンボの演出も獲得点と同じく、通常のPlaying画面でだけ出す。
+inline const EffectsFrame& displayed_effects(const DisplaySnapshot& s) {
+  static const EffectsFrame empty{};
+  return gains_enabled(s) ? s.effects : empty;
+}
+// 左の列の下端に出すコンボ数。出さないときは0。
+inline uint16_t displayed_combo(const DisplaySnapshot& s) {
+  return gains_enabled(s) && s.status.combo >= COMBO_SHOWN_MIN ? s.status.combo : 0;
+}
+// 飛んでいる・落ちているマスコットに載せる冠。マスコットがいなければ冠もない。
+inline Crown displayed_crown(const DisplaySnapshot& s) {
+  const EffectsFrame& f = displayed_effects(s);
+  const bool mascots = f.form != MascotForm::None || (f.breakMs != EFFECT_OFF && f.breakMs < BREAK_FALL_MS);
+  return mascots ? crown_for_rank(s.status.rank) : Crown::None;
+}
+inline bool same_left_column(const DisplaySnapshot& a, const DisplaySnapshot& b) {
+  return displayed_effects(a) == displayed_effects(b) && displayed_combo(a) == displayed_combo(b) &&
+         displayed_crown(a) == displayed_crown(b);
+}
+inline bool same_right_margin(const DisplaySnapshot& a, const DisplaySnapshot& b) {
+  return same_flame(displayed_effects(a), displayed_effects(b));
+}
 inline bool same_gain_pixels(const GainFloat& previous, const GainFloat& next) {
   if (previous.active != next.active) return false;
   return !next.active || (previous.value == next.value && gain_offset(previous) == gain_offset(next) &&
@@ -120,13 +144,14 @@ struct DisplayChanges {
   PacketDirtyRows cards;
   uint8_t buttons = 0;
   bool self = false, label = false, score = false, remaining = false, ready = false, rank = false, gains = false;
+  bool leftColumn = false, rightMargin = false; // 炎・マスコット・コンボの演出を描く左の列とカード欄の右の余白
   bool full = false, preparingHeader = false, preparingBody = false, preparingBar = false, preparingArrows = false;
   bool resultHeader = false, resultBody = false, resultScore = false, resultRank = false, resultAccent = false;
   bool previewBody = false, countdownBody = false;
   bool topBody = false, topCurve = false; // topCurveはベルカーブとマスの両方を描き直す。
   uint8_t topCell = 0; // 点滅で描き直すマスの番号（1〜50）。0は描き直さない。
   bool any() const {
-    return resultHeader || resultBody || resultScore || resultRank || resultAccent || topBody || topCurve || topCell || previewBody || countdownBody || full || preparingHeader || preparingBody || preparingBar || preparingArrows || cards.any() || buttons || self || label || score || remaining || ready || rank || gains;
+    return resultHeader || resultBody || resultScore || resultRank || resultAccent || topBody || topCurve || topCell || previewBody || countdownBody || full || preparingHeader || preparingBody || preparingBar || preparingArrows || cards.any() || buttons || self || label || score || remaining || ready || rank || gains || leftColumn || rightMargin;
   }
 };
 
@@ -204,6 +229,9 @@ inline DisplayChanges display_changes(const DisplaySnapshot& previous, const Dis
   const auto& newGains = displayed_gains(next);
   changes.gains = first || changes.self;
   for (size_t i = 0; i < newGains.size(); ++i) changes.gains |= !same_gain_pixels(oldGains[i], newGains[i]);
+  // 炎とマスコットは約15fpsの1段ごとに進む。演出の状態・コンボ数・冠が変わったときだけ描き直す。
+  changes.leftColumn = first || !same_left_column(previous, next);
+  changes.rightMargin = first || !same_right_margin(previous, next);
   return changes;
 }
 
@@ -234,6 +262,8 @@ inline FrameDamage display_damage(const DisplayChanges& changes, bool first) {
     while (row < ANIMATION_HEIGHT && changes.cards[row]) ++row;
     damage.markRect(ANIMATION_X, ANIMATION_Y + top, ANIMATION_WIDTH, row - top);
   }
+  if (changes.leftColumn) damage.markRect(LEFT_COLUMN_X, LEFT_COLUMN_Y, LEFT_COLUMN_WIDTH, LEFT_COLUMN_HEIGHT);
+  if (changes.rightMargin) damage.markRect(RIGHT_MARGIN_X, RIGHT_MARGIN_Y, RIGHT_MARGIN_WIDTH, RIGHT_MARGIN_HEIGHT);
   if (changes.self) damage.markRect(361, 1, 119, 79);
   for (unsigned i = 0; i < 4; ++i)
     if (changes.buttons & (1u << i)) damage.markRect(i * 120 + 1, 241, 119, 79);
