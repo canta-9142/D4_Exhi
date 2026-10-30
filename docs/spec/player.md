@@ -263,7 +263,7 @@ Finishedへの遷移時は、接続・識別・割当済みで通常表示のMCU
 {"type":"summary","data":{"sync":"00000000000000000000000000000002","score":345,"rank":2,"eligible":true,"topPercent":12,"gameBest":410,"gameBestNodes":[3],"hourBest":410,"hourBestStart":13,"hourBestMine":false,"allTimeBest":520,"allTimeBestMine":false}}
 ```
 
-対象外の場合は、例えば`score=400, rank=null, eligible=false, topPercent=null`とし、スコアを保持して順位と上位%を付けない。全フィールドは必須とする。`summary.sync`の形式は`reset.sync`と同じで、`eligible=true`なら`rank`は1〜8の整数、falseならnullでなければ不正とする。`topPercent`は1〜50の整数またはnullとし、`eligible=false`ではnullでなければ不正とする。`eligible=true`ではnullも整数も正しい。上位50%を超える人、母数が足りないとき、手動の終了、およびサーバーが過去の記録を使えないときは、`eligible=true`でも`topPercent`はnullになる。MCUはsync・score・rank・eligible・topPercentと、後述のベストスコアの項目の型・範囲・組合せを検証してから一括で適用する。
+対象外の場合は、例えば`score=400, rank=null, eligible=false, topPercent=null`とし、スコアを保持して順位と上位%を付けない。全フィールドは必須とする。`summary.sync`の形式は`reset.sync`と同じで、`eligible=true`なら`rank`は1〜8の整数、falseならnullでなければ不正とする。`topPercent`は1〜50の整数またはnullとし、`eligible=false`ではnullでなければ不正とする。`eligible=true`ではnullも整数も正しい。上位50%を超える人、手動の終了、およびサーバーが過去の記録を使えないときは、`eligible=true`でも`topPercent`はnullになる。MCUはsync・score・rank・eligible・topPercentと、後述のベストスコアの項目の型・範囲・組合せを検証してから一括で適用する。
 
 ベストスコアの項目（gameBest、gameBestNodes、hourBest、hourBestStart、hourBestMine、allTimeBest、allTimeBestMine）は、[ベストスコアの規則](../rules.md#ベストスコア)に従ってサーバーが決め、Finishedへの遷移時に順位と同じ確定状態から1回だけ求めて、以後は変えない。値は[サーバー仕様](./server.md#357-プレイヤーへ送るベストスコア)の3.5.7に従う。組合せは次のとおりとし、満たさない`summary`は不正とする。
 
