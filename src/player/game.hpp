@@ -33,6 +33,7 @@ CountdownAnimation countdownAnimation;
 GainAnimation gainAnimation;
 PlayingEffects playingEffects;
 ResultPager resultPager;
+TopPercentArt topPercentArt;
 // スナップショットの発行までに押された右端ボタン。発行の間隔より短い押下も取りこぼさない。
 uint8_t resultPageEdges = 0;
 #endif
@@ -75,6 +76,9 @@ void publish_display_snapshot(uint32_t elapsedMs) {
   resultPageEdges = 0;
   snapshot.resultPage = resultPager.page();
   snapshot.topProgress = resultPager.progress();
+  // ②のヘッダーのドット絵。派手な動きは塗りの演出をした②でだけ、塗り終えてから出す。
+  topPercentArt.update(top_art_page(snapshot), resultPager.celebrating(), snapshot.topProgress, millis());
+  snapshot.topArt = topPercentArt.frame();
   snapshot.finishedProgress = finishedAnimation.update(snapshot.summary,
       resultReady && snapshot.resultPage == ResultPage::Score, millis());
   snapshot.previewLit = millis() / 500 % 2 == 0;

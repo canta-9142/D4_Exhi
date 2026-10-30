@@ -105,7 +105,7 @@ public:
     // Finishedから離れたとき・設定の無効化・別世代の結果では①へ戻す。
     if (!finished || !summary.known || summary.revision != revision_) {
       page_ = ResultPage::Score;
-      introShown_ = running_ = false;
+      introShown_ = running_ = celebrating_ = false;
       revision_ = summary.revision;
     }
     // 上位%も下位50%の知らせもない結果では②を出さない。
@@ -116,16 +116,19 @@ public:
               page_ == ResultPage::TopPercent ? ResultPage::Bests : ResultPage::Score;
       // 終了演出と同じく、通常の終了遷移で初めて見るときだけ演出する。下位50%は値がないので演出しない。
       if (page_ == ResultPage::TopPercent && summary.topPercent && summary.animate && !introShown_) {
-        introShown_ = running_ = true;
+        introShown_ = running_ = celebrating_ = true;
         startedMs_ = nowMs;
       }
     }
-    if (running_ && (page_ != ResultPage::TopPercent || !ready || !summary.animate ||
-                     nowMs - startedMs_ >= INTRO_MS)) running_ = false;
+    // ページの切替・再同期では演出を取り消す。塗り終えても、ページを離れるまでは演出した②として扱う。
+    if (page_ != ResultPage::TopPercent || !ready || !summary.animate) celebrating_ = false;
+    if (running_ && (!celebrating_ || nowMs - startedMs_ >= INTRO_MS)) running_ = false;
     progress_ = running_ ? static_cast<uint16_t>((nowMs - startedMs_) * 1000 / INTRO_MS) : 1000;
   }
   ResultPage page() const { return page_; }
   uint16_t progress() const { return progress_; }
+  // 通常の終了遷移で初めて開き、塗りの演出をした②を表示している間。ヘッダーの絵の派手な動きに使う。
+  bool celebrating() const { return celebrating_; }
 private:
   uint32_t revision_ = 0;
   uint32_t startedMs_ = 0;
@@ -133,6 +136,7 @@ private:
   ResultPage page_ = ResultPage::Score;
   bool introShown_ = false;
   bool running_ = false;
+  bool celebrating_ = false;
 };
 
 // カウントダウンが表示中に0へ変わったとき、GO!を出す期間を返す。表示だけの演出で通信状態は変えない。

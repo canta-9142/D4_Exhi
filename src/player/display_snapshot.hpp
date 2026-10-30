@@ -13,6 +13,7 @@
 #include "frame_damage.hpp"
 #include "ready_hold.hpp"
 #include "top_percent.hpp"
+#include "top_percent_art.hpp"
 
 struct DisplaySnapshot {
   PacketAnimation::Snapshot cards;
@@ -32,6 +33,7 @@ struct DisplaySnapshot {
   bool countdownGo = false;
   ResultPage resultPage = ResultPage::Score;
   uint16_t topProgress = 1000;
+  TopArtFrame topArt{}; // ②のヘッダーのドット絵
   GainAnimation::Snapshot gains{};
   bool rankFlash = false; // 順位が上がった後、情報欄の数字を緑で描く間
   EffectsFrame effects{};
@@ -104,6 +106,17 @@ inline bool same_bests(const FinalSummary& a, const FinalSummary& b) {
          a.hourBestStart == b.hourBestStart && a.hourBestMine == b.hourBestMine &&
          a.allTimeBest == b.allTimeBest && a.allTimeBestMine == b.allTimeBestMine;
 }
+// ②のヘッダーにドット絵を出すか。結果を表示できる②（上位%か下位50%）の間だけ。ゲーム側の進行と描画の両方が使う。
+inline bool top_art_page(const DisplaySnapshot& s) {
+  return display_screen(s) == DisplayScreen::Finished && finished_state(s) == FinishedState::Ready &&
+         s.resultPage == ResultPage::TopPercent && top_art_tier(s.summary);
+}
+inline TopArtFrame displayed_top_art(const DisplaySnapshot& s) { return top_art_page(s) ? s.topArt : TopArtFrame{}; }
+// Finishedの見出しのモード表示（MANUAL・AUTO）を描き直す範囲。②のヘッダーの絵の範囲とは重ねない。
+constexpr int RESULT_MODE_X = 24, RESULT_MODE_Y = 48, RESULT_MODE_WIDTH = TOP_ART_X - RESULT_MODE_X, RESULT_MODE_HEIGHT = 24;
+inline bool same_top_art(const DisplaySnapshot& a, const DisplaySnapshot& b) {
+  return same_top_art(top_art_tier(a.summary), displayed_top_art(a), top_art_tier(b.summary), displayed_top_art(b));
+}
 inline int32_t displayed_final_score(const DisplaySnapshot& s) {
   const uint64_t left = 1000 - std::min<unsigned>(s.finishedProgress, 1000);
   return static_cast<int32_t>(uint64_t(s.summary.score) * (1000000000 - left * left * left) / 1000000000);
@@ -150,8 +163,9 @@ struct DisplayChanges {
   bool previewBody = false, countdownBody = false;
   bool topBody = false, topCurve = false; // topCurveはベルカーブとマスの両方を描き直す。
   uint8_t topCell = 0; // 点滅で描き直すマスの番号（1〜50）。0は描き直さない。
+  bool topArt = false; // ②のヘッダーのドット絵の範囲
   bool any() const {
-    return resultHeader || resultBody || resultScore || resultRank || resultAccent || topBody || topCurve || topCell || previewBody || countdownBody || full || preparingHeader || preparingBody || preparingBar || preparingArrows || cards.any() || buttons || self || label || score || remaining || ready || rank || gains || leftColumn || rightMargin;
+    return resultHeader || resultBody || resultScore || resultRank || resultAccent || topBody || topCurve || topCell || topArt || previewBody || countdownBody || full || preparingHeader || preparingBody || preparingBar || preparingArrows || cards.any() || buttons || self || label || score || remaining || ready || rank || gains || leftColumn || rightMargin;
   }
 };
 
@@ -181,6 +195,8 @@ inline DisplayChanges display_changes(const DisplaySnapshot& previous, const Dis
         previous.resultPage != next.resultPage || previous.summary.topPercent != next.summary.topPercent ||
         previous.summary.bottomHalf != next.summary.bottomHalf ||
         (next.resultPage == ResultPage::Bests && (changes.self || !same_bests(previous.summary, next.summary)));
+    // ②のヘッダーの絵は、絵が変わったときと、②を離れて消すときに描き直す。
+    changes.topArt = !same_top_art(previous, next) || (first && displayed_top_art(next).shown);
     if (finished_state(next) == FinishedState::Ready && next.resultPage == ResultPage::TopPercent) {
       changes.topBody = changes.resultBody || changes.self;
       // 下位50%の②には演出も点滅もなく、本文を描くときだけ描く。
@@ -239,7 +255,7 @@ inline FrameDamage display_damage(const DisplayChanges& changes, bool first) {
   FrameDamage damage;
   if (first || changes.full) { damage.full(); return damage; }
   if (changes.resultBody || changes.previewBody || changes.countdownBody) damage.markRect(0, 81, 480, 239);
-  if (changes.resultHeader) damage.markRect(24, 48, 320, 24);
+  if (changes.resultHeader) damage.markRect(RESULT_MODE_X, RESULT_MODE_Y, RESULT_MODE_WIDTH, RESULT_MODE_HEIGHT);
   if (changes.resultScore) damage.markRect(24, 128, 432, 56);
   if (changes.resultRank) damage.markRect(24, 216, 336, 104);
   if (changes.resultAccent) damage.markRect(40, 192, 400, 4);
@@ -249,6 +265,7 @@ inline FrameDamage display_damage(const DisplayChanges& changes, bool first) {
     damage.markRect(GRID_X, GRID_Y, GRID_SIZE, GRID_SIZE);
   }
   if (changes.topCell) damage.markRect(grid_cell_x(changes.topCell - 1), grid_cell_y(changes.topCell - 1), GRID_CELL, GRID_CELL);
+  if (changes.topArt) damage.markRect(TOP_ART_X, TOP_ART_Y, TOP_ART_WIDTH, TOP_ART_HEIGHT);
   if (changes.preparingBody) damage.markRect(0, 81, 480, 239);
   if (changes.preparingHeader) damage.markRect(24, 48, 320, 24);
   if (changes.preparingBar) damage.markRect(40, 152, 400, 32);

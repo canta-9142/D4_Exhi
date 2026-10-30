@@ -340,4 +340,86 @@ constexpr const char* UP_ARROW[] = {
 constexpr const char* const* UP_ARROW_FRAMES[] = {UP_ARROW};
 constexpr ArtPart UP_ARROW_PART{UP_ARROW_FRAMES, 1, 5, 5, 0};
 
+// ---- 結果②の小物（マスコットが持つ・下げる。冠はマスコットの部品を使う）と、きらめき・散る星 ----
+// Y・O 金 / R リボン / E 星の黄 / e 星の橙。光る点は共通の白（W）。
+constexpr ArtColor TOP_PROP_COLORS[] = {
+  {'Y', art_rgb(0xf5c518)}, {'O', art_rgb(0xb88a00)}, {'R', art_rgb(0xe0383e)},
+  {'E', art_rgb(0xffe14a)}, {'e', art_rgb(0xff8a1e)},
+};
+constexpr ArtPalette TOP_PROP_PALETTE{TOP_PROP_COLORS, sizeof(TOP_PROP_COLORS) / sizeof(TOP_PROP_COLORS[0])};
+
+// 体の前で抱えるトロフィー。
+constexpr const char* TOP_TROPHY[] = {
+  "YYYYYYYYY",
+  "Y.YWYYO.Y",
+  "Y.YWYYO.Y",
+  ".YYYYYOY.",
+  "..YYYOO..",
+  "...OYO...",
+  "....O....",
+  "..OOOOO..",
+};
+constexpr const char* const* TOP_TROPHY_FRAMES[] = {TOP_TROPHY};
+constexpr ArtPart TOP_TROPHY_PART{TOP_TROPHY_FRAMES, 1, 9, 8, 0};
+
+// 羽の先で持つ大きな星。
+constexpr const char* TOP_BIG_STAR[] = {
+  "....E....",
+  "...EEE...",
+  "...EWE...",
+  "EEEEWEEEE",
+  ".EEEEEEe.",
+  "..EEEEe..",
+  "..EEEEe..",
+  ".EEe.EEe.",
+  ".Ee...Ee.",
+};
+constexpr const char* const* TOP_BIG_STAR_FRAMES[] = {TOP_BIG_STAR};
+constexpr ArtPart TOP_BIG_STAR_PART{TOP_BIG_STAR_FRAMES, 1, 9, 9, 0};
+
+// 口の下に下げるメダル。
+constexpr const char* TOP_MEDAL[] = {
+  "RR...RR",
+  ".RR.RR.",
+  "..YYY..",
+  ".YWYYY.",
+  ".YYYYO.",
+  ".YYYOO.",
+  "..OOO..",
+};
+constexpr const char* const* TOP_MEDAL_FRAMES[] = {TOP_MEDAL};
+constexpr ArtPart TOP_MEDAL_PART{TOP_MEDAL_FRAMES, 1, 7, 7, 0};
+
+// メダルのきらめき（小・大の2コマ）。
+constexpr const char* TOP_GLINT_SMALL[] = {
+  "...",
+  ".W.",
+  "...",
+};
+constexpr const char* TOP_GLINT_BIG[] = {
+  ".W.",
+  "WWW",
+  ".W.",
+};
+constexpr const char* const* TOP_GLINT_FRAMES[] = {TOP_GLINT_SMALL, TOP_GLINT_BIG};
+constexpr ArtPart TOP_GLINT_PART{TOP_GLINT_FRAMES, 2, 3, 3, 0};
+
+// 散る星（大・小の2コマで瞬く）。
+constexpr const char* TOP_SPARKLE_BIG[] = {
+  "..E..",
+  "..E..",
+  "EEWEE",
+  "..E..",
+  "..E..",
+};
+constexpr const char* TOP_SPARKLE_SMALL[] = {
+  ".....",
+  "..E..",
+  ".EWE.",
+  "..E..",
+  ".....",
+};
+constexpr const char* const* TOP_SPARKLE_FRAMES[] = {TOP_SPARKLE_BIG, TOP_SPARKLE_SMALL};
+constexpr ArtPart TOP_SPARKLE_PART{TOP_SPARKLE_FRAMES, 2, 5, 5, 100};
+
 #endif // PIXEL_ART_HPP_

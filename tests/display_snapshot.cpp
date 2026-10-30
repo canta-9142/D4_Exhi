@@ -243,6 +243,67 @@ int main() {
   noBottom.summary.bottomHalf = false;
   noBottom.resultPage = ResultPage::Score;
   assert(display_changes(bottomPage, noBottom, false).resultBody); // 点の数が変わる。
+  // ②のヘッダーのドット絵は、ヘッダーの絵の範囲だけを描き直す。
+  auto artPage = topPage;
+  artPage.topArt = {true, true, 0};
+  diff = display_changes(topPage, artPage, false);
+  assert(diff.topArt && !diff.topBody && !diff.topCurve && !diff.topCell && !diff.resultBody && !diff.resultHeader);
+  area = display_damage(diff, false);
+  assert(area.containsPixel(TOP_ART_X, TOP_ART_Y) && area.containsPixel(TOP_ART_X + TOP_ART_WIDTH - 1, TOP_ART_Y + TOP_ART_HEIGHT - 1));
+  // 16画素のタイルへ丸めた範囲（x=192〜367、y=0〜79）の外は送らない。自ノードの札・本文・ボタン枠に触れない。
+  assert(area.changedTiles() == 11 * 5);
+  assert(!area.containsPixel(191, 40) && !area.containsPixel(368, 40) && !area.containsPixel(260, 80));
+  // 絵の範囲は、RESULT（x=24から6文字、文字サイズ3）・モード表示の消去範囲の右、自ノードの札（x=361〜）の左、区切り線（y=80）の上。
+  constexpr int RESULT_LABEL_RIGHT = 24 + 6 * 6 * 3;
+  assert(RESULT_LABEL_RIGHT <= TOP_ART_X && RESULT_MODE_X + RESULT_MODE_WIDTH <= TOP_ART_X);
+  assert(TOP_ART_X + TOP_ART_WIDTH <= 360 && TOP_ART_Y + TOP_ART_HEIGHT <= 80);
+  auto artNext = artPage;
+  artNext.topArt.ms = TOP_ART_STEP_MS;
+  diff = display_changes(artPage, artNext, false);
+  assert(diff.topArt && !diff.topBody && !diff.topCurve && !diff.topCell && !diff.resultBody);
+  assert(!display_changes(artPage, artPage, false).any()); // 何も変わらないときは描かない。
+  auto artBlink = artPage;
+  artBlink.previewLit = !artPage.previewLit;
+  diff = display_changes(artPage, artBlink, false);
+  assert(!diff.topArt && diff.topCell == 12); // マスの点滅では絵を描き直さない。
+  // 見出しのモード表示は絵の範囲に重ならないので、モードが変わっても絵は描き直さない。
+  auto artMode = artPage;
+  artMode.mode = ControlMode::Auto;
+  diff = display_changes(artPage, artMode, false);
+  assert(diff.resultHeader && !diff.topArt);
+  area = display_damage(diff, false);
+  assert(area.containsPixel(RESULT_MODE_X, RESULT_MODE_Y) && !area.containsPixel(260, 56) && !area.containsPixel(343, 71));
+  assert(display_changes(artPage, artPage, true).topArt); // 全画面を描き直すときも描く。
+  // ページを替えたら絵を消す（描き直して黒にする）。
+  auto artLeft = artPage;
+  artLeft.resultPage = ResultPage::Bests;
+  artLeft.topArt = {};
+  diff = display_changes(artPage, artLeft, false);
+  assert(diff.topArt && diff.resultBody && !displayed_top_art(artLeft).shown);
+  assert(!display_changes(artLeft, artLeft, false).topArt);
+  // ②を出さない結果・同期待ち・①と③・Finished以外では、状態が残っていても絵を出さない。
+  for (int i = 0; i < 5; ++i) {
+    auto hidden = artPage;
+    if (i == 0) hidden.summary.topPercent = 0;
+    if (i == 1) hidden.synced = false;
+    if (i == 2) hidden.resultPage = ResultPage::Score;
+    if (i == 3) hidden.preview = true;
+    if (i == 4) hidden.phase = GamePhase::Preparing;
+    assert(!displayed_top_art(hidden).shown);
+  }
+  // 静かな表示では、画素の変わらない段で描き直さない（下位50%のしょんぼりは羽を下ろした後は動かない）。
+  auto sadPage = bottomPage;
+  sadPage.topArt = {true, false, TOP_DROOP_MS};
+  auto sadLater = sadPage;
+  sadLater.topArt.ms = TOP_ART_CYCLE_MS - TOP_ART_STEP_MS;
+  assert(!display_changes(sadPage, sadLater, false).any());
+  sadLater.topArt.ms = 0;
+  diff = display_changes(sadPage, sadLater, false);
+  assert(diff.topArt && !diff.topBody); // 羽を上げる段では描き直す。
+  // 派手な動きの間は段ごとに描き直す。
+  auto burstLater = artPage;
+  burstLater.topArt.ms = TOP_ART_CYCLE_MS - TOP_ART_STEP_MS;
+  assert(display_changes(artPage, burstLater, false).topArt);
   // ③は本文とボタン枠を1度だけ描き、値・ページ・自ノードが変わったときだけ描き直す。
   auto bestPage = ranked;
   bestPage.summary.gameBest = 410;
@@ -570,5 +631,5 @@ int main() {
   plan = plan_transfer(timing, blocks, 3);
   assert(!plan.feasible && std::isfinite(plan.startDelayFromScanUs));
   assert(!plan_transfer(timing, blocks, 0).feasible);
-  std::puts("PASS: rank and gains in the info column, playing effects only on the normal Playing screen with left-column and right-margin damage, state-driven damage, old/new card rows, clipping, no-op frames, countdown screen, top percent page, three-page pager and best scores, sparse transfer timing");
+  std::puts("PASS: rank and gains in the info column, playing effects only on the normal Playing screen with left-column and right-margin damage, state-driven damage, old/new card rows, clipping, no-op frames, countdown screen, top percent page with header art damage, three-page pager and best scores, sparse transfer timing");
 }

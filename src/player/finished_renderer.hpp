@@ -141,6 +141,13 @@ inline void draw_top_body(FrameBuffer& frame, const DisplaySnapshot& s) {
   draw_next_hint(frame, s);
 }
 
+// ②のヘッダーの空きを消し、②を出しているならマスコットのドット絵を描く。
+inline void draw_top_art_area(FrameBuffer& frame, const DisplaySnapshot& s) {
+  frame.fillRect(TOP_ART_X, TOP_ART_Y, TOP_ART_WIDTH, TOP_ART_HEIGHT, TFT_BLACK);
+  const TopArtFrame art = displayed_top_art(s);
+  if (art.shown) draw_top_art(frame, *top_art_tier(s.summary), art);
+}
+
 // ③の行頭の絵。8×8のドット絵を3倍で描く。各行の最上位ビットが左端。
 constexpr uint8_t BEST_ICONS[3][8] = {
   {0xFE, 0xFC, 0xFE, 0xFC, 0x80, 0x80, 0x80, 0xE0}, // 旗（その回）
@@ -197,12 +204,13 @@ inline void draw_best_body(FrameBuffer& frame, const DisplaySnapshot& s) {
 inline void render_finished(FrameBuffer& frame, const DisplaySnapshot& s, const DisplayChanges& changes) {
   const auto state = finished_state(s);
   if (changes.resultHeader) {
-    frame.fillRect(24, 48, 320, 24, TFT_BLACK);
+    frame.fillRect(RESULT_MODE_X, RESULT_MODE_Y, RESULT_MODE_WIDTH, RESULT_MODE_HEIGHT, TFT_BLACK);
     frame.setFont(&fonts::Font0);
     frame.setTextSize(1);
     frame.setTextColor(TFT_WHITE, TFT_BLACK);
     frame.drawString(s.mode == ControlMode::Manual ? "MANUAL" : "AUTO", 24, 56);
   }
+  if (changes.topArt) draw_top_art_area(frame, s);
   if (changes.resultBody) {
     frame.fillRect(0, 81, 480, 239, TFT_BLACK);
     if (state != FinishedState::Ready) {
