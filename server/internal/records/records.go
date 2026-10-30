@@ -15,7 +15,8 @@ import (
 	"time"
 
 	"github.com/canta-9142/d4-exhi/internal/app"
-	_ "modernc.org/sqlite" // cgo-free, for Windows tests and arm64 cross builds.
+	"modernc.org/sqlite" // cgo-free, for Windows tests and arm64 cross builds.
+	sqlite3 "modernc.org/sqlite/lib"
 )
 
 // migrations[v] brings a database from schema version v to v+1, as kept in
@@ -51,6 +52,15 @@ const timeLayout = "2006-01-02T15:04:05.000Z07:00"
 // the file, so migrate sets it only once the file is known to be ours.
 const connectionSettings = "?_pragma=busy_timeout(1000)&_pragma=foreign_keys(1)&_pragma=synchronous(FULL)"
 
+// exclusiveSettings make a connection keep every lock it takes until it
+// closes. Set before the first access, they also keep the WAL index out of
+// shared memory, so that the connection needs the file to itself.
+const exclusiveSettings = "&_pragma=locking_mode(EXCLUSIVE)"
+
+// ErrInUse means another connection, such as a running server, has the
+// records file open.
+var ErrInUse = errors.New("records file is in use by another connection")
+
 // Store is an open records file. Its methods may be called from one
 // goroutine at a time.
 type Store struct {
@@ -64,7 +74,20 @@ func Open(path string) (*Store, error) {
 	return open(path, migrations)
 }
 
+// OpenExclusive opens the existing records file at path as Open does, for
+// maintenance while the server is stopped. It keeps an exclusive lock on the
+// file until Close, and fails with ErrInUse if another connection has the
+// file open, so that the file never changes under a server that has loaded
+// it. Unlike Open it never creates a file.
+func OpenExclusive(path string) (*Store, error) {
+	return openStore(path, migrations, true)
+}
+
 func open(path string, migrations [][]string) (*Store, error) {
+	return openStore(path, migrations, false)
+}
+
+func openStore(path string, migrations [][]string, exclusive bool) (*Store, error) {
 	// The driver reads everything after '?' as its own parameters, and SQLite
 	// opens a name starting with "file:" as a URI rather than as this path.
 	if strings.TrimSpace(path) == "" || strings.ContainsRune(path, '?') || strings.HasPrefix(path, "file:") {
@@ -72,7 +95,7 @@ func open(path string, migrations [][]string) (*Store, error) {
 	}
 	info, err := os.Stat(path)
 	switch {
-	case errors.Is(err, fs.ErrNotExist):
+	case errors.Is(err, fs.ErrNotExist) && !exclusive:
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 			return nil, err
 		}
@@ -81,18 +104,43 @@ func open(path string, migrations [][]string) (*Store, error) {
 	case !info.Mode().IsRegular():
 		return nil, fmt.Errorf("records path %s is not a regular file", path)
 	}
-	db, err := sql.Open("sqlite", path+connectionSettings)
+	settings := connectionSettings
+	if exclusive {
+		settings += exclusiveSettings
+	}
+	db, err := sql.Open("sqlite", path+settings)
 	if err != nil {
 		return nil, err
 	}
 	// One connection keeps the per-connection settings and serializes writes.
 	db.SetMaxOpenConns(1)
 	s := &Store{db: db}
+	if exclusive {
+		if err := s.lock(); err != nil {
+			db.Close()
+			return nil, err
+		}
+	}
 	if err := s.migrate(migrations); err != nil {
 		db.Close()
 		return nil, err
 	}
 	return s, nil
+}
+
+// lock takes the exclusive lock that the connection then keeps, before
+// anything reads the file.
+func (s *Store) lock() error {
+	ctx := context.Background()
+	if _, err := s.db.ExecContext(ctx, "BEGIN EXCLUSIVE"); err != nil {
+		var e *sqlite.Error
+		if errors.As(err, &e) && e.Code()&0xff == sqlite3.SQLITE_BUSY {
+			return fmt.Errorf("%w: %w", ErrInUse, err)
+		}
+		return err
+	}
+	_, err := s.db.ExecContext(ctx, "COMMIT")
+	return err
 }
 
 // migrate checks the version, the schema and every record before committing
@@ -244,8 +292,16 @@ const maxMilliseconds = int64(math.MaxInt64 / time.Millisecond)
 
 // SaveGame writes r in one transaction.
 func (s *Store) SaveGame(r app.GameRecord) error {
-	if err := check(r); err != nil {
-		return err
+	return s.SaveGames([]app.GameRecord{r})
+}
+
+// SaveGames writes records in order in one transaction, so that either all
+// of them or none are saved.
+func (s *Store) SaveGames(records []app.GameRecord) error {
+	for _, r := range records {
+		if err := check(r); err != nil {
+			return err
+		}
 	}
 	ctx := context.Background()
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -253,6 +309,15 @@ func (s *Store) SaveGame(r app.GameRecord) error {
 		return err
 	}
 	defer tx.Rollback()
+	for _, r := range records {
+		if err := insert(ctx, tx, r); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+func insert(ctx context.Context, tx *sql.Tx, r app.GameRecord) error {
 	res, err := tx.ExecContext(ctx, "INSERT INTO games (finished_at, duration_ms, elapsed_ms, reason) VALUES (?, ?, ?, ?)",
 		r.FinishedAt.UTC().Format(timeLayout), r.Duration.Milliseconds(), r.Elapsed.Milliseconds(), string(r.Reason))
 	if err != nil {
@@ -272,7 +337,74 @@ func (s *Store) SaveGame(r app.GameRecord) error {
 			return err
 		}
 	}
+	return nil
+}
+
+// DeleteAll deletes every game in one transaction and reports how many it
+// deleted. The schema and its version stay, and the ids of later games start
+// again from 1.
+func (s *Store) DeleteAll() (int64, error) {
+	ctx := context.Background()
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+	n, err := deleteAll(ctx, tx)
+	if err != nil {
+		return 0, err
+	}
+	return n, tx.Commit()
+}
+
+// ReplaceAll replaces every game with records in one transaction, so that
+// either the old games or records remain. records get new ids from 1 in
+// their order.
+func (s *Store) ReplaceAll(records []app.GameRecord) error {
+	for _, r := range records {
+		if err := check(r); err != nil {
+			return err
+		}
+	}
+	ctx := context.Background()
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := deleteAll(ctx, tx); err != nil {
+		return err
+	}
+	for _, r := range records {
+		if err := insert(ctx, tx, r); err != nil {
+			return err
+		}
+	}
 	return tx.Commit()
+}
+
+func deleteAll(ctx context.Context, tx *sql.Tx) (int64, error) {
+	if _, err := tx.ExecContext(ctx, "DELETE FROM results"); err != nil {
+		return 0, err
+	}
+	res, err := tx.ExecContext(ctx, "DELETE FROM games")
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
+// Backup writes a consistent copy of the file to path, which must not exist.
+// The copy is a complete database without a WAL file.
+func (s *Store) Backup(path string) error {
+	// VACUUM INTO would also write into an existing empty file.
+	if _, err := os.Lstat(path); err == nil {
+		return fmt.Errorf("backup %s already exists", path)
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	_, err := s.db.ExecContext(context.Background(), "VACUUM INTO ?", path)
+	return err
 }
 
 // Close closes the file. A Store cannot be used after Close.
