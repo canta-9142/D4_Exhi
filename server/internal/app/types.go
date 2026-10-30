@@ -116,6 +116,14 @@ type LightData struct {
 	Destination NodeID
 	Direction   string
 }
+
+// CheerData sends light out of Node, a player with the game's best score,
+// along the link to Neighbor in the colors of Style (led.md).
+type CheerData struct {
+	Neighbor NodeID
+	Node     NodeID
+	Style    string
+}
 type BufferData struct{ Count int }
 
 // MarshalLine preserves the LED text protocol; identify remains shared JSON.
@@ -128,6 +136,10 @@ func (m Message) MarshalLine() ([]byte, error) {
 	case "LIGHT":
 		if d, ok := m.Data.(LightData); ok && d.Neighbor >= 1 && d.Neighbor <= NodeCount && d.Destination >= 1 && d.Destination <= NodeCount && (d.Direction == "incoming" || d.Direction == "outgoing") {
 			return []byte(fmt.Sprintf("LIGHT %s %s %s", d.Neighbor.wireName(), d.Destination.wireName(), d.Direction)), nil
+		}
+	case "CHEER":
+		if d, ok := m.Data.(CheerData); ok && d.Neighbor.player() && d.Node.player() && (d.Style == "game" || d.Style == "hour" || d.Style == "record") {
+			return []byte(fmt.Sprintf("CHEER %s %s %s", d.Neighbor.wireName(), d.Node.wireName(), d.Style)), nil
 		}
 	case "BUFFER":
 		if d, ok := m.Data.(BufferData); ok && d.Count >= 0 && d.Count <= botCapacity {

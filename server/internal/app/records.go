@@ -170,12 +170,32 @@ func (a *App) setSummaryBests(data *SummaryData, node NodeID) {
 	if h := a.deviceBests.hour; h != nil {
 		start := h.HourStart.In(JST).Hour()
 		data.HourBest, data.HourBestStart = optionalScore(h.Score), &start
-		data.HourBestMine = a.deviceBests.hourMine && slices.Contains(h.Nodes, node)
 	}
 	if b := a.deviceBests.allTime; b != nil {
 		data.AllTimeBest = optionalScore(b.Score)
-		data.AllTimeBestMine = a.deviceBests.allTimeMine && slices.Contains(b.Nodes, node)
 	}
+	data.HourBestMine, data.AllTimeBestMine = a.deviceBests.mine(node)
+}
+
+// mine reports whether node is in the hourly and all-time bests that the game
+// set, as its summary's hourBestMine and allTimeBestMine.
+func (b deviceBests) mine(node NodeID) (hour, allTime bool) {
+	hour = b.hourMine && b.hour != nil && slices.Contains(b.hour.Nodes, node)
+	allTime = b.allTimeMine && b.allTime != nil && slices.Contains(b.allTime.Nodes, node)
+	return hour, allTime
+}
+
+// cheerStyle is the CHEER style of node, a node of the game's best: that of
+// the highest best it set (server.md 5.3).
+func (b deviceBests) cheerStyle(node NodeID) string {
+	hour, allTime := b.mine(node)
+	switch {
+	case allTime:
+		return "record"
+	case hour:
+		return "hour"
+	}
+	return "game"
 }
 
 // optionalScore is a copy of score for a message, so that it does not alias

@@ -3,6 +3,7 @@ package app
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"slices"
 	"strings"
 )
 
@@ -199,6 +200,7 @@ func (a *App) notify(c change) {
 		a.autoAssignPending()
 	case "finished":
 		a.recordGame()
+		a.sendCheers()
 	case "reset":
 		a.gameBest = nil
 		a.deviceBests = deviceBests{}
@@ -270,16 +272,18 @@ func (a *App) buffer(node NodeID) {
 	}
 }
 
-// Every undirected link is driven by one controller from the LED layout table.
-func (a *App) light(from, to, destination NodeID) {
-	owner, neighbor := from, to
-	if to.bot() {
-		owner, neighbor = to, from
-	} else if !from.bot() {
-		if from%2 == 0 {
-			owner, neighbor = to, from
-		}
+// linkOwner is the controller that drives the undirected link between a and b
+// in the LED layout table, and the neighbor it names the link by: a bot drives
+// its links, and of two players the odd one does.
+func linkOwner(a, b NodeID) (owner, neighbor NodeID) {
+	if b.bot() || !a.bot() && a%2 == 0 {
+		return b, a
 	}
+	return a, b
+}
+
+func (a *App) light(from, to, destination NodeID) {
+	owner, neighbor := linkOwner(from, to)
 	id := a.nodeSession(LEDDevice, owner)
 	if id == "" || (a.preview != nil && a.preview.uid == a.sessions[id].uid) {
 		return
@@ -289,4 +293,43 @@ func (a *App) light(from, to, destination NodeID) {
 		direction = "incoming"
 	}
 	a.send(id, Message{Type: "LIGHT", Data: LightData{neighbor, destination, direction}})
+}
+
+// cheer is a CHEER command and the controller to send it to.
+type cheer struct {
+	owner NodeID
+	data  CheerData
+}
+
+// cheers lists the CHEER commands of a finished game (server.md 5.3): one for
+// every link of each node in its best, from that node in the style of the
+// highest best it set. A link between two tied nodes gets one, from the lower.
+func cheers(best *BestScore, bests deviceBests) []cheer {
+	if best == nil {
+		return nil
+	}
+	var list []cheer
+	for _, node := range best.Nodes {
+		style := bests.cheerStyle(node)
+		for _, other := range neighbors[node] {
+			if other < node && slices.Contains(best.Nodes, other) {
+				continue
+			}
+			owner, neighbor := linkOwner(node, other)
+			list = append(list, cheer{owner, CheerData{neighbor, node, style}})
+		}
+	}
+	return list
+}
+
+// sendCheers sends the CHEER commands once, at Finished. A controller set up
+// again while Finished never gets them: the 8-second cheer would no longer
+// follow the result (server.md 5.3).
+func (a *App) sendCheers() {
+	for _, c := range cheers(a.gameBest, a.deviceBests) {
+		id := a.nodeSession(LEDDevice, c.owner)
+		if id != "" && !a.previewing(id) {
+			a.send(id, Message{Type: "CHEER", Data: c.data})
+		}
+	}
 }
