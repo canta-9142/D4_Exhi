@@ -324,6 +324,11 @@ Windowsでの`go test`とarm64 Linux向けのクロスビルドでCコンパイ�
 | `(*Store).Load()` | 全ゲームを保存順に読み込み、全件を検証 |
 | `(*Store).SaveGame(GameRecord)` | 1ゲーム分を1トランザクションで書き込む |
 | `(*Store).Close()` | 接続を閉じる |
+| `records.OpenExclusive(path)` | 既存のファイルだけを`Open`と同じく開き、`Close`まで排他ロックを保つ。他の接続が開いていれば`ErrInUse` |
+| `(*Store).SaveGames([]GameRecord)` | 複数のゲームを1トランザクションで書き込む |
+| `(*Store).DeleteAll()` | 全ゲームを1トランザクションで削除し、件数を返す |
+| `(*Store).ReplaceAll([]GameRecord)` | 全ゲームを1トランザクションで入れ替える。idは1から振り直す |
+| `(*Store).Backup(path)` | `VACUUM INTO`で、存在しないパスへ一貫した複製を作る |
 
 保存先は`-records-file`で指定し、既定値は作業ディレクトリ基準の`data/records.sqlite3`とする。
 空のパス、`?`を含むパス、`file:`で始まるパスは開けないファイルとして扱い、起動を続ける。
@@ -346,6 +351,41 @@ Windowsでの`go test`とarm64 Linux向けのクロスビルドでCコンパイ�
 集計は起動時に過去の記録を保存順に1件ずつ加え、以後は終了ごとに1件加える。
 同点では置き換えないため、先に保存したゲームが残る。`State`は集計結果を複製して返す。
 `web`は`app.JST`で時刻を+09:00のRFC3339へ変換する。
+
+## 記録の保守コマンド
+
+仕様は[サーバー仕様3.5.8](../spec/server.md#358-記録の保守コマンド)に従う。プロジェクトルートで実行する。
+
+```sh
+nix develop -c go -C server run ./cmd/records histogram
+nix develop -c go -C server run ./cmd/records clear
+nix develop -c go -C server run ./cmd/records seed -count 300
+nix develop -c go -C server run ./cmd/records seed -count 300 -mean 1400 -sd 250 -min 600 -max 2200 -rand-seed 7
+nix develop -c go -C server run ./cmd/records seed -scores 1250,1380,1520 -at 2026-10-31T09:00:00+09:00
+nix develop -c go -C server run ./cmd/records restore -from data/records.sqlite3.bak-20261030-180000
+```
+
+`-records-file`の既定は`cmd/server`と同じ`data/records.sqlite3`で、作業ディレクトリ基準である。
+`go -C server`では作業ディレクトリが`server/`になるので、サーバーと同じ指定にする。
+
+`histogram`はサーバーの動作中も使える。`records.Open`で開くので、古い版のファイルはサーバーの起動時と同じく移行される。
+`clear`・`seed`・`restore`はサーバーを止めてから実行し、終わったらサーバーを起動する。
+`records.OpenExclusive`は`locking_mode=EXCLUSIVE`を接続設定に加え、最初のアクセスで`BEGIN EXCLUSIVE`を実行する。
+サーバーの接続が開いている間は、ここで`busy_timeout`の1000ms待った後に`SQLITE_BUSY`になる（LinuxとWindowsのテストで確認）。
+取ったロックは`Close`まで解かないので、その間はサーバーの`records.Open`も失敗する。
+
+`seed`の`-count`は`-mean`（既定1400）・`-sd`（既定250）・`-min`（既定600）・`-max`（既定2200）の正規分布から点数を作る。
+`-rand-seed`を省くと現在時刻から決め、表示したシードを指定すると同じ点数を作り直せる。
+確認の前に追加後の帯ごとの件数、最高点（通算のベストスコアになる）、終了時刻の範囲を表示するので、分布が気に入らなければ確認の入力で中止して作り直す。
+`-scores`と`-count`は同時に指定できず、点数は1回に10000件までとする。
+
+`clear`のバックアップは、記録ファイルと同じディレクトリの`records.sqlite3.bak-YYYYMMDD-HHMMSS`になる。
+戻すときは、サーバーを止めて`restore -from <バックアップ>`を実行する。バックアップを記録ファイルの名前へ手で複製しない。
+異常終了したサーバーの`-wal`が残っていると、SQLiteがそれを複製したバックアップへ適用し、中身が混ざるためである
+（検証で不正と分かれば記録を使えない起動になるが、いつも分かるとは限らない）。
+`restore`は記録ファイルを`OpenExclusive`で開き、残った`-wal`を本来のファイルへ適用させてから、`ReplaceAll`で中身を入れ替える。
+バックアップは一時ディレクトリへ複製してから`records.Open`で検証して読む。バックアップ自体を開くと、古い版の移行やWALへの切替で変更してしまうためである。
+バックアップの`-wal`は複製に含められないので、あれば中止する。`clear`が作るバックアップは`VACUUM INTO`の出力で、`-wal`を持たない。
 
 ## 運用の注意
 
