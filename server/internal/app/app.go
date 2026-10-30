@@ -47,7 +47,7 @@ type session struct {
 	lastRID        uint32
 	hasRID         bool
 	lastIdentify   time.Time
-	lastStatus     StatusData
+	lastStatus     statusKey
 	hasStatus      bool
 	forceStatus    bool
 	phasePending   bool

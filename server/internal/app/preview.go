@@ -33,6 +33,9 @@ func (a *App) setPreview(uid string) error {
 		node = 1
 	}
 	a.preview = &preview{uid: uid, node: node}
+	if d.kind == PlayerDevice && d.node != 0 {
+		a.game.nodes[d.node].gains = nil
+	}
 	if d.kind == LEDDevice {
 		a.send(d.session, Message{Type: "CONFIG", Data: LEDConfigData{Node: node, Preview: true}})
 	} else if a.send(d.session, Message{Type: "config", Data: ConfigData{Node: node, Mode: "auto", Preview: true}}) && a.resetFIFO(d.session, d.node) {

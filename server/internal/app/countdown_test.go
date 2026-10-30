@@ -33,7 +33,7 @@ func TestCountdownPrecedesGameTime(t *testing.T) {
 	if s.Phase != Playing || s.CountdownSeconds != 3 || s.Elapsed != 0 || s.RemainingSeconds != gameSeconds || queuedPackets(s) != 0 {
 		t.Fatalf("Start: phase=%s countdown=%d elapsed=%s remaining=%d packets=%d", s.Phase, s.CountdownSeconds, s.Elapsed, s.RemainingSeconds, queuedPackets(s))
 	}
-	if got := h.statusMessages("p1"); !reflect.DeepEqual(got, []StatusData{{Remaining: gameSeconds, Ready: true, Countdown: 3}}) {
+	if got := h.statusMessages("p1"); !reflect.DeepEqual(got, []StatusData{{Remaining: gameSeconds, Ready: true, Countdown: 3, Gains: []int{}}}) {
 		t.Fatalf("Start status: %v", got)
 	}
 	for _, tc := range []struct {
@@ -109,7 +109,7 @@ func TestCountdownKeepsPlayingRules(t *testing.T) {
 
 	h.clear()
 	h.ready("p1")
-	if got := h.statusMessages("p1"); !reflect.DeepEqual(got, []StatusData{{Remaining: gameSeconds, Ready: true, Countdown: 2}}) {
+	if got := h.statusMessages("p1"); !reflect.DeepEqual(got, []StatusData{{Remaining: gameSeconds, Ready: true, Countdown: 2, Gains: []int{}}}) {
 		t.Fatalf("READY during the countdown: %v", got)
 	}
 	if s := h.state(); !s.Nodes[0].Ready || !s.Nodes[0].Enabled {
@@ -144,7 +144,7 @@ func TestResetDuringCountdown(t *testing.T) {
 	if s := h.state(); s.Phase != Preparing || s.CountdownSeconds != 0 || s.Elapsed != 0 || s.RemainingSeconds != gameSeconds {
 		t.Fatalf("Reset: phase=%s countdown=%d elapsed=%s remaining=%d", s.Phase, s.CountdownSeconds, s.Elapsed, s.RemainingSeconds)
 	}
-	if got := h.statusMessages("p1"); !reflect.DeepEqual(got, []StatusData{{Remaining: gameSeconds}}) {
+	if got := h.statusMessages("p1"); !reflect.DeepEqual(got, []StatusData{{Remaining: gameSeconds, Gains: []int{}}}) {
 		t.Fatalf("Reset status: %v", got)
 	}
 	h.tick(CountdownDuration + 5*time.Second)
@@ -165,7 +165,7 @@ func TestFinishDuringCountdown(t *testing.T) {
 	if p := s.Nodes[0]; p.Score != 0 || !p.RankingEligible || p.Rank == nil || *p.Rank != 1 {
 		t.Fatalf("final result: %+v", p)
 	}
-	if got := h.statusMessages("p1"); !reflect.DeepEqual(got, []StatusData{{Remaining: gameSeconds, Ready: true}}) {
+	if got := h.statusMessages("p1"); !reflect.DeepEqual(got, []StatusData{{Remaining: gameSeconds, Ready: true, Rank: optionalScore(1), Gains: []int{}}}) {
 		t.Fatalf("Finish status: %v", got)
 	}
 	if got := h.summary("p1"); got.Score != 0 || !got.Eligible || got.Rank == nil || *got.Rank != 1 {

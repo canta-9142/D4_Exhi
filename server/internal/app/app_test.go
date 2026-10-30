@@ -618,7 +618,9 @@ func TestTransferNotifications(t *testing.T) {
 					t.Fatal("valid SEND rejected")
 				}
 				if mode == "forward to player" {
-					if got := messageTypes(messages); !reflect.DeepEqual(got, []string{"result", "push"}) || messages[1].session != "s2" {
+					// The status reports the combo the transfer started.
+					if got := messageTypes(messages); !reflect.DeepEqual(got, []string{"result", "push", "status"}) || messages[1].session != "s2" ||
+						messages[2].session != "s1" || messages[2].message.Data.(StatusData).Combo != 1 {
 						t.Fatalf("wrong transfer notification order: %v", messages)
 					}
 				} else if len(messages) != 1 || h.state().Nodes[0].Score != 0 {

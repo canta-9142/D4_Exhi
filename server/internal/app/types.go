@@ -75,6 +75,15 @@ type StatusData struct {
 	Remaining int  `json:"remaining"`
 	Ready     bool `json:"ready"`
 	Countdown int  `json:"countdown"`
+	// Rank is the provisional rank while the game time runs, the settled rank
+	// once Finished, and nil otherwise or for an ineligible player.
+	Rank *int `json:"rank"`
+	// Gains are the points earned since the last status to this session, in
+	// order. They are [] rather than null, and flat in data for the player
+	// firmware's JSON nesting limit (player.md).
+	Gains []int `json:"gains"`
+	// Combo is shown only and never affects the score (server.md 4.4).
+	Combo int `json:"combo"`
 }
 type LEDConfigData struct {
 	Node    NodeID

@@ -15,6 +15,8 @@ const (
 	botCapacity    = 4
 	packetTTL      = 5
 	maxGamePackets = 1000
+	maxGains       = 16
+	maxCombo       = 999
 	// CountdownDuration runs within Playing, from Start until GameDuration
 	// begins.
 	CountdownDuration = 3 * time.Second
@@ -111,6 +113,11 @@ type node struct {
 	topPercent     int // 1-100 once settled at Finished; 0 for none.
 	nextGeneration time.Duration
 	nextTransfer   time.Duration
+	// gains are the points not yet sent in a status, at most maxGains.
+	gains []int
+	// combo counts manual transfers that were not lost. It is shown on the
+	// player MCU only and never affects the score.
+	combo int
 }
 
 type change struct {
@@ -183,10 +190,36 @@ func (g *game) start(now time.Time) error {
 		if id.player() {
 			n.eligible = n.manual
 			n.nextGeneration = time.Second
+			n.gains, n.combo = nil, 0
 		}
 	}
 	g.notify(change{kind: "phase"})
 	return nil
+}
+
+// rankOf follows rules.md: one more than the eligible players scoring higher.
+func (g *game) rankOf(id NodeID) int {
+	rank := 1
+	for other := NodeID(1); other <= PlayerCount; other++ {
+		if g.nodes[other].eligible && g.nodes[other].score > g.nodes[id].score {
+			rank++
+		}
+	}
+	return rank
+}
+
+// statusRank is the provisional rank while the game time runs, the settled
+// rank once Finished, and 0 for none.
+func (g *game) statusRank(id NodeID) int {
+	switch {
+	case !g.nodes[id].eligible:
+		return 0
+	case g.phase == Finished:
+		return g.nodes[id].rank
+	case g.phase == Playing && g.countdown == 0:
+		return g.rankOf(id)
+	}
+	return 0
 }
 
 // finish settles the result. The record is published before the phase so that
@@ -197,14 +230,8 @@ func (g *game) finish(reason FinishReason) error {
 	}
 	for id := NodeID(1); id <= PlayerCount; id++ {
 		n := &g.nodes[id]
-		if !n.eligible {
-			continue
-		}
-		n.rank = 1
-		for other := NodeID(1); other <= PlayerCount; other++ {
-			if g.nodes[other].eligible && g.nodes[other].score > n.score {
-				n.rank++
-			}
+		if n.eligible {
+			n.rank = g.rankOf(id)
 		}
 	}
 	g.phase, g.countdown, g.reason = Finished, 0, reason
@@ -223,6 +250,7 @@ func (g *game) reset() {
 		n.ready = false
 		n.rank = 0
 		n.topPercent = 0
+		n.gains, n.combo = nil, 0
 	}
 	// Stale requests are rejected by sync generation and session, not by PID.
 	g.nextPID = 0
@@ -270,6 +298,9 @@ func (g *game) setManual(id NodeID, manual bool) {
 	}
 	n.manual = manual
 	n.ready = false
+	if !manual {
+		n.combo = 0
+	}
 	if g.phase == Playing && !manual {
 		n.eligible = false
 	}
@@ -363,17 +394,26 @@ func (g *game) transfer(from, to NodeID, manual bool) []change {
 	g.schedule(from)
 	p.hops++
 	lost := p.visited&(1<<to) != 0 || (to.bot() && len(g.nodes[to].fifo) >= botCapacity) || (p.hops >= packetTTL && to != p.Destination)
+	// Only the hop just taken decides the combo, so that later hops by other
+	// nodes cannot break it.
+	if manual {
+		if lost {
+			n.combo = 0
+		} else if n.combo < maxCombo {
+			n.combo++
+		}
+	}
 	if !lost {
 		if to == p.Destination {
 			for id := NodeID(1); id <= PlayerCount; id++ {
 				if id == p.origin {
 					if p.hops <= 2 {
-						g.nodes[id].score += 15
+						g.gain(id, 15)
 					} else {
-						g.nodes[id].score += 10
+						g.gain(id, 10)
 					}
 				} else if p.visited&(1<<id) != 0 {
-					g.nodes[id].score += 8
+					g.gain(id, 8)
 				}
 			}
 		} else {
@@ -389,4 +429,14 @@ func (g *game) transfer(from, to NodeID, manual bool) []change {
 		changes = append(changes, change{kind: "buffer", node: from})
 	}
 	return changes
+}
+
+// gain adds points and keeps them for the next status; status gains are for
+// display, so those beyond maxGains are dropped.
+func (g *game) gain(id NodeID, points int) {
+	n := &g.nodes[id]
+	n.score += points
+	if len(n.gains) < maxGains {
+		n.gains = append(n.gains, points)
+	}
 }

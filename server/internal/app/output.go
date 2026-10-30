@@ -10,13 +10,27 @@ func (a *App) remainingSeconds() int {
 	return seconds(GameDuration - a.game.elapsed)
 }
 
-func (a *App) status(node NodeID) StatusData {
-	data := StatusData{Remaining: a.remainingSeconds(), Countdown: a.game.countdown}
+// statusKey is the part of a status compared with the last one sent. Gains are
+// not part of it: any pending gains are sent.
+type statusKey struct {
+	score, remaining, countdown, rank, combo int
+	ready                                    bool
+}
+
+// status leaves Gains empty; sendStatus takes the pending gains.
+func (a *App) status(node NodeID) (StatusData, statusKey) {
+	key := statusKey{remaining: a.remainingSeconds(), countdown: a.game.countdown}
 	if node != 0 {
 		n := &a.game.nodes[node]
-		data.Score, data.Ready = n.score, n.manual && n.ready
+		key.score, key.ready, key.rank, key.combo = n.score, n.manual && n.ready, a.game.statusRank(node), n.combo
 	}
-	return data
+	data := StatusData{Score: key.score, Remaining: key.remaining, Ready: key.ready, Countdown: key.countdown,
+		Gains: []int{}, Combo: key.combo}
+	if key.rank != 0 {
+		rank := key.rank
+		data.Rank = &rank
+	}
+	return data, key
 }
 
 func (a *App) flushPlayerUpdates() {
@@ -76,12 +90,21 @@ func (a *App) sendStatus(id SessionID) {
 	if d.node == 0 && (a.preview == nil || a.preview.uid != s.uid) {
 		return
 	}
-	data := a.status(d.node)
-	if !s.forceStatus && s.hasStatus && data == s.lastStatus {
+	data, key := a.status(d.node)
+	var gains []int
+	if d.node != 0 {
+		gains = a.game.nodes[d.node].gains
+	}
+	if !s.forceStatus && s.hasStatus && key == s.lastStatus && len(gains) == 0 {
 		return
 	}
+	if len(gains) > 0 {
+		// Taken even if the send fails: the session then closes and its next
+		// synchronization would drop them anyway.
+		data.Gains, a.game.nodes[d.node].gains = gains, nil
+	}
 	if a.send(id, Message{Type: "status", Data: data}) {
-		s.lastStatus, s.hasStatus, s.forceStatus = data, true, false
+		s.lastStatus, s.hasStatus, s.forceStatus = key, true, false
 	}
 }
 
@@ -146,6 +169,8 @@ func (a *App) syncDevice(id SessionID, config bool) {
 	if config && !a.send(id, Message{Type: "config", Data: ConfigData{Node: d.node, Mode: mode}}) {
 		return
 	}
+	// A synchronizing status never replays earlier gains (player.md).
+	a.game.nodes[d.node].gains = nil
 	if a.resetFIFO(id, d.node) {
 		a.phase(id)
 	}

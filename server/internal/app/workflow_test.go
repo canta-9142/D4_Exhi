@@ -138,7 +138,7 @@ func TestStatusUsesLatestCommittedValues(t *testing.T) {
 		t.Fatal("Finished time advanced")
 	}
 	h.execute(Command{Operation: Reset})
-	if statuses = h.statusMessages("p1"); len(statuses) != 1 || statuses[0] != (StatusData{Remaining: gameSeconds}) {
+	if statuses = h.statusMessages("p1"); len(statuses) != 1 || !reflect.DeepEqual(statuses[0], StatusData{Remaining: gameSeconds, Gains: []int{}}) {
 		t.Fatalf("wrong initial status: %v", statuses)
 	}
 }
