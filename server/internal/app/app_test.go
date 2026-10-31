@@ -40,10 +40,17 @@ type harness struct {
 	generation      map[SessionID]string
 	wantRunError    error
 	identifications map[SessionID]uint64
+	nextRID         uint32
 }
 
+// newHarness runs endless operation, the default mode.
 func newHarness(t *testing.T) *harness {
 	return newHarnessWithOptions(t, Options{})
+}
+
+// newSimultaneousHarness runs the simultaneous game.
+func newSimultaneousHarness(t *testing.T) *harness {
+	return newHarnessWithOptions(t, Options{Mode: Simultaneous})
 }
 
 func newHarnessWithOptions(t *testing.T, options Options) *harness {
@@ -74,6 +81,7 @@ func newHarnessWithOptions(t *testing.T, options Options) *harness {
 	h.a.now = func() time.Time { return epoch.Add(time.Duration(h.clock.Load())) }
 	h.a.ticks = h.ticks
 	h.a.game.random = func(int) int { return 0 }
+	h.a.game.practiceRandom = func(int) int { return 0 }
 	go func() { h.finished <- h.a.Run(ctx) }()
 	t.Cleanup(func() {
 		cancel()
@@ -146,22 +154,41 @@ func (h *harness) connect(id SessionID, uid string, node NodeID) {
 	h.execute(Command{Operation: SetDeviceAssignment, DeviceID: uid, Node: node})
 }
 
-func (h *harness) ready(id SessionID) {
-	h.t.Helper()
+func (h *harness) sync(id SessionID) string {
 	h.mu.Lock()
-	generation := h.generation[id]
-	h.mu.Unlock()
-	h.message(id, IncomingMessage{Type: "ready", Sync: generation})
+	defer h.mu.Unlock()
+	return h.generation[id]
 }
 
-// start processes Start CountdownDuration before the current test time, so
-// that the game clock starts at that time and later ticks read as game time.
-// Tests of the countdown itself execute Start directly.
+// press sends a long press of both end buttons.
+func (h *harness) press(id SessionID) {
+	h.t.Helper()
+	h.message(id, IncomingMessage{Type: "ready", Sync: h.sync(id)})
+}
+
+// choose sends a mode selection.
+func (h *harness) choose(id SessionID, round RoundKind) {
+	h.t.Helper()
+	h.message(id, IncomingMessage{Type: "choose", Sync: h.sync(id), Round: string(round)})
+}
+
+// ready makes a player of the simultaneous game ready for a normal game: a
+// long press, then the selection.
+func (h *harness) ready(id SessionID) {
+	h.t.Helper()
+	h.press(id)
+	h.choose(id, RoundNormal)
+}
+
+// start processes the simultaneous game's Start CountdownDuration before the
+// current test time, so that the game clock starts at that time and later
+// ticks read as game time. Manual players that are not ready choose a normal
+// game first. Tests of the countdown itself execute Start directly.
 func (h *harness) start() {
 	h.t.Helper()
 	s := h.state()
 	for _, d := range s.Devices {
-		if d.Kind == PlayerDevice && d.Node != 0 && s.Nodes[d.Node-1].Enabled {
+		if d.Kind == PlayerDevice && d.Node != 0 && s.Nodes[d.Node-1].Enabled && !s.Nodes[d.Node-1].Ready {
 			h.ready(d.Session)
 		}
 	}
@@ -190,7 +217,7 @@ func messageTypes(messages []sentMessage) []string {
 }
 
 func TestIdentificationAssignmentAndSnapshot(t *testing.T) {
-	h := newHarness(t)
+	h := newSimultaneousHarness(t)
 	h.must(h.a.Connected(h.ctx, "s1"))
 	h.message("s1", IncomingMessage{Type: "send", RID: 100}) // Old input before HELLO.
 	h.tick(time.Second)
@@ -230,7 +257,7 @@ func TestIdentificationAssignmentAndSnapshot(t *testing.T) {
 }
 
 func TestIdentificationStartAndRetry(t *testing.T) {
-	h := newHarness(t)
+	h := newSimultaneousHarness(t)
 	h.must(h.a.Connected(h.ctx, "s1"))
 	h.tick(time.Second)
 	h.message("s1", IncomingMessage{Type: "hello", UID: testUID})
@@ -293,7 +320,7 @@ func TestIdentificationIsCheckedWhenQueuedRequestIsApplied(t *testing.T) {
 }
 
 func TestStateDoesNotAdvanceButInputDoes(t *testing.T) {
-	h := newHarness(t)
+	h := newSimultaneousHarness(t)
 	h.start()
 	h.clock.Store(int64(3 * time.Second))
 	if s := h.state(); s.Elapsed != 0 || s.Nodes[0].FIFOUsage != 0 {
@@ -326,11 +353,11 @@ func TestStateDoesNotAdvanceButInputDoes(t *testing.T) {
 }
 
 func TestSendGenerationsDuplicatesAndReset(t *testing.T) {
-	h := newHarness(t)
+	h := newSimultaneousHarness(t)
 	h.connect("s1", testUID, 1)
 	h.execute(Command{Operation: SetNodeEnabled, Node: 1, Enabled: true})
-	initialSync := h.reset("s1").Sync
 	h.start()
+	initialSync := h.reset("s1").Sync
 	h.tick(time.Second)
 	h.clear()
 	send := IncomingMessage{Type: "send", Sync: initialSync, RID: 0, PID: 0, To: 2}
@@ -391,7 +418,7 @@ func TestSendGenerationsDuplicatesAndReset(t *testing.T) {
 		t.Fatal("new game did not generate FIFO")
 	}
 	send.RID++
-	send.Sync = resetSync
+	send.Sync = h.reset("s1").Sync // Start synchronizes anew.
 	h.clear()
 	// PIDs restart at 0 with each game, so the current generation is what makes this request valid.
 	h.message("s1", send)
@@ -401,7 +428,7 @@ func TestSendGenerationsDuplicatesAndReset(t *testing.T) {
 }
 
 func TestDisconnectDuplicateUIDAndReassignment(t *testing.T) {
-	h := newHarness(t)
+	h := newSimultaneousHarness(t)
 	h.connect("s1", testUID, 1)
 	h.execute(Command{Operation: SetNodeEnabled, Node: 1, Enabled: true})
 	h.must(h.a.Connected(h.ctx, "duplicate"))
@@ -455,11 +482,11 @@ func TestDisconnectDuplicateUIDAndReassignment(t *testing.T) {
 }
 
 func TestStaleGenerationSendIgnoredWhenPIDMatchesNewGame(t *testing.T) {
-	h := newHarness(t)
+	h := newSimultaneousHarness(t)
 	h.connect("s1", testUID, 1)
 	h.execute(Command{Operation: SetNodeEnabled, Node: 1, Enabled: true})
-	oldSync := h.reset("s1").Sync
 	h.start()
+	oldSync := h.reset("s1").Sync
 	h.tick(time.Second)
 	if s := h.state(); s.Nodes[0].FIFOUsage != 1 {
 		t.Fatalf("first game did not queue a packet: %+v", s.Nodes[0])
@@ -469,7 +496,13 @@ func TestStaleGenerationSendIgnoredWhenPIDMatchesNewGame(t *testing.T) {
 	if newSync == oldSync {
 		t.Fatal("Reset reused the sync generation")
 	}
+	// Start resets the FIFO again, under another generation.
 	h.start()
+	if next := h.reset("s1").Sync; next == newSync || next == oldSync {
+		t.Fatal("Start reused the sync generation")
+	} else {
+		newSync = next
+	}
 	h.tick(2 * time.Second)
 	if s := h.state(); s.Nodes[0].FIFOUsage != 1 {
 		t.Fatalf("second game did not queue a packet: %+v", s.Nodes[0])
@@ -498,29 +531,6 @@ func TestStaleGenerationSendIgnoredWhenPIDMatchesNewGame(t *testing.T) {
 	}
 }
 
-func TestResetRecoversFromPIDExhaustionInApp(t *testing.T) {
-	h := newHarness(t)
-	h.connect("s1", testUID, 1)
-	h.execute(Command{Operation: SetNodeEnabled, Node: 1, Enabled: true})
-	h.start()
-	h.tick(time.Second)
-	h.must(h.a.submit(h.ctx, false, func(time.Time) error { h.a.game.nextPID = 65536 - 999; return nil }))
-	h.execute(Command{Operation: Finish})
-	if s := h.state(); s.CanStart || !hasBlocker(s.StartBlockers, CodePIDExhausted) {
-		t.Fatalf("exhausted PIDs not reported: %+v", s.StartBlockers)
-	}
-	h.execute(Command{Operation: Reset})
-	// Node 1 is manual, so only its readiness may still block Start.
-	if s := h.state(); hasBlocker(s.StartBlockers, CodePIDExhausted) || !hasBlocker(s.StartBlockers, CodePlayersNotReady) {
-		t.Fatalf("Reset did not recover from pid_exhausted: %+v", s.StartBlockers)
-	}
-	h.start()
-	h.tick(2 * time.Second)
-	if s := h.state(); s.Phase != Playing || s.Nodes[0].FIFOUsage != 1 {
-		t.Fatalf("game did not run after Reset: %+v", s)
-	}
-}
-
 func hasBlocker(blockers []StartBlocker, code Code) bool {
 	for _, b := range blockers {
 		if b.Code == code {
@@ -531,11 +541,11 @@ func hasBlocker(blockers []StartBlocker, code Code) bool {
 }
 
 func TestSendFailureKeepsCommittedGameState(t *testing.T) {
-	h := newHarness(t)
+	h := newSimultaneousHarness(t)
 	h.connect("s1", testUID, 1)
 	h.execute(Command{Operation: SetNodeEnabled, Node: 1, Enabled: true})
-	syncID := h.reset("s1").Sync
 	h.start()
+	syncID := h.reset("s1").Sync
 	h.tick(time.Second)
 	h.mu.Lock()
 	h.failType = "result"
@@ -553,7 +563,7 @@ func TestSendFailureKeepsCommittedGameState(t *testing.T) {
 }
 
 func TestBotRateReschedulesFromChangeTime(t *testing.T) {
-	h := newHarness(t)
+	h := newSimultaneousHarness(t)
 	h.start()
 	// Inject one bot arrival so that other nodes cannot obscure its deadline.
 	h.must(h.a.submit(h.ctx, true, func(time.Time) error {
@@ -580,7 +590,7 @@ func TestBotRateReschedulesFromChangeTime(t *testing.T) {
 func TestTransferNotifications(t *testing.T) {
 	for _, mode := range []string{"automatic", "forward to player", "loss at bot"} {
 		t.Run(mode, func(t *testing.T) {
-			h := newHarness(t)
+			h := newSimultaneousHarness(t)
 			h.connect("s1", testUID, 1)
 			if mode != "automatic" {
 				h.execute(Command{Operation: SetNodeEnabled, Node: 1, Enabled: true})
@@ -589,8 +599,8 @@ func TestTransferNotifications(t *testing.T) {
 				h.connect("s2", "112233AABBCC", 2)
 				h.a.game.random = func(int) int { return 1 } // P1 generates a packet for P3.
 			}
-			syncID := h.reset("s1").Sync
 			h.start()
+			syncID := h.reset("s1").Sync
 			h.tick(time.Second)
 			if mode == "loss at bot" {
 				h.must(h.a.submit(h.ctx, false, func(time.Time) error {
@@ -635,7 +645,7 @@ func TestTransferNotifications(t *testing.T) {
 }
 
 func TestCommandValidation(t *testing.T) {
-	h := newHarness(t)
+	h := newSimultaneousHarness(t)
 	h.connect("s1", testUID, 1)
 	for _, c := range []Command{
 		{Operation: Finish}, {Operation: "unknown"},
@@ -658,7 +668,7 @@ func TestCommandValidation(t *testing.T) {
 }
 
 func TestChangedUIDClosesSession(t *testing.T) {
-	h := newHarness(t)
+	h := newSimultaneousHarness(t)
 	h.connect("s1", testUID, 1)
 	if err := h.a.MessageReceived(h.ctx, "s1", IncomingMessage{Type: "hello", Kind: PlayerDevice, UID: "112233AABBCC", Identification: h.identification("s1")}); err == nil {
 		t.Fatal("changed UID accepted")
@@ -669,7 +679,7 @@ func TestChangedUIDClosesSession(t *testing.T) {
 }
 
 func TestConcurrentAccessAndCancellation(t *testing.T) {
-	h := newHarness(t)
+	h := newSimultaneousHarness(t)
 	var callers sync.WaitGroup
 	for i := 0; i < 12; i++ {
 		callers.Go(func() {

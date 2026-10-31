@@ -98,7 +98,7 @@ func TestRejectionCodes(t *testing.T) {
 		}, Command{Operation: SetDevicePreview, DeviceID: testUID}, CodeManualModeConflict, nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			h := newHarness(t)
+			h := newSimultaneousHarness(t)
 			if tc.setup != nil {
 				tc.setup(h)
 			} else {
@@ -113,15 +113,15 @@ func TestRejectionCodes(t *testing.T) {
 }
 
 func TestStartBlockersOrderAndRejection(t *testing.T) {
-	g := newGame(func(change) {})
+	g := newGame(Simultaneous, func(change) {})
 	if b := g.startBlockers(); b == nil || len(b) != 0 {
 		t.Fatalf("startable game reported %v", b)
 	}
-	g.phase, g.nextPID = Finished, 65536
+	g.phase = Finished
 	g.nodes[3].manual = true
 	g.nodes[1].manual = true
 	g.nodes[2].manual, g.nodes[2].ready = true, true
-	want := []StartBlocker{{Code: CodeNotPreparing}, {Code: CodePIDExhausted}, {Code: CodePlayersNotReady, Nodes: []NodeID{1, 3}}}
+	want := []StartBlocker{{Code: CodeNotPreparing}, {Code: CodePlayersNotReady, Nodes: []NodeID{1, 3}}}
 	if got := g.startBlockers(); !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %v, want %v", got, want)
 	}
@@ -131,8 +131,7 @@ func TestStartBlockersOrderAndRejection(t *testing.T) {
 		nodes   []NodeID
 	}{
 		{func() {}, CodePhaseConflict, nil},
-		{func() { g.phase = Preparing }, CodePIDExhausted, nil},
-		{func() { g.nextPID = 0 }, CodePlayersNotReady, []NodeID{1, 3}},
+		{func() { g.phase = Preparing }, CodePlayersNotReady, []NodeID{1, 3}},
 	} {
 		step.prepare()
 		r := rejectionOf(t, g.start(epoch))
@@ -146,7 +145,7 @@ func TestStartBlockersOrderAndRejection(t *testing.T) {
 }
 
 func TestSnapshotRemainingSecondsMatchesStatus(t *testing.T) {
-	h := newHarness(t)
+	h := newSimultaneousHarness(t)
 	h.connect("p1", testUID, 1)
 	if s := h.state(); s.RemainingSeconds != gameSeconds {
 		t.Fatalf("Preparing remaining %d", s.RemainingSeconds)

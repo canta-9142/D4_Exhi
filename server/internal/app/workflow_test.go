@@ -53,7 +53,7 @@ func (h *harness) statusMessages(id SessionID) []StatusData {
 }
 
 func TestReadyAndStartConditions(t *testing.T) {
-	h := newHarness(t)
+	h := newSimultaneousHarness(t)
 	h.connect("p1", testUID, 1)
 	if !h.state().CanStart {
 		t.Fatal("all-auto game cannot start")
@@ -70,15 +70,30 @@ func TestReadyAndStartConditions(t *testing.T) {
 	if got := messageTypes(h.messages()); !reflect.DeepEqual(got, []string{"status"}) || h.state().Nodes[0].Ready {
 		t.Fatal("stale READY was accepted or resynchronized")
 	}
+	// A long press opens the mode selection; the selection makes the player
+	// ready (server.md 3.7.2).
 	h.clear()
-	h.ready("p1")
-	if got := h.statusMessages("p1"); len(got) != 1 || !got[0].Ready || !h.state().CanStart {
-		t.Fatalf("valid READY not committed: %v", got)
+	h.press("p1")
+	if got := messageTypes(h.messages()); !reflect.DeepEqual(got, []string{"phase", "status"}) || h.messagesFor("p1")[0].Data.(PhaseData).Phase != Select {
+		t.Fatalf("valid READY did not open the selection: %v", got)
+	}
+	if s := h.state(); s.Nodes[0].Ready || s.Nodes[0].Station != StationSelect || s.CanStart {
+		t.Fatalf("READY alone made the player ready: %+v", s.Nodes[0])
 	}
 	h.clear()
-	h.ready("p1")
-	if len(h.statusMessages("p1")) != 1 {
-		t.Fatal("duplicate READY needs STATUS acknowledgement")
+	h.choose("p1", RoundTutorial)
+	if got := h.statusMessages("p1"); len(got) != 1 || !got[0].Ready || got[0].Round == nil || *got[0].Round != RoundTutorial || !h.state().CanStart {
+		t.Fatalf("valid CHOOSE not committed: %v", got)
+	}
+	if got := h.messagesFor("p1")[0]; got.Type != "phase" || got.Data.(PhaseData).Phase != Idle {
+		t.Fatalf("CHOOSE did not return to Idle: %+v", got)
+	}
+	// A ready player can neither press nor choose again.
+	h.clear()
+	h.press("p1")
+	h.choose("p1", RoundNormal)
+	if got := messageTypes(h.messages()); !reflect.DeepEqual(got, []string{"status", "status"}) || h.state().Nodes[0].Round != RoundTutorial {
+		t.Fatalf("a ready player changed the selection: %v", got)
 	}
 	h.message("p1", IncomingMessage{Type: "resync"})
 	h.message("p1", IncomingMessage{Type: "hello", UID: testUID})
@@ -98,7 +113,7 @@ func TestReadyAndStartConditions(t *testing.T) {
 	h.execute(Command{Operation: Reset})
 	h.clear()
 	h.message("p1", IncomingMessage{Type: "ready", Sync: oldSync})
-	if h.state().Nodes[0].Ready || h.state().CanStart {
+	if s := h.state(); s.Nodes[0].Ready || s.CanStart || s.Nodes[0].Station != StationIdle {
 		t.Fatal("old READY survived game Reset")
 	}
 	h.ready("p1")
@@ -113,7 +128,7 @@ func TestReadyAndStartConditions(t *testing.T) {
 }
 
 func TestStatusUsesLatestCommittedValues(t *testing.T) {
-	h := newHarness(t)
+	h := newSimultaneousHarness(t)
 	h.connect("p1", testUID, 1)
 	h.execute(Command{Operation: SetNodeEnabled, Node: 1, Enabled: true})
 	h.start()
@@ -138,13 +153,13 @@ func TestStatusUsesLatestCommittedValues(t *testing.T) {
 		t.Fatal("Finished time advanced")
 	}
 	h.execute(Command{Operation: Reset})
-	if statuses = h.statusMessages("p1"); len(statuses) != 1 || !reflect.DeepEqual(statuses[0], StatusData{Remaining: gameSeconds, Gains: []int{}}) {
+	if statuses = h.statusMessages("p1"); len(statuses) != 1 || !reflect.DeepEqual(statuses[0], StatusData{Gains: []int{}}) {
 		t.Fatalf("wrong initial status: %v", statuses)
 	}
 }
 
 func TestAutomaticAssignmentReservationsAndRetry(t *testing.T) {
-	h := newHarness(t)
+	h := newSimultaneousHarness(t)
 	for i := 1; i <= 9; i++ {
 		id := SessionID(fmt.Sprintf("p%d", i))
 		uid := fmt.Sprintf("%012X", i)
@@ -185,7 +200,7 @@ func TestAutomaticAssignmentReservationsAndRetry(t *testing.T) {
 }
 
 func TestFirstConnectionDuringPlayingWaitsForFinish(t *testing.T) {
-	h := newHarness(t)
+	h := newSimultaneousHarness(t)
 	h.start()
 	h.must(h.a.Connected(h.ctx, "p1"))
 	h.message("p1", IncomingMessage{Type: "hello", UID: testUID})
@@ -203,7 +218,7 @@ func TestFirstConnectionDuringPlayingWaitsForFinish(t *testing.T) {
 }
 
 func TestSwapAndReplacementKeepNodeResults(t *testing.T) {
-	h := newHarness(t)
+	h := newSimultaneousHarness(t)
 	uid2 := "112233AABBCC"
 	h.connect("p1", testUID, 1)
 	h.connect("p2", uid2, 2)
@@ -245,7 +260,7 @@ func TestSwapAndReplacementKeepNodeResults(t *testing.T) {
 }
 
 func TestPlayerPreviewRestoresBeforeStart(t *testing.T) {
-	h := newHarness(t)
+	h := newSimultaneousHarness(t)
 	h.connect("p1", testUID, 1)
 	h.connect("p2", "112233AABBCC", 2)
 	h.execute(Command{Operation: SetNodeEnabled, Node: 2, Enabled: true})
@@ -278,7 +293,8 @@ func TestPlayerPreviewRestoresBeforeStart(t *testing.T) {
 			types = append(types, m.message.Type)
 		}
 	}
-	if !reflect.DeepEqual(types, []string{"config", "reset", "phase", "status", "phase", "status"}) {
+	// Start restores the preview with its own resets (server.md 4.2.2).
+	if !reflect.DeepEqual(types, []string{"config", "phase", "reset", "status"}) {
 		t.Fatalf("restore must precede Playing: %v", types)
 	}
 	var phases []Phase
@@ -287,7 +303,7 @@ func TestPlayerPreviewRestoresBeforeStart(t *testing.T) {
 			phases = append(phases, m.message.Data.(PhaseData).Phase)
 		}
 	}
-	if !reflect.DeepEqual(phases, []Phase{Preparing, Playing}) {
+	if !reflect.DeepEqual(phases, []Phase{Playing}) {
 		t.Fatalf("wrong recovery phases: %v", phases)
 	}
 	if h.state().Preview != nil || len(h.reset("p1").Packets) != 0 || h.reset("p1").Sync == previewReset.Sync {
@@ -303,7 +319,7 @@ func TestPlayerPreviewRestoresBeforeStart(t *testing.T) {
 }
 
 func TestUnassignedPreviewCannotOperateAnotherPlayersNode(t *testing.T) {
-	h := newHarness(t)
+	h := newSimultaneousHarness(t)
 	h.connect("owner", testUID, 1)
 	h.connect("spare", "112233AABBCC", 2)
 	h.execute(Command{Operation: SetDeviceAssignment, DeviceID: "112233AABBCC"})
@@ -337,7 +353,7 @@ func TestUnassignedPreviewCannotOperateAnotherPlayersNode(t *testing.T) {
 }
 
 func TestLEDPreviewTimingRecoveryAndReset(t *testing.T) {
-	h := newHarness(t)
+	h := newSimultaneousHarness(t)
 	// Move the first LED to B1; its former P1 becomes free.
 	h.connectLED("led", "A00000000001", 9)
 	h.must(h.a.submit(h.ctx, false, func(time.Time) error {
@@ -391,7 +407,7 @@ func TestLEDPreviewTimingRecoveryAndReset(t *testing.T) {
 func TestPreviewEndOnResyncHelloAndDisconnect(t *testing.T) {
 	for _, event := range []string{"resync", "hello", "disconnect", "manual"} {
 		t.Run(event, func(t *testing.T) {
-			h := newHarness(t)
+			h := newSimultaneousHarness(t)
 			h.connect("p1", testUID, 1)
 			h.execute(Command{Operation: SetDevicePreview, DeviceID: testUID})
 			h.clear()
@@ -420,7 +436,7 @@ func TestPreviewEndOnResyncHelloAndDisconnect(t *testing.T) {
 }
 
 func TestLEDLinkMappingAndProtocol(t *testing.T) {
-	h := newHarness(t)
+	h := newSimultaneousHarness(t)
 	for _, node := range ledNodes {
 		h.connectLED(SessionID(node.wireName()), ledUID(node), node)
 	}
@@ -460,7 +476,7 @@ func TestLEDLinkMappingAndProtocol(t *testing.T) {
 }
 
 func TestLEDCommandsFollowGameTransfers(t *testing.T) {
-	h := newHarness(t)
+	h := newSimultaneousHarness(t)
 	h.connect("p1", testUID, 1)
 	h.connectLED("led", "A00000000001", 9)
 	h.execute(Command{Operation: SetNodeEnabled, Node: 1, Enabled: true})
@@ -495,7 +511,7 @@ func TestLEDCommandsFollowGameTransfers(t *testing.T) {
 
 func TestNotificationFailuresDoNotUndoAssignmentsOrStart(t *testing.T) {
 	t.Run("atomic swap", func(t *testing.T) {
-		h := newHarness(t)
+		h := newSimultaneousHarness(t)
 		h.connect("p1", testUID, 1)
 		h.connect("p2", "112233AABBCC", 2)
 		h.mu.Lock()
@@ -508,7 +524,7 @@ func TestNotificationFailuresDoNotUndoAssignmentsOrStart(t *testing.T) {
 	})
 	for _, failedMessage := range []string{"reset", "phase", "status"} {
 		t.Run("preview restore/"+failedMessage, func(t *testing.T) {
-			h := newHarness(t)
+			h := newSimultaneousHarness(t)
 			h.connect("p1", testUID, 1)
 			h.execute(Command{Operation: SetDevicePreview, DeviceID: testUID})
 			h.mu.Lock()
@@ -523,7 +539,7 @@ func TestNotificationFailuresDoNotUndoAssignmentsOrStart(t *testing.T) {
 }
 
 func TestInvalidPreviewSwitchKeepsCurrentTarget(t *testing.T) {
-	h := newHarness(t)
+	h := newSimultaneousHarness(t)
 	h.connect("p1", testUID, 1)
 	h.connect("p2", "112233AABBCC", 2)
 	h.execute(Command{Operation: SetNodeEnabled, Node: 2, Enabled: true})
@@ -547,7 +563,7 @@ func TestInvalidPreviewSwitchKeepsCurrentTarget(t *testing.T) {
 func TestLEDPreviewUsesExplicitConfig(t *testing.T) {
 	for _, node := range ledNodes {
 		t.Run(node.wireName(), func(t *testing.T) {
-			h := newHarness(t)
+			h := newSimultaneousHarness(t)
 			h.connectLED("led", "A00000000001", node)
 			h.clear()
 			h.execute(Command{Operation: SetDevicePreview, DeviceID: "A00000000001"})
@@ -562,7 +578,7 @@ func TestLEDResetKeepsAssignmentsAndStopsPreview(t *testing.T) {
 	for _, node := range []NodeID{1, 9} {
 		for _, preview := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/preview=%t", node.wireName(), preview), func(t *testing.T) {
-				h := newHarness(t)
+				h := newSimultaneousHarness(t)
 				h.connectLED("led", "A00000000001", node)
 				if preview {
 					h.execute(Command{Operation: SetDevicePreview, DeviceID: "A00000000001"})
@@ -590,7 +606,7 @@ func TestLEDResetKeepsAssignmentsAndStopsPreview(t *testing.T) {
 func TestUnassignedLEDPreviewTermination(t *testing.T) {
 	for _, event := range []string{"stop", "reset", "start", "hello", "disconnect"} {
 		t.Run(event, func(t *testing.T) {
-			h := newHarness(t)
+			h := newSimultaneousHarness(t)
 			h.connectLED("owner", "A00000000001", 1)
 			h.connectLED("spare", "A00000000002", 3)
 			h.execute(Command{Operation: SetDeviceAssignment, Kind: LEDDevice, DeviceID: "A00000000002"})
@@ -637,7 +653,7 @@ func TestUnassignedLEDPreviewTermination(t *testing.T) {
 func TestSendFailureDoesNotRewriteCatchUpHistory(t *testing.T) {
 	for _, input := range []string{"tick", "command", "message", "game end"} {
 		t.Run(input, func(t *testing.T) {
-			actual, reference := newHarness(t), newHarness(t)
+			actual, reference := newSimultaneousHarness(t), newSimultaneousHarness(t)
 			for _, h := range []*harness{actual, reference} {
 				h.connect("p1", testUID, 1)
 				h.execute(Command{Operation: SetNodeEnabled, Node: 1, Enabled: true})
@@ -702,7 +718,7 @@ func TestSendFailureDoesNotRewriteCatchUpHistory(t *testing.T) {
 }
 
 func TestPreviewSwitchCompletesOldRecoveryFirst(t *testing.T) {
-	h := newHarness(t)
+	h := newSimultaneousHarness(t)
 	h.connect("p1", testUID, 1)
 	h.connect("p2", "112233AABBCC", 2)
 	h.execute(Command{Operation: SetDevicePreview, DeviceID: testUID})
@@ -725,7 +741,7 @@ func TestPreviewSwitchCompletesOldRecoveryFirst(t *testing.T) {
 
 // bulkHarness has players on P1, P3 and P6 and none on the other nodes.
 func bulkHarness(t *testing.T) *harness {
-	h := newHarness(t)
+	h := newSimultaneousHarness(t)
 	h.connect("p1", testUID, 1)
 	h.connect("p3", "3333330000C3", 3)
 	h.connect("p6", "6666660000C6", 6)

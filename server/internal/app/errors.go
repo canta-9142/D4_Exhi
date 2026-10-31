@@ -19,9 +19,10 @@ const (
 	CodeDeviceKindMismatch Code = "device_kind_mismatch"
 	CodeDeviceNotAssigned  Code = "device_not_assigned"
 	CodeManualModeConflict Code = "manual_mode_conflict"
-	// CodeNotPreparing appears only in StartBlocker; a rejected Start uses
-	// CodePhaseConflict instead.
+	// CodeNotPreparing and CodeNotStopped appear only in StartBlocker; a
+	// rejected Start uses CodePhaseConflict instead.
 	CodeNotPreparing Code = "not_preparing"
+	CodeNotStopped   Code = "not_stopped"
 )
 
 // Rejection reports a command that app did not apply. The message is for logs;
@@ -48,6 +49,8 @@ func (b StartBlocker) reject() *Rejection {
 	switch b.Code {
 	case CodeNotPreparing:
 		return reject(CodePhaseConflict, "Start requires Preparing phase")
+	case CodeNotStopped:
+		return reject(CodePhaseConflict, "Start requires stopped operation")
 	case CodePIDExhausted:
 		return reject(b.Code, "not enough packet IDs for another game; restart the server")
 	}

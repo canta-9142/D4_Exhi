@@ -184,8 +184,8 @@ func TestSummaryBestsAreFixedUntilReset(t *testing.T) {
 
 	h.execute(Command{Operation: Reset})
 	h.do(func() {
-		if h.a.gameBest != nil || h.a.deviceBests != (deviceBests{}) {
-			t.Errorf("Reset left the bests %+v %+v", h.a.gameBest, h.a.deviceBests)
+		if h.a.gameBest != nil || h.a.game.nodes[1].bests != (deviceBests{}) {
+			t.Errorf("Reset left the bests %+v %+v", h.a.gameBest, h.a.game.nodes[1].bests)
 		}
 	})
 	// The next game is settled anew, against the first one.

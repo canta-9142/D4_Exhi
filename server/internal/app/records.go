@@ -18,8 +18,21 @@ const (
 	FinishManual  FinishReason = "manual"  // An admin Finish command.
 )
 
-// GameRecord is the durable result of one finished game (server.md 3.5.1).
+// RecordKind tells a normal round from a simultaneous game (server.md 3.5.1).
+type RecordKind string
+
+const (
+	RecordRound RecordKind = "round"
+	RecordGame  RecordKind = "game"
+)
+
+// maxRecentRounds is how many recent rounds the Snapshot lists.
+const maxRecentRounds = 10
+
+// GameRecord is the durable result of one normal round or simultaneous game
+// (server.md 3.5.1).
 type GameRecord struct {
+	Kind RecordKind
 	// FinishedAt is the wall-clock time at which the game clock stopped: its
 	// origin plus the settled elapsed time.
 	FinishedAt time.Time
@@ -27,12 +40,14 @@ type GameRecord struct {
 	Duration time.Duration
 	Elapsed  time.Duration
 	Reason   FinishReason
-	// Results holds P1-P8 in node order, including ineligible players.
+	// Results holds the players in node order: the one player of a round, or
+	// P1-P8 of a simultaneous game, including ineligible players.
 	Results []PlayerResult
 }
 
 // PlayerResult is a player's settled result. Rank is 1-8 for an eligible
-// player and 0 otherwise.
+// player and 0 otherwise; a round's player has rank 1, which is no rank of
+// the rules.
 type PlayerResult struct {
 	Node     NodeID
 	Score    int
@@ -40,12 +55,21 @@ type PlayerResult struct {
 	Rank     int
 }
 
-// record builds the GameRecord of a game that has just finished, from the
-// same settled state as its ranks.
+// RecentRound is a normal round settled since startup (server.md 3.5.5).
+type RecentRound struct {
+	Node       NodeID    `json:"node"`
+	Score      int       `json:"score"`
+	TopPercent int       `json:"top_percent"`
+	FinishedAt time.Time `json:"finished_at"`
+}
+
+// record builds the GameRecord of the simultaneous game that has just
+// finished, from the same settled state as its ranks.
 func (g *game) record() GameRecord {
 	r := GameRecord{
+		Kind: RecordGame,
 		// Round(0) drops the monotonic reading: the record is a wall-clock time.
-		FinishedAt: g.started.Add(g.elapsed).Round(0),
+		FinishedAt: g.origin.Add(g.elapsed).Round(0),
 		Duration:   GameDuration, Elapsed: g.elapsed, Reason: g.reason,
 		Results: make([]PlayerResult, 0, PlayerCount),
 	}
@@ -54,6 +78,18 @@ func (g *game) record() GameRecord {
 		r.Results = append(r.Results, PlayerResult{Node: id, Score: n.score, Eligible: n.eligible, Rank: n.rank})
 	}
 	return r
+}
+
+// roundRecord builds the GameRecord of the normal round of id that has just
+// ended. It finishes at its game time's end, however late the tick that ends
+// it.
+func (g *game) roundRecord(id NodeID) GameRecord {
+	n := &g.nodes[id]
+	return GameRecord{
+		Kind: RecordRound, FinishedAt: g.origin.Add(n.roundEnd).Round(0),
+		Duration: GameDuration, Elapsed: GameDuration, Reason: FinishTimeout,
+		Results: []PlayerResult{{Node: id, Score: n.score, Eligible: true, Rank: 1}},
+	}
 }
 
 // best is the highest eligible score of r and every node that has it, or nil
@@ -73,7 +109,8 @@ func (r GameRecord) best() *BestScore {
 }
 
 // counted reports whether r ran its full duration under the current rule,
-// which the hourly and all-time bests and the top percent require.
+// which the hourly and all-time bests and the top percent require. Rounds and
+// simultaneous games count alike.
 func (r GameRecord) counted() bool {
 	return r.Reason == FinishTimeout && r.Duration == GameDuration
 }
@@ -132,61 +169,68 @@ func (b *bests) findHour(start time.Time) (int, bool) {
 	return slices.BinarySearchFunc(b.hourly, start, func(h HourlyBest, start time.Time) int { return start.Compare(h.HourStart) })
 }
 
-// deviceBests is what a finished game sends of the hourly and all-time
-// bests in each summary (server.md 3.5.7), settled once at Finished.
+// deviceBests is what a settled result sends of the hourly and all-time
+// bests in its summary (server.md 3.5.7), settled once with the result.
 type deviceBests struct {
-	hour    *HourlyBest // The best of the game's hour; nil for none.
+	hour    *HourlyBest // The best of the result's hour; nil for none.
 	allTime *BestScore
-	// hourMine and allTimeMine report whether the game set those bests, so
+	// hourMine and allTimeMine report whether the result set those bests, so
 	// that its nodes in them are sent *Mine.
 	hourMine, allTimeMine bool
 }
 
-// settleDeviceBests keeps the bests of the game r for summaries, after r has
-// been added to b. It keeps none if the records file was unusable at
+// settleDeviceBests is the bests of the record r for summaries, after r has
+// been added to a.bests. It is none if the records file was unusable at
 // startup, since the bests then count only this process's games.
-func (a *App) settleDeviceBests(r GameRecord, hourSet, allTimeSet bool) {
-	a.deviceBests = deviceBests{}
+func (a *App) settleDeviceBests(r GameRecord, hourSet, allTimeSet bool) deviceBests {
+	var d deviceBests
 	if a.options.RecordsUnavailable != "" {
-		return
+		return d
 	}
 	if i, found := a.bests.findHour(hourStart(r.FinishedAt)); found {
 		h := a.bests.hourly[i]
 		h.Nodes = slices.Clone(h.Nodes)
-		a.deviceBests.hour, a.deviceBests.hourMine = &h, hourSet
+		d.hour, d.hourMine = &h, hourSet
 	}
-	a.deviceBests.allTime, a.deviceBests.allTimeMine = a.bests.allTime.clone(), allTimeSet
+	d.allTime, d.allTimeMine = a.bests.allTime.clone(), allTimeSet
+	return d
 }
 
-// setSummaryBests sets the best scores of node's summary.
+// setSummaryBests sets the best scores of node's summary. A round's best of
+// its own is the player's score (server.md 3.5.7).
 func (a *App) setSummaryBests(data *SummaryData, node NodeID) {
+	n := &a.game.nodes[node]
 	data.GameBestNodes = []int{}
-	if b := a.gameBest; b != nil {
-		data.GameBest = optionalScore(b.Score)
-		for _, id := range b.Nodes {
+	best := a.gameBest
+	if a.game.mode == Endless {
+		best = &BestScore{Score: n.score, Nodes: []NodeID{node}}
+	}
+	if best != nil {
+		data.GameBest = optionalScore(best.Score)
+		for _, id := range best.Nodes {
 			data.GameBestNodes = append(data.GameBestNodes, int(id))
 		}
 	}
-	if h := a.deviceBests.hour; h != nil {
+	if h := n.bests.hour; h != nil {
 		start := h.HourStart.In(JST).Hour()
 		data.HourBest, data.HourBestStart = optionalScore(h.Score), &start
 	}
-	if b := a.deviceBests.allTime; b != nil {
+	if b := n.bests.allTime; b != nil {
 		data.AllTimeBest = optionalScore(b.Score)
 	}
-	data.HourBestMine, data.AllTimeBestMine = a.deviceBests.mine(node)
+	data.HourBestMine, data.AllTimeBestMine = n.bests.mine(node)
 }
 
-// mine reports whether node is in the hourly and all-time bests that the game
-// set, as its summary's hourBestMine and allTimeBestMine.
+// mine reports whether node is in the hourly and all-time bests that the
+// result set, as its summary's hourBestMine and allTimeBestMine.
 func (b deviceBests) mine(node NodeID) (hour, allTime bool) {
 	hour = b.hourMine && b.hour != nil && slices.Contains(b.hour.Nodes, node)
 	allTime = b.allTimeMine && b.allTime != nil && slices.Contains(b.allTime.Nodes, node)
 	return hour, allTime
 }
 
-// cheerStyle is the CHEER style of node, a node of the game's best: that of
-// the highest best it set (server.md 5.3).
+// cheerStyle is the CHEER style of node, a node of the result's best: that
+// of the highest best it set (server.md 5.3).
 func (b deviceBests) cheerStyle(node NodeID) string {
 	hour, allTime := b.mine(node)
 	switch {
@@ -204,28 +248,59 @@ func optionalScore(score int) *int {
 	return &score
 }
 
-// recordGame saves and counts the game that has just finished. A failed save
-// leaves the game going and still counts in memory; the Snapshot reports it
-// until a later save succeeds. Nothing is retried.
+// save saves r. A failed save leaves the game going and still counts in
+// memory; the Snapshot reports it until a later save succeeds. Nothing is
+// retried.
+func (a *App) save(r GameRecord) {
+	if a.options.RecordsUnavailable != "" || a.options.SaveGame == nil {
+		return
+	}
+	err := a.options.SaveGame(r)
+	a.saveFailed = err != nil
+	if err != nil {
+		a.options.Logger.Error("cannot save game record", "kind", r.Kind, "finished_at", r.FinishedAt, "reason", r.Reason, "error", err)
+	}
+}
+
+// recordRound saves and counts the normal round of node that has just
+// ended, then settles its top percent and bests and cheers it, all before
+// any later round of the same input (server.md 3.5.1).
+func (a *App) recordRound(node NodeID) {
+	r := a.game.roundRecord(node)
+	a.save(r)
+	hourSet, allTimeSet := a.bests.add(r)
+	a.settleTopPercent(r)
+	n := &a.game.nodes[node]
+	n.bests = a.settleDeviceBests(r, hourSet, allTimeSet)
+	a.recentRounds = slices.Insert(a.recentRounds, 0, RecentRound{Node: node, Score: n.score, TopPercent: n.topPercent, FinishedAt: r.FinishedAt})
+	if len(a.recentRounds) > maxRecentRounds {
+		a.recentRounds = a.recentRounds[:maxRecentRounds]
+	}
+	a.sendCheers(r.best(), n.bests)
+}
+
+// recordGame saves and counts the simultaneous game that has just finished.
 func (a *App) recordGame() {
 	r := a.game.record()
-	if a.options.RecordsUnavailable == "" && a.options.SaveGame != nil {
-		err := a.options.SaveGame(r)
-		a.saveFailed = err != nil
-		if err != nil {
-			a.options.Logger.Error("cannot save game record", "finished_at", r.FinishedAt, "reason", r.Reason, "error", err)
-		}
-	}
+	a.save(r)
 	a.gameBest = r.best()
 	hourSet, allTimeSet := a.bests.add(r)
 	a.settleTopPercent(r)
-	a.settleDeviceBests(r, hourSet, allTimeSet)
+	bests := a.settleDeviceBests(r, hourSet, allTimeSet)
+	for id := NodeID(1); id <= PlayerCount; id++ {
+		a.game.nodes[id].bests = bests
+	}
+	a.sendCheers(a.gameBest, bests)
 }
 
 func (a *App) recordsSnapshot() RecordsSnapshot {
 	s := RecordsSnapshot{
-		GameBest: a.gameBest.clone(), HourlyBests: make([]HourlyBest, 0, len(a.bests.hourly)), AllTimeBest: a.bests.allTime.clone(),
-		Available: a.options.RecordsUnavailable == "", UnavailableReason: a.options.RecordsUnavailable, SaveFailed: a.saveFailed,
+		GameBest: a.gameBest.clone(), RecentRounds: slices.Clone(a.recentRounds), HourlyBests: make([]HourlyBest, 0, len(a.bests.hourly)),
+		AllTimeBest: a.bests.allTime.clone(), Available: a.options.RecordsUnavailable == "",
+		UnavailableReason: a.options.RecordsUnavailable, SaveFailed: a.saveFailed,
+	}
+	if s.RecentRounds == nil {
+		s.RecentRounds = []RecentRound{}
 	}
 	for _, h := range a.bests.hourly {
 		h.Nodes = slices.Clone(h.Nodes)

@@ -161,6 +161,7 @@ func pastScores(above, below int) []int {
 // in the coming game.
 func topPercentHarness(t *testing.T, options Options, manual, automatic []NodeID) *harness {
 	t.Helper()
+	options.Mode = Simultaneous
 	h := newHarnessWithOptions(t, options)
 	for _, id := range slices.Concat(manual, automatic) {
 		h.connect(SessionID(id.wireName()), fmt.Sprintf("%012X", id), id)

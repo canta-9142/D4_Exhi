@@ -83,7 +83,7 @@ func (a *App) assigned(kind DeviceKind, node NodeID, except string) bool {
 
 func (a *App) autoAssign(uid string) bool {
 	d := a.devices[uid]
-	if a.fatalErr != nil || a.game.phase == Playing || d.node != 0 || d.noAuto || d.session == "" {
+	if a.fatalErr != nil || a.game.locked() || d.node != 0 || d.noAuto || d.session == "" {
 		return false
 	}
 	if s := a.sessions[d.session]; s == nil || s.failed || s.waitingHello {
@@ -102,7 +102,7 @@ func (a *App) autoAssign(uid string) bool {
 }
 
 func (a *App) autoAssignPending() {
-	if a.fatalErr != nil || a.game.phase == Playing || !a.assignPending {
+	if a.fatalErr != nil || a.game.locked() || !a.assignPending {
 		return
 	}
 	a.assignPending = false
@@ -120,7 +120,7 @@ func (a *App) autoAssignPending() {
 }
 
 func (a *App) changeAssignments(c Command) error {
-	if a.game.phase == Playing {
+	if a.game.locked() {
 		return reject(CodePhaseConflict, "device assignment cannot change while Playing")
 	}
 	d := a.devices[c.DeviceID]
@@ -141,7 +141,7 @@ func (a *App) changeAssignments(c Command) error {
 		if c.Node != 0 && a.assigned(d.kind, c.Node, c.DeviceID) {
 			return reject(CodeAssignmentConflict, "node is already assigned")
 		}
-		return a.applyAssignments(map[string]NodeID{c.DeviceID: c.Node}, true)
+		return a.assignExplicitly(map[string]NodeID{c.DeviceID: c.Node})
 	case SwapDeviceAssignments, ReplaceDeviceAssignment:
 		other := a.devices[c.OtherDeviceID]
 		if c.DeviceID == c.OtherDeviceID {
@@ -160,16 +160,36 @@ func (a *App) changeAssignments(c Command) error {
 			if other.node == 0 {
 				return reject(CodeDeviceNotAssigned, "swap requires two assigned devices")
 			}
-			return a.applyAssignments(map[string]NodeID{c.DeviceID: other.node, c.OtherDeviceID: d.node}, true)
+			return a.assignExplicitly(map[string]NodeID{c.DeviceID: other.node, c.OtherDeviceID: d.node})
 		} else {
 			s := a.sessions[other.session]
 			if s == nil || s.failed || s.waitingHello {
 				return reject(CodeDeviceDisconnected, "replacement device is not connected and identified")
 			}
-			return a.applyAssignments(map[string]NodeID{c.DeviceID: 0, c.OtherDeviceID: d.node}, true)
+			return a.assignExplicitly(map[string]NodeID{c.DeviceID: 0, c.OtherDeviceID: d.node})
 		}
 	}
 	return nil
+}
+
+// assignExplicitly applies an admin's assignment change. While endless
+// operation runs, every player node whose board changes must be automatic,
+// so that nobody's station is swapped mid-play (server.md 4.2).
+func (a *App) assignExplicitly(updates map[string]NodeID) error {
+	if a.game.mode == Endless && a.game.running {
+		for uid, node := range updates {
+			d := a.devices[uid]
+			if d.kind != PlayerDevice || d.node == node {
+				continue
+			}
+			for _, id := range []NodeID{d.node, node} {
+				if id != 0 && a.game.nodes[id].manual {
+					return reject(CodeManualModeConflict, "a player whose board changes while running must be automatic")
+				}
+			}
+		}
+	}
+	return a.applyAssignments(updates, true)
 }
 
 // Save the complete candidate before changing any state or notifying an MCU.

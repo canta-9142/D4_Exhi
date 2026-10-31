@@ -11,7 +11,7 @@ import (
 // players eligible.
 func playingGame(t *testing.T, manual ...NodeID) *game {
 	t.Helper()
-	g := newGame(func(change) {})
+	g := newGame(Simultaneous, func(change) {})
 	for _, id := range manual {
 		g.setManual(id, true)
 		g.nodes[id].ready = true
@@ -69,11 +69,11 @@ func rankValue(rank *int) int {
 // within the first game second.
 func gainsHarness(t *testing.T) (*harness, string) {
 	t.Helper()
-	h := newHarness(t)
+	h := newSimultaneousHarness(t)
 	h.connect("p1", testUID, 1)
 	h.execute(Command{Operation: SetNodeEnabled, Node: 1, Enabled: true})
-	syncID := h.reset("p1").Sync
 	h.start()
+	syncID := h.reset("p1").Sync
 	h.place(2, testPacket(100, 3, 1, 2), testPacket(101, 3, 4, 1, 2))
 	return h, syncID
 }
@@ -138,13 +138,13 @@ func TestStatusGainsKeepTheFirstSixteen(t *testing.T) {
 }
 
 func TestStatusSentWhenAnotherPlayerChangesTheRank(t *testing.T) {
-	h := newHarness(t)
+	h := newSimultaneousHarness(t)
 	h.connect("p1", testUID, 1)
 	h.connect("p2", "112233AABBCC", 2)
 	h.execute(Command{Operation: SetNodeEnabled, Node: 1, Enabled: true})
 	h.execute(Command{Operation: SetNodeEnabled, Node: 2, Enabled: true})
-	syncID := h.reset("p2").Sync
 	h.start()
+	syncID := h.reset("p2").Sync
 	if got := lastStatus(t, h, "p1"); got.Rank != nil || got.Countdown == 0 {
 		t.Fatalf("countdown status: %+v", got)
 	}
@@ -165,7 +165,7 @@ func TestStatusSentWhenAnotherPlayerChangesTheRank(t *testing.T) {
 }
 
 func TestStatusRankIsNullForIneligiblePlayers(t *testing.T) {
-	h := newHarness(t)
+	h := newSimultaneousHarness(t)
 	h.connect("p1", testUID, 1)
 	h.connect("p2", "112233AABBCC", 2)
 	h.execute(Command{Operation: SetNodeEnabled, Node: 2, Enabled: true})
@@ -188,7 +188,7 @@ func TestStatusRankIsNullForIneligiblePlayers(t *testing.T) {
 }
 
 func TestStatusRankTiesAndPhases(t *testing.T) {
-	g := newGame(func(change) {})
+	g := newGame(Simultaneous, func(change) {})
 	for _, id := range []NodeID{1, 2, 3} {
 		g.setManual(id, true)
 		g.nodes[id].ready = true

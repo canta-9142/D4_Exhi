@@ -10,7 +10,7 @@ func (a *App) setPreview(uid string) error {
 		a.restorePreview()
 		return nil
 	}
-	if a.game.phase == Playing {
+	if a.game.locked() {
 		return reject(CodePhaseConflict, "preview cannot start while Playing")
 	}
 	d := a.devices[uid]

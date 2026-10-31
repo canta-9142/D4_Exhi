@@ -12,7 +12,7 @@ var epoch = time.Unix(1000, 0)
 // startedGame starts the game clock at epoch, after the countdown.
 func startedGame(t *testing.T) *game {
 	t.Helper()
-	g := newGame(func(change) {})
+	g := newGame(Simultaneous, func(change) {})
 	g.random = func(n int) int { return n / 2 }
 	if err := g.start(epoch.Add(-CountdownDuration)); err != nil {
 		t.Fatal(err)
@@ -26,7 +26,7 @@ func TestDelayedTicksMatchOnTimeTicks(t *testing.T) {
 	for at := 100 * time.Millisecond; at <= 130*time.Second; at += 100 * time.Millisecond {
 		regular.advance(epoch.Add(at))
 	}
-	if delayed.phase != Finished || delayed.elapsed != GameDuration || delayed.nextPID != uint32(8*(gameSeconds-1)) {
+	if delayed.phase != Finished || delayed.elapsed != GameDuration || delayed.nextPID != uint16(8*(gameSeconds-1)) {
 		t.Fatalf("wrong game boundary: phase=%s elapsed=%s generated=%d", delayed.phase, delayed.elapsed, delayed.nextPID)
 	}
 	if !reflect.DeepEqual(delayed.nodes, regular.nodes) {
@@ -179,34 +179,6 @@ func TestResetRestartsPIDFromZero(t *testing.T) {
 			}
 			seen[p.PID] = true
 		}
-	}
-}
-
-func TestStartRequiresUnissuedPIDs(t *testing.T) {
-	g := newGame(func(change) {})
-	g.nextPID = 65536 - maxGamePackets + 1
-	if err := g.start(epoch); err == nil {
-		t.Fatal("Start accepted insufficient PID capacity")
-	}
-	g.nextPID = 65536 - maxGamePackets
-	if err := g.start(epoch); err != nil {
-		t.Fatalf("exactly 1000 free PIDs rejected: %v", err)
-	}
-}
-
-func TestResetRecoversFromPIDExhaustion(t *testing.T) {
-	g := startedGame(t)
-	_ = g.finish(FinishManual)
-	g.nextPID = 65536 - maxGamePackets + 1
-	if blockers := g.startBlockers(); len(blockers) != 2 || blockers[1].Code != CodePIDExhausted {
-		t.Fatalf("exhausted PIDs not reported: %v", blockers)
-	}
-	g.reset()
-	if blockers := g.startBlockers(); len(blockers) != 0 {
-		t.Fatalf("Reset did not clear the blockers: %v", blockers)
-	}
-	if err := g.start(epoch); err != nil {
-		t.Fatalf("Start rejected after Reset: %v", err)
 	}
 }
 

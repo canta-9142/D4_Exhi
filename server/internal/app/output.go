@@ -7,29 +7,122 @@ import (
 	"strings"
 )
 
+// remainingSeconds is the simultaneous game's remaining time as MCUs receive
+// it, and 0 in endless operation.
 func (a *App) remainingSeconds() int {
+	if a.game.mode != Simultaneous {
+		return 0
+	}
 	return seconds(GameDuration - a.game.elapsed)
+}
+
+// nodeView is what a player MCU and the Snapshot show of one player, from the
+// settled state (player.md, web.md 3.2).
+type nodeView struct {
+	station                                    Station
+	round                                      RoundKind
+	score, remaining, countdown, window, combo int
+	ready                                      bool
+	// bots is the bot FIFO usage, shown only while practicing.
+	bots    [3]int
+	hasBots bool
+}
+
+func (g *game) view(id NodeID) nodeView {
+	n := &g.nodes[id]
+	v := nodeView{station: n.station, round: n.round, score: n.score, combo: n.combo}
+	if g.mode == Simultaneous {
+		v.ready = n.manual && n.ready
+		if g.phase != Preparing {
+			v.remaining = seconds(GameDuration - g.elapsed)
+		}
+		if g.phase == Playing {
+			v.countdown = g.countdown
+		}
+	} else {
+		switch n.station {
+		case StationSelect, StationFinished:
+			v.window = seconds(n.deadline - g.elapsed)
+		case StationPlaying:
+			v.countdown = seconds(n.roundStart - g.elapsed)
+			if n.round == RoundNormal {
+				v.remaining = seconds(n.roundEnd - max(g.elapsed, n.roundStart))
+			} else {
+				// The idle timer starts when the countdown ends.
+				v.window = min(seconds(n.deadline-max(g.elapsed, n.roundStart)), seconds(PracticeIdleDuration))
+			}
+		}
+	}
+	if n.practicing() {
+		v.score, v.combo = 0, 0
+		v.bots, v.hasBots = g.botUsage(), true
+	}
+	return v
+}
+
+// wirePhase is the phase sent to the player MCU of node, which is 0 for an
+// unassigned board under preview.
+func (g *game) wirePhase(node NodeID) Phase {
+	station := g.restingStation()
+	if node != 0 {
+		station = g.nodes[node].station
+	} else if g.mode == Simultaneous && g.phase != Preparing {
+		return g.phase
+	}
+	switch station {
+	case StationStopped:
+		return Preparing
+	case StationSelect:
+		return Select
+	case StationPlaying:
+		return Playing
+	case StationFinished:
+		return Finished
+	}
+	return Idle
+}
+
+// hasSummary reports whether the player MCU of node gets a summary: in a
+// result, but not after the simultaneous game's practice (server.md 3.7.4).
+func (g *game) hasSummary(node NodeID) bool {
+	if node == 0 {
+		return false
+	}
+	n := &g.nodes[node]
+	return n.station == StationFinished && n.round != RoundTutorial
 }
 
 // statusKey is the part of a status compared with the last one sent. Gains are
 // not part of it: any pending gains are sent.
 type statusKey struct {
-	score, remaining, countdown, rank, combo int
-	ready                                    bool
+	score, remaining, countdown, rank, combo, window int
+	ready                                            bool
+	round                                            RoundKind
+	bots                                             [3]int
+	hasBots                                          bool
 }
 
-// status leaves Gains empty; sendStatus takes the pending gains.
+// status leaves Gains empty; sendStatus takes the pending gains. An
+// unassigned board under preview shows zeros.
 func (a *App) status(node NodeID) (StatusData, statusKey) {
-	key := statusKey{remaining: a.remainingSeconds(), countdown: a.game.countdown}
+	var key statusKey
 	if node != 0 {
-		n := &a.game.nodes[node]
-		key.score, key.ready, key.rank, key.combo = n.score, n.manual && n.ready, a.game.statusRank(node), n.combo
+		v := a.game.view(node)
+		key = statusKey{score: v.score, remaining: v.remaining, countdown: v.countdown, rank: a.game.statusRank(node),
+			combo: v.combo, window: v.window, ready: v.ready, round: v.round, bots: v.bots, hasBots: v.hasBots}
 	}
 	data := StatusData{Score: key.score, Remaining: key.remaining, Ready: key.ready, Countdown: key.countdown,
-		Gains: []int{}, Combo: key.combo}
+		Window: key.window, Gains: []int{}, Combo: key.combo}
+	if key.round != "" {
+		round := key.round
+		data.Round = &round
+	}
 	if key.rank != 0 {
 		rank := key.rank
 		data.Rank = &rank
+	}
+	if key.hasBots {
+		data.Bots = slices.Clone(key.bots[:])
 	}
 	return data, key
 }
@@ -58,21 +151,24 @@ func (a *App) sendSummary(id SessionID) {
 		return
 	}
 	node := a.sessionNode(id)
-	if a.game.phase != Finished || node == 0 || s.sync == "" || a.previewing(id) {
+	if !a.game.hasSummary(node) || s.sync == "" || a.previewing(id) {
 		s.summaryPending = false
 		return
 	}
 	n := &a.game.nodes[node]
-	var rank, topPercent *int
-	bottomHalf := false
-	if n.eligible {
-		value := n.rank
-		rank = &value
-		topPercent = a.deviceTopPercent(n)
-		bottomHalf = a.deviceBottomHalf(n)
+	// A round is the result of one player and has no rank (server.md 3.1).
+	data := SummaryData{Sync: s.sync, Score: n.score, Eligible: true}
+	if a.game.mode == Simultaneous {
+		data.Eligible = n.eligible
+		if n.eligible {
+			rank := n.rank
+			data.Rank = &rank
+		}
 	}
-	data := SummaryData{Sync: s.sync, Score: n.score, Rank: rank, Eligible: n.eligible, TopPercent: topPercent,
-		BottomHalf: bottomHalf}
+	if data.Eligible {
+		data.TopPercent = a.deviceTopPercent(n)
+		data.BottomHalf = a.deviceBottomHalf(n)
+	}
 	a.setSummaryBests(&data, node)
 	if a.send(id, Message{Type: "summary", Data: data}) {
 		s.summaryPending = false
@@ -124,27 +220,39 @@ func (a *App) sendReset(id SessionID, packets []PacketView) bool {
 	if !a.send(id, Message{Type: "reset", Data: ResetData{s.sync, packets}}) {
 		return false
 	}
-	s.phasePending = a.game.phase == Finished && a.sessionNode(id) != 0 && !a.previewing(id)
+	s.phasePending = a.game.hasSummary(a.sessionNode(id)) && !a.previewing(id)
 	return true
 }
 
-func (a *App) resetFIFO(id SessionID, node NodeID) bool {
+// queue is what the player MCU of node caches: the practice queue while
+// practicing, and the real FIFO otherwise (server.md 3.6).
+func (a *App) queue(node NodeID) []PacketView {
 	packets := make([]PacketView, 0)
-	if node != 0 {
-		for _, p := range a.game.nodes[node].fifo {
-			packets = append(packets, p.PacketView)
-		}
+	if node == 0 {
+		return packets
 	}
-	return a.sendReset(id, packets)
+	n := &a.game.nodes[node]
+	if n.practicing() {
+		return append(packets, n.practice...)
+	}
+	for _, p := range n.fifo {
+		packets = append(packets, p.PacketView)
+	}
+	return packets
+}
+
+func (a *App) resetFIFO(id SessionID, node NodeID) bool {
+	return a.sendReset(id, a.queue(node))
 }
 
 func (a *App) phase(id SessionID) bool {
-	if !a.send(id, Message{Type: "phase", Data: PhaseData{a.game.phase}}) {
+	node := a.sessionNode(id)
+	if !a.send(id, Message{Type: "phase", Data: PhaseData{a.game.wirePhase(node)}}) {
 		return false
 	}
 	a.sessions[id].forceStatus = true
 	a.sessions[id].phasePending = false
-	a.sessions[id].summaryPending = a.game.phase == Finished && a.sessionNode(id) != 0 && !a.previewing(id)
+	a.sessions[id].summaryPending = a.game.hasSummary(node) && !a.previewing(id)
 	return true
 }
 
@@ -190,26 +298,29 @@ func (a *App) notify(c change) {
 		return
 	}
 	switch c.kind {
+	case "station":
+		a.notifyStation(c)
 	case "phase":
-		for node := NodeID(1); node <= PlayerCount; node++ {
-			if id := a.nodeSession(PlayerDevice, node); id != "" {
-				a.phase(id)
-			}
-		}
 		a.assignPending = true
 		a.autoAssignPending()
 	case "finished":
-		a.recordGame()
-		a.sendCheers()
+		if c.node != 0 {
+			a.recordRound(c.node)
+		} else {
+			a.recordGame()
+		}
 	case "reset":
 		a.gameBest = nil
-		a.deviceBests = deviceBests{}
 		a.notifyReset()
 	case "push", "fifo":
 		if c.node.bot() {
 			if c.kind == "push" {
 				a.buffer(c.node)
 			}
+			return
+		}
+		// A practicing MCU caches its practice queue, not the real FIFO.
+		if a.game.nodes[c.node].practicing() {
 			return
 		}
 		if id := a.nodeSession(PlayerDevice, c.node); id != "" {
@@ -229,6 +340,24 @@ func (a *App) notify(c change) {
 	}
 }
 
+// notifyStation sends a player's new station: phase, a reset when its MCU
+// switches between the practice queue and the real FIFO, then (with the
+// flush) status and summary (player.md).
+func (a *App) notifyStation(c change) {
+	id := a.nodeSession(PlayerDevice, c.node)
+	if id == "" || !a.phase(id) || !c.practice || a.previewing(id) {
+		return
+	}
+	if a.game.nodes[c.node].station == StationFinished {
+		// The simultaneous game's practice ends with its status before the
+		// real FIFO (server.md 3.7.4).
+		a.sendStatus(id)
+	}
+	a.resetFIFO(id, c.node)
+}
+
+// notifyReset sends what Start and Stop of endless operation, and Start and
+// Reset of the simultaneous game, send (server.md 4.2).
 func (a *App) notifyReset() {
 	p := a.clearPreview()
 	for node := NodeID(1); node <= PlayerCount; node++ {
@@ -236,6 +365,8 @@ func (a *App) notifyReset() {
 		if id == "" {
 			continue
 		}
+		// Initial values never replay earlier gains.
+		a.game.nodes[node].gains = nil
 		if p != nil && p.uid == a.sessions[id].uid {
 			if !a.send(id, Message{Type: "config", Data: ConfigData{Node: node, Mode: "auto", Preview: false}}) {
 				continue
@@ -301,9 +432,10 @@ type cheer struct {
 	data  CheerData
 }
 
-// cheers lists the CHEER commands of a finished game (server.md 5.3): one for
-// every link of each node in its best, from that node in the style of the
-// highest best it set. A link between two tied nodes gets one, from the lower.
+// cheers lists the CHEER commands of a settled result (server.md 5.3, 3.7.4):
+// one for every link of each node in its best, from that node in the style of
+// the highest best it set. A link between two tied nodes gets one, from the
+// lower.
 func cheers(best *BestScore, bests deviceBests) []cheer {
 	if best == nil {
 		return nil
@@ -322,11 +454,11 @@ func cheers(best *BestScore, bests deviceBests) []cheer {
 	return list
 }
 
-// sendCheers sends the CHEER commands once, at Finished. A controller set up
-// again while Finished never gets them: the 8-second cheer would no longer
-// follow the result (server.md 5.3).
-func (a *App) sendCheers() {
-	for _, c := range cheers(a.gameBest, a.deviceBests) {
+// sendCheers sends the CHEER commands once, when the result is settled. A
+// controller set up again later never gets them: the 8-second cheer would no
+// longer follow the result (server.md 5.3).
+func (a *App) sendCheers(best *BestScore, bests deviceBests) {
+	for _, c := range cheers(best, bests) {
 		id := a.nodeSession(LEDDevice, c.owner)
 		if id != "" && !a.previewing(id) {
 			a.send(id, Message{Type: "CHEER", Data: c.data})

@@ -94,7 +94,7 @@ func TestGameRecordIsSavedOnceAtFinished(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			saver := &gameSaver{}
-			h := newHarnessWithOptions(t, Options{SaveGame: saver.save})
+			h := newHarnessWithOptions(t, Options{Mode: Simultaneous, SaveGame: saver.save})
 			h.manualPlayer()
 			h.start() // The game clock starts at epoch.
 			if len(saver.saved()) != 0 {
@@ -138,7 +138,7 @@ func TestGameRecordIsSavedOnceAtFinished(t *testing.T) {
 // game by timeout; the Finish itself is then rejected and saves nothing.
 func TestLateFinishSavesTheTimeoutOnce(t *testing.T) {
 	saver := &gameSaver{}
-	h := newHarnessWithOptions(t, Options{SaveGame: saver.save})
+	h := newHarnessWithOptions(t, Options{Mode: Simultaneous, SaveGame: saver.save})
 	h.manualPlayer()
 	h.start()
 	h.clock.Store(int64(GameDuration + 50*time.Millisecond))
@@ -151,7 +151,7 @@ func TestLateFinishSavesTheTimeoutOnce(t *testing.T) {
 
 func TestGameRecordIsNotSavedOnResetReconnectOrState(t *testing.T) {
 	saver := &gameSaver{}
-	h := newHarnessWithOptions(t, Options{SaveGame: saver.save})
+	h := newHarnessWithOptions(t, Options{Mode: Simultaneous, SaveGame: saver.save})
 	h.manualPlayer()
 	h.start()
 	h.tick(GameDuration)
@@ -174,7 +174,7 @@ func TestGameRecordIsNotSavedOnResetReconnectOrState(t *testing.T) {
 
 func TestSaveFailureKeepsGameGoingAndIsReported(t *testing.T) {
 	saver := &gameSaver{err: errors.New("disk full")}
-	h := newHarnessWithOptions(t, Options{SaveGame: saver.save})
+	h := newHarnessWithOptions(t, Options{Mode: Simultaneous, SaveGame: saver.save})
 	h.manualPlayer()
 	h.start()
 	h.tick(GameDuration)
@@ -207,7 +207,7 @@ func TestBestScoresCountOnlyEligibleFullGamesOfCurrentDuration(t *testing.T) {
 	longer := testRecord(jst(13, 30, 0, 0), FinishTimeout, map[NodeID]int{1: 700}, nil)
 	longer.Duration, longer.Elapsed = GameDuration+30*time.Second, GameDuration+30*time.Second
 	automatic := testRecord(jst(14, 10, 0, 0), FinishTimeout, nil, map[NodeID]int{3: 800})
-	h := newHarnessWithOptions(t, Options{Records: []GameRecord{counted, manual, longer, automatic}})
+	h := newHarnessWithOptions(t, Options{Mode: Simultaneous, Records: []GameRecord{counted, manual, longer, automatic}})
 	rs := h.state().Records
 	want := &BestScore{Score: 100, Nodes: []NodeID{1}, FinishedAt: counted.FinishedAt}
 	if !reflect.DeepEqual(rs.AllTimeBest, want) || !reflect.DeepEqual(rs.HourlyBests, []HourlyBest{{HourStart: jst(13, 0, 0, 0), BestScore: *want}}) {
@@ -262,7 +262,7 @@ func TestBestScoreTiesKeepEarlierGameWithAllTiedNodes(t *testing.T) {
 
 func TestPastRecordsAndCurrentGameAreCounted(t *testing.T) {
 	past := testRecord(jst(13, 10, 0, 0), FinishTimeout, map[NodeID]int{2: 500}, nil)
-	h := newHarnessWithOptions(t, Options{Records: []GameRecord{past}})
+	h := newHarnessWithOptions(t, Options{Mode: Simultaneous, Records: []GameRecord{past}})
 	if rs := h.state().Records; rs.AllTimeBest == nil || rs.AllTimeBest.Score != 500 || len(rs.HourlyBests) != 1 {
 		t.Fatalf("past records at startup: %+v", rs)
 	}
@@ -291,7 +291,7 @@ func TestPastRecordsAndCurrentGameAreCounted(t *testing.T) {
 func TestUnavailableRecordsCountOnlyThisProcess(t *testing.T) {
 	saver := &gameSaver{}
 	past := testRecord(jst(13, 10, 0, 0), FinishTimeout, map[NodeID]int{2: 100000}, nil)
-	h := newHarnessWithOptions(t, Options{Records: []GameRecord{past}, SaveGame: saver.save, RecordsUnavailable: "file is not a database"})
+	h := newHarnessWithOptions(t, Options{Mode: Simultaneous, Records: []GameRecord{past}, SaveGame: saver.save, RecordsUnavailable: "file is not a database"})
 	rs := h.state().Records
 	if rs.Available || rs.UnavailableReason != "file is not a database" || rs.AllTimeBest != nil || len(rs.HourlyBests) != 0 || rs.SaveFailed {
 		t.Fatalf("unavailable records at startup: %+v", rs)
@@ -312,7 +312,7 @@ func TestUnavailableRecordsCountOnlyThisProcess(t *testing.T) {
 
 func TestGameBestLastsWhileFinished(t *testing.T) {
 	saver := &gameSaver{}
-	h := newHarnessWithOptions(t, Options{SaveGame: saver.save})
+	h := newHarnessWithOptions(t, Options{Mode: Simultaneous, SaveGame: saver.save})
 	h.manualPlayer()
 	h.ready("p1")
 	h.execute(Command{Operation: Start}) // The game clock starts at epoch+3s.

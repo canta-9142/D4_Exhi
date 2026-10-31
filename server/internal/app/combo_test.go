@@ -83,11 +83,11 @@ func TestComboResets(t *testing.T) {
 }
 
 func TestComboChangeSendsStatusWithoutScoring(t *testing.T) {
-	h := newHarness(t)
+	h := newSimultaneousHarness(t)
 	h.connect("p1", testUID, 1)
 	h.execute(Command{Operation: SetNodeEnabled, Node: 1, Enabled: true})
-	syncID := h.reset("p1").Sync
 	h.start()
+	syncID := h.reset("p1").Sync
 	h.tick(0)
 	h.place(1, testPacket(100, 3, 1), testPacket(101, 3, 1), testPacket(102, 3, 1))
 	h.place(9, make([]*packet, botCapacity)...)

@@ -19,7 +19,11 @@ const (
 )
 
 const (
-	Start                   Operation = "Start"
+	Start Operation = "Start"
+	// Stop and ReturnToBot are for endless operation, Finish and Reset for
+	// the simultaneous game (server.md 2.2).
+	Stop                    Operation = "Stop"
+	ReturnToBot             Operation = "ReturnToBot"
 	Finish                  Operation = "Finish"
 	Reset                   Operation = "Reset"
 	SetNodeEnabled          Operation = "SetNodeEnabled"
@@ -62,6 +66,8 @@ type IncomingMessage struct {
 	RID            uint32
 	PID            uint16
 	To             NodeID
+	// Round is a CHOOSE's selection, "normal" or "tutorial".
+	Round string
 }
 
 // Message is an outgoing command. serial uses MarshalLine and adds LF framing.
@@ -84,8 +90,13 @@ type StatusData struct {
 	Remaining int  `json:"remaining"`
 	Ready     bool `json:"ready"`
 	Countdown int  `json:"countdown"`
-	// Rank is the provisional rank while the game time runs, the settled rank
-	// once Finished, and nil otherwise or for an ineligible player.
+	// Round is the kind of the station's round, or nil (player.md).
+	Round *RoundKind `json:"round"`
+	// Window is how many seconds the station has before it times out.
+	Window int `json:"window"`
+	// Rank is the simultaneous game's provisional rank while the game time
+	// runs, its settled rank once Finished, and nil otherwise, for an
+	// ineligible player and in endless operation.
 	Rank *int `json:"rank"`
 	// Gains are the points earned since the last status to this session, in
 	// order. They are [] rather than null, and flat in data for the player
@@ -93,6 +104,9 @@ type StatusData struct {
 	Gains []int `json:"gains"`
 	// Combo is shown only and never affects the score (server.md 4.4).
 	Combo int `json:"combo"`
+	// Bots is the FIFO usage of B1-B3, only while practicing (server.md
+	// 3.6.1); the field is absent otherwise.
+	Bots []int `json:"bots,omitempty"`
 }
 type LEDConfigData struct {
 	Node    NodeID
@@ -188,6 +202,13 @@ type NodeSnapshot struct {
 	// TopPercent is 1-100 for a player who has one, otherwise nil. Unlike the
 	// summary it includes values above 50.
 	TopPercent *int `json:"top_percent"`
+	// Station and the rest are a player's stage and its times, the values
+	// that its MCU receives in phase and status; empty or 0 for a bot.
+	Station          Station   `json:"station,omitempty"`
+	Round            RoundKind `json:"round,omitempty"`
+	CountdownSeconds int       `json:"countdown_seconds"`
+	RemainingSeconds int       `json:"remaining_seconds"`
+	WindowSeconds    int       `json:"window_seconds"`
 }
 
 type DeviceSnapshot struct {
@@ -222,8 +243,10 @@ type HourlyBest struct {
 // RecordsSnapshot holds the best scores of server.md 3.5.5 and the state of
 // the records file.
 type RecordsSnapshot struct {
-	// GameBest is the current game's best while Finished, otherwise nil.
+	// GameBest is the simultaneous game's best while Finished, otherwise nil.
 	GameBest *BestScore `json:"game_best"`
+	// RecentRounds is the normal rounds settled since startup, newest first.
+	RecentRounds []RecentRound `json:"recent_rounds"`
 	// HourlyBests is newest hour first.
 	HourlyBests []HourlyBest `json:"hourly_bests"`
 	AllTimeBest *BestScore   `json:"all_time_best"`
@@ -236,8 +259,17 @@ type RecordsSnapshot struct {
 }
 
 type Snapshot struct {
-	Phase     Phase         `json:"phase"`
-	Elapsed   time.Duration `json:"elapsed"`
+	Mode GameMode `json:"mode"`
+	// Operation is whether endless operation runs; the simultaneous game
+	// always runs.
+	Operation OperationState `json:"operation"`
+	// Phase is the simultaneous game's phase, and empty in endless operation.
+	Phase Phase `json:"phase"`
+	// Elapsed is the game clock: since Start in endless operation, and the
+	// simultaneous game's settled elapsed time.
+	Elapsed time.Duration `json:"elapsed"`
+	// Remaining, RemainingSeconds and CountdownSeconds are the simultaneous
+	// game's, and 0 in endless operation, where each player has its own.
 	Remaining time.Duration `json:"remaining"`
 	// RemainingSeconds is the value MCUs receive as status.remaining.
 	RemainingSeconds int `json:"remaining_seconds"`

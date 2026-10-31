@@ -39,7 +39,7 @@ func TestAssignmentsPersistAndRestoreAcrossRestart(t *testing.T) {
 		saves++
 		return store.Save(devices)
 	}
-	h := newHarnessWithOptions(t, Options{SaveDevices: save})
+	h := newHarnessWithOptions(t, Options{Mode: Simultaneous, SaveDevices: save})
 	const replacement = "112233AABBCC"
 	const led = "A00000000001"
 	h.connect("source", testUID, 1)
@@ -73,7 +73,7 @@ func TestAssignmentsPersistAndRestoreAcrossRestart(t *testing.T) {
 	if saves != before {
 		t.Fatal("preview, Reset or disconnect persisted temporary state")
 	}
-	restored := newHarnessWithOptions(t, Options{Devices: devices, SaveDevices: save})
+	restored := newHarnessWithOptions(t, Options{Mode: Simultaneous, Devices: devices, SaveDevices: save})
 	snapshot := restored.state()
 	if snapshot.Phase != Preparing || snapshot.Preview != nil || len(snapshot.Devices) != len(want) {
 		t.Fatalf("bad restored state: %+v", snapshot)
@@ -125,7 +125,7 @@ func TestFailedAssignmentSaveLeavesStateAndNotificationsUnchanged(t *testing.T) 
 		{Operation: ReplaceDeviceAssignment, DeviceID: testUID, OtherDeviceID: testUID2},
 	} {
 		t.Run(fmt.Sprintf("%s/%d", command.Operation, command.Node), func(t *testing.T) {
-			h := newHarness(t)
+			h := newSimultaneousHarness(t)
 			h.connect("source", testUID, 1)
 			h.connect("other", testUID2, 2)
 			h.execute(Command{Operation: SetNodeEnabled, Node: 2, Enabled: true})
@@ -156,7 +156,7 @@ func TestFailedAssignmentSaveLeavesStateAndNotificationsUnchanged(t *testing.T) 
 func TestNotificationFailureKeepsDurableAssignment(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "devices.json")
 	store := &DeviceStore{Path: path}
-	h := newHarnessWithOptions(t, Options{SaveDevices: store.Save})
+	h := newHarnessWithOptions(t, Options{Mode: Simultaneous, SaveDevices: store.Save})
 	h.connect("player", testUID, 1)
 	h.mu.Lock()
 	h.failType = "config"
@@ -173,7 +173,7 @@ func TestNotificationFailureKeepsDurableAssignment(t *testing.T) {
 }
 
 func TestExclusionOnlyChangeIsPersistedAndIdenticalRequestsDoNotWrite(t *testing.T) {
-	h := newHarnessWithOptions(t, Options{Devices: reservedPlayers()})
+	h := newHarnessWithOptions(t, Options{Mode: Simultaneous, Devices: reservedPlayers()})
 	h.must(h.a.Connected(h.ctx, "spare"))
 	h.message("spare", IncomingMessage{Type: "hello", UID: testUID})
 	if h.device(testUID).Node != 0 {
@@ -208,7 +208,7 @@ func TestExclusionOnlyChangeIsPersistedAndIdenticalRequestsDoNotWrite(t *testing
 func TestAutomaticSaveFailurePreservesConnectionAndRetriesOnTrigger(t *testing.T) {
 	saves := 0
 	failed := true
-	h := newHarnessWithOptions(t, Options{SaveDevices: func([]SavedDevice) error {
+	h := newHarnessWithOptions(t, Options{Mode: Simultaneous, SaveDevices: func([]SavedDevice) error {
 		saves++
 		if failed {
 			return errors.New("disk full")
@@ -234,7 +234,7 @@ func TestAutomaticSaveFailurePreservesConnectionAndRetriesOnTrigger(t *testing.T
 
 func TestFollowUpAutomaticSaveFailureDoesNotUndoSuccessfulOperation(t *testing.T) {
 	devices := reservedPlayers()
-	h := newHarnessWithOptions(t, Options{Devices: devices})
+	h := newHarnessWithOptions(t, Options{Mode: Simultaneous, Devices: devices})
 	h.must(h.a.Connected(h.ctx, "spare"))
 	h.message("spare", IncomingMessage{Type: "hello", UID: testUID})
 	var committed []SavedDevice
@@ -269,7 +269,7 @@ func TestAssignmentRetryRequiresNewlyFreedRole(t *testing.T) {
 		{"replace", Command{Operation: ReplaceDeviceAssignment, DeviceID: testUID, OtherDeviceID: testUID2}, 2},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			h := newHarness(t)
+			h := newSimultaneousHarness(t)
 			h.connect("first", testUID, 1)
 			h.connect("second", testUID2, 2)
 			writes := 0
@@ -298,7 +298,7 @@ func TestAssignmentRetryRequiresNewlyFreedRole(t *testing.T) {
 func TestUncertainSaveStopsAppWithoutCommitOrFurtherNotifications(t *testing.T) {
 	for _, automatic := range []bool{false, true} {
 		t.Run(fmt.Sprintf("automatic=%t", automatic), func(t *testing.T) {
-			h := newHarness(t)
+			h := newSimultaneousHarness(t)
 			h.connect("source", testUID, 1)
 			h.connect("other", testUID2, 2)
 			h.execute(Command{Operation: SetNodeEnabled, Node: 2, Enabled: true})
@@ -340,7 +340,7 @@ func TestUncertainSaveStopsAppWithoutCommitOrFurtherNotifications(t *testing.T) 
 }
 
 func TestUncertainAutomaticSaveDuringCatchUpStopsBeforeRequestedCommand(t *testing.T) {
-	h := newHarness(t)
+	h := newSimultaneousHarness(t)
 	h.start()
 	h.must(h.a.Connected(h.ctx, "pending"))
 	h.message("pending", IncomingMessage{Type: "hello", UID: testUID})
@@ -471,7 +471,7 @@ func setSave(t *testing.T, h *harness, save func([]SavedDevice) error) {
 }
 
 func TestAssignmentsAreSavedBeforeAnyObservableChange(t *testing.T) {
-	h := newHarness(t)
+	h := newSimultaneousHarness(t)
 	h.connect("p1", testUID, 1)
 	h.connect("p2", "112233445566", 2)
 	h.execute(Command{Operation: SetNodeEnabled, Node: 1, Enabled: true})
@@ -519,7 +519,7 @@ func TestAssignmentsAreSavedBeforeAnyObservableChange(t *testing.T) {
 }
 
 func TestAutomaticAssignmentRetriesAfterSaveFailureOnReset(t *testing.T) {
-	h := newHarness(t)
+	h := newSimultaneousHarness(t)
 	setSave(t, h, func([]SavedDevice) error { return errors.New("disk full") })
 	h.must(h.a.Connected(h.ctx, "p1"))
 	h.clear()

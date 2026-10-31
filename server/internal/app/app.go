@@ -36,6 +36,8 @@ type Options struct {
 	// startup. If set, app never calls SaveGame and counts only the games of
 	// this process.
 	RecordsUnavailable string
+	// Mode is the game mode, fixed for the run. Empty means Endless.
+	Mode GameMode
 }
 
 type session struct {
@@ -84,9 +86,9 @@ type App struct {
 	fatalErr      error
 	assignPending bool
 	bests         bests
-	gameBest      *BestScore  // The finished game's best until Reset.
-	deviceBests   deviceBests // The finished game's bests for summaries until Reset.
-	saveFailed    bool        // Whether the latest SaveGame failed.
+	gameBest      *BestScore    // The finished simultaneous game's best until Reset.
+	recentRounds  []RecentRound // Newest first, at most maxRecentRounds.
+	saveFailed    bool          // Whether the latest SaveGame failed.
 }
 
 func New(options Options) *App {
@@ -97,7 +99,7 @@ func New(options Options) *App {
 		sessions: make(map[SessionID]*session), devices: make(map[string]*device),
 		options: options, requests: make(chan request), done: make(chan struct{}), now: time.Now,
 	}
-	a.game = newGame(a.notify)
+	a.game = newGame(options.Mode, a.notify)
 	for _, d := range options.Devices {
 		a.devices[d.DeviceID] = &device{kind: d.Kind, node: d.Node, noAuto: d.AutoAssignExcluded}
 	}
@@ -224,17 +226,24 @@ func (a *App) ExecuteWithResult(ctx context.Context, command Command) (Result, e
 	err := a.submit(ctx, true, func(now time.Time) error {
 		switch command.Operation {
 		case Start:
-			if err := a.game.startError(); err != nil {
-				return err
-			}
-			a.restorePreview()
+			// Start ends any preview while it resets every MCU (server.md 4.2.2).
 			return a.game.start(now)
+		case Stop:
+			return a.game.stop()
 		case Finish:
 			return a.game.finish(FinishManual)
 		case Reset:
-			a.game.reset()
+			return a.game.reset()
+		case ReturnToBot:
+			if a.game.mode != Endless {
+				return reject(CodePhaseConflict, "ReturnToBot requires endless operation")
+			}
+			if !command.Node.player() {
+				return reject(CodeInvalid, "ReturnToBot requires a player node")
+			}
+			return a.game.returnToBot(command.Node)
 		case SetNodeEnabled:
-			if a.game.phase == Playing {
+			if a.game.locked() {
 				return reject(CodePhaseConflict, "operation mode cannot change while Playing")
 			}
 			if !command.Node.player() {
@@ -246,7 +255,7 @@ func (a *App) ExecuteWithResult(ctx context.Context, command Command) (Result, e
 			}
 			a.applyNodeEnabled(command.Node, command.Enabled, id)
 		case SetAllNodesEnabled:
-			if a.game.phase == Playing {
+			if a.game.locked() {
 				return reject(CodePhaseConflict, "operation mode cannot change while Playing")
 			}
 			// A node without an identified MCU cannot become manual; it stays
@@ -305,25 +314,31 @@ func (a *App) State(ctx context.Context) (Snapshot, error) {
 		g := &a.game
 		reasons := g.startBlockers()
 		snapshot = Snapshot{
-			Phase: g.phase, Elapsed: g.elapsed, Remaining: GameDuration - g.elapsed, RemainingSeconds: a.remainingSeconds(),
-			CountdownSeconds: g.countdown, CanStart: len(reasons) == 0, StartBlockers: reasons,
+			Mode: g.mode, Operation: OperationRunning, Elapsed: g.elapsed,
+			CanStart: len(reasons) == 0, StartBlockers: reasons,
 			Nodes: make([]NodeSnapshot, 0, NodeCount), Devices: make([]DeviceSnapshot, 0, len(a.devices)),
+		}
+		if g.mode == Simultaneous {
+			snapshot.Phase, snapshot.Remaining = g.phase, GameDuration-g.elapsed
+			snapshot.RemainingSeconds, snapshot.CountdownSeconds = a.remainingSeconds(), g.countdown
+		} else if !g.running {
+			snapshot.Operation = OperationStopped
 		}
 		for id := NodeID(1); id <= NodeCount; id++ {
 			n := &g.nodes[id]
-			kind := "player"
-			if id.bot() {
-				kind = "bot"
+			node := NodeSnapshot{ID: id, Kind: "bot", FIFOUsage: len(n.fifo), Rate: n.rate}
+			if id.player() {
+				v := g.view(id)
+				node.Kind, node.Enabled, node.Score, node.TopPercent = "player", n.manual, v.score, optionalPercent(n.topPercent)
+				node.RankingEligible, node.Ready = n.eligible, v.ready
+				if n.rank != 0 {
+					rank := n.rank
+					node.Rank = &rank
+				}
+				node.Station, node.Round = v.station, v.round
+				node.CountdownSeconds, node.RemainingSeconds, node.WindowSeconds = v.countdown, v.remaining, v.window
 			}
-			var rank *int
-			if n.rank != 0 {
-				value := n.rank
-				rank = &value
-			}
-			snapshot.Nodes = append(snapshot.Nodes, NodeSnapshot{
-				ID: id, Kind: kind, Enabled: n.manual, FIFOUsage: len(n.fifo), Score: n.score,
-				RankingEligible: n.eligible, Rate: n.rate, Ready: n.ready, Rank: rank, TopPercent: optionalPercent(n.topPercent),
-			})
+			snapshot.Nodes = append(snapshot.Nodes, node)
 		}
 		for uid, d := range a.devices {
 			assignmentKind := DeviceKind("")
@@ -403,8 +418,22 @@ func (a *App) MessageReceived(ctx context.Context, id SessionID, message Incomin
 			if node == 0 {
 				return nil
 			}
-			if a.game.phase == Preparing && a.game.nodes[node].manual && s.sync != "" && s.sync == message.Sync {
-				a.game.nodes[node].ready = true
+			// Accepted or not, the MCU gets the current status (server.md 4.7).
+			if s.sync != "" && s.sync == message.Sync {
+				a.game.ready(node)
+			}
+			s.forceStatus = true
+		case "choose":
+			round := RoundKind(message.Round)
+			if !validHex(message.Sync, 32) || round != RoundNormal && round != RoundTutorial {
+				a.closeSession(id)
+				return errors.New("invalid CHOOSE fields")
+			}
+			if node == 0 {
+				return nil
+			}
+			if s.sync != "" && s.sync == message.Sync {
+				a.game.choose(node, round)
 			}
 			s.forceStatus = true
 		case "send":
@@ -417,16 +446,26 @@ func (a *App) MessageReceived(ctx context.Context, id SessionID, message Incomin
 			}
 			s.lastRID, s.hasRID = message.RID, true
 			current := s.sync != "" && s.sync == message.Sync
-			ok := current && a.game.canTransfer(node, message.PID, message.To)
-			if ok {
+			switch {
+			case current && a.game.canPractice(node, message.PID, message.To):
+				// A practice SEND touches only the practice queue (server.md 3.6).
+				refill := a.game.practiceSend(node)
+				if a.send(id, Message{Type: "result", Data: ResultData{message.Sync, message.RID, true}}) {
+					a.send(id, Message{Type: "push", Data: refill})
+				}
+			case current && a.game.canTransfer(node, message.PID, message.To):
 				// Commit before sending; publish RESULT before the transfer's notifications.
 				changes := a.game.transfer(node, message.To, true)
 				a.send(id, Message{Type: "result", Data: ResultData{message.Sync, message.RID, true}})
 				for _, c := range changes {
 					a.notify(c)
 				}
-			} else if a.send(id, Message{Type: "result", Data: ResultData{message.Sync, message.RID, false}}) && current && node != 0 {
-				a.resetFIFO(id, node)
+				a.game.abortOverflowed()
+			default:
+				// A rejected SEND of the current generation resynchronizes the queue.
+				if a.send(id, Message{Type: "result", Data: ResultData{message.Sync, message.RID, false}}) && current && node != 0 {
+					a.resetFIFO(id, node)
+				}
 			}
 		default:
 			a.closeSession(id)

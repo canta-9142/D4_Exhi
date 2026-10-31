@@ -52,7 +52,7 @@ func TestFinalRanksExcludeIneligibleAndUseCompetitionRanking(t *testing.T) {
 		{"no eligible players", nil, []int{0, 0, 0, 0, 0, 0, 0, 0}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			g := newGame(func(change) {})
+			g := newGame(Simultaneous, func(change) {})
 			for _, id := range tc.eligible {
 				g.setManual(id, true)
 				g.nodes[id].ready = true
@@ -87,7 +87,7 @@ func TestFinalRanksExcludeIneligibleAndUseCompetitionRanking(t *testing.T) {
 }
 
 func TestSummarySynchronizationAndFrozenResults(t *testing.T) {
-	h := newHarness(t)
+	h := newSimultaneousHarness(t)
 	for id := NodeID(1); id <= 3; id++ {
 		h.connect(SessionID(id.wireName()), fmt.Sprintf("%012X", id), id)
 		h.execute(Command{Operation: SetNodeEnabled, Node: id, Enabled: true})
@@ -163,7 +163,7 @@ func TestSummarySynchronizationAndFrozenResults(t *testing.T) {
 		t.Fatal("rejection retained stale result generation")
 	}
 	h.clear()
-	h.ready("P2")
+	h.press("P2")
 	if got := messageTypes(h.messages()); !reflect.DeepEqual(got, []string{"status"}) {
 		t.Fatal(got)
 	}
@@ -184,7 +184,7 @@ func (h *harness) currentSync(id SessionID) string {
 }
 
 func TestPreviewUsesCanonicalFIFOAndRestoresResult(t *testing.T) {
-	h := newHarness(t)
+	h := newSimultaneousHarness(t)
 	h.connect("p1", testUID, 1)
 	h.start()
 	h.tick(time.Second)
@@ -226,7 +226,7 @@ func TestPreviewUsesCanonicalFIFOAndRestoresResult(t *testing.T) {
 }
 
 func TestLEDUnassignmentAndUnassignedPreviewUseIdentify(t *testing.T) {
-	h := newHarness(t)
+	h := newSimultaneousHarness(t)
 	uid := "A00000000001"
 	h.connectLED("led", uid, 9)
 	h.clear()
@@ -250,7 +250,7 @@ func TestLEDUnassignmentAndUnassignedPreviewUseIdentify(t *testing.T) {
 }
 
 func TestStructuredRefusalsAndStartBlockers(t *testing.T) {
-	h := newHarness(t)
+	h := newSimultaneousHarness(t)
 	h.connect("p1", testUID, 1)
 	h.connect("p2", "112233AABBCC", 2)
 	h.connectLED("led", "A00000000001", 1)
@@ -288,17 +288,13 @@ func TestStructuredRefusalsAndStartBlockers(t *testing.T) {
 	expectCode(t, h.a.Execute(h.ctx, Command{Operation: SwapDeviceAssignments, DeviceID: testUID, OtherDeviceID: "112233AABBCC"}), CodeDeviceNotAssigned)
 	h.must(h.a.Disconnected(h.ctx, "p2"))
 	expectCode(t, h.a.Execute(h.ctx, Command{Operation: ReplaceDeviceAssignment, DeviceID: testUID, OtherDeviceID: "112233AABBCC"}), CodeDeviceDisconnected)
-	h.must(h.a.submit(h.ctx, false, func(time.Time) error { h.a.game.nextPID = 65536 - 999; return nil }))
-	expectCode(t, h.a.Execute(h.ctx, Command{Operation: Start}), CodePIDExhausted)
-	h.must(h.a.submit(h.ctx, false, func(time.Time) error { h.a.game.nextPID = 0; return nil }))
 	h.start()
 	h.execute(Command{Operation: Finish})
 	h.execute(Command{Operation: SetNodeEnabled, Node: 1, Enabled: false})
 	h.execute(Command{Operation: SetNodeEnabled, Node: 1, Enabled: true})
-	h.must(h.a.submit(h.ctx, false, func(time.Time) error { h.a.game.nextPID = 65536 - 999; return nil }))
 	expectCode(t, h.a.Execute(h.ctx, Command{Operation: Start}), CodePhaseConflict)
 	blockers := h.state().StartBlockers
-	if len(blockers) != 3 || blockers[0].Code != CodeNotPreparing || blockers[1].Code != CodePIDExhausted || blockers[2].Code != CodePlayersNotReady {
+	if len(blockers) != 2 || blockers[0].Code != CodeNotPreparing || blockers[1].Code != CodePlayersNotReady {
 		t.Fatalf("blocker priority: %v", blockers)
 	}
 	h.cancel()
@@ -314,7 +310,7 @@ func TestLEDIdentityRequiresUppercaseTwelveHexDigits(t *testing.T) {
 			t.Fatalf("invalid LED UID accepted: %q", uid)
 		}
 	}
-	h := newHarness(t)
+	h := newSimultaneousHarness(t)
 	h.must(h.a.Connected(h.ctx, "led"))
 	h.message("led", IncomingMessage{Type: "hello", Kind: LEDDevice, UID: "LED-1"})
 	if len(h.state().Devices) != 0 {
@@ -331,7 +327,7 @@ func TestLEDIdentityRequiresUppercaseTwelveHexDigits(t *testing.T) {
 }
 
 func TestSummaryFailurePreservesResultForReconnect(t *testing.T) {
-	h := newHarness(t)
+	h := newSimultaneousHarness(t)
 	h.connect("p1", testUID, 1)
 	h.execute(Command{Operation: SetNodeEnabled, Node: 1, Enabled: true})
 	h.start()
@@ -359,7 +355,7 @@ func TestSummaryFailurePreservesResultForReconnect(t *testing.T) {
 }
 
 func TestLEDResetOnlyReconfiguresPreviewTarget(t *testing.T) {
-	h := newHarness(t)
+	h := newSimultaneousHarness(t)
 	h.connectLED("first", "A00000000001", 9)
 	h.connectLED("second", "A00000000002", 10)
 	h.execute(Command{Operation: SetDevicePreview, DeviceID: "A00000000001"})
