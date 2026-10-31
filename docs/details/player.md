@@ -129,6 +129,37 @@ comboが前の値より減ったときは、コンボが切れたと解釈する
 
 横方向の走査に合わせて左から右へ列方向DMA転送する。通常描画と列方向転送の向き・色の一致、およびGSCANの位相を進めると明るい領域が左から右へ移動することを実機で確認した。物理リフレッシュ周期の独立測定は行っていない。
 
+#### 練習のヒントの帯とBotの混雑
+
+練習ラウンドの画面（`DisplayScreen::Practice`）では、下部のBotのボタン2つ（左から2番目・3番目、x=121〜239・241〜359）の上端に、ヒントの帯とBotの混雑のバーを描く。両端のボタンには描かない。判定は[tutorial_hint.hpp](../../src/player/tutorial_hint.hpp)の純粋な関数、座標と色は[display_layout.hpp](../../src/player/display_layout.hpp)の定数、描画は[practice_renderer.hpp](../../src/player/practice_renderer.hpp)の`draw_practice_hints`が行う。
+
+| 部品 | 座標（左から2番目のボタン。3番目は+120） | 内容 |
+| --- | --- | --- |
+| 混雑のバー | x=121〜239、y=241〜243（ボタン枠の幅、高さ3） | `status.bots`の使用量の色。0〜1が青（`0x001F`）、2が緑（`0x07E0`）、3が黄（`0xFFE0`）、4が赤（`0xF800`）。シグナルタワーと同じ対応 |
+| ヒントの帯 | x=125〜235、y=244〜254 | A〜Hの8枠。枠は13×11で、14画素ごとに並べる（隙間1） |
+| FULLの札 | x=154〜205、y=302〜317 | 使用量が4のときだけ、赤の地に白の`FULL`（文字サイズ2） |
+| ボタンの文字 | x=162〜191、y=256〜297 | `draw_button`のFont0の文字サイズ6（字形5×7ドット）。帯との間に1行（y=255）空ける |
+
+帯の枠は、`tutorial_hint(自ノード, 先頭パケットの宛先)`の結果（`HintCell`の`Unlinked`・`Linked`・`Lit`）で次のように描く。枠の中には、ノードの表示名を文字サイズ1で、枠の左上から(4, 2)に描く（光る枠の2画素の太枠に掛からない）。
+
+| 枠 | 判定 | 描き方 |
+| --- | --- | --- |
+| 光る（`Lit`） | そのBotにつながるプレイヤー（自分を除く）で、宛先と一致し、宛先が両隣でない | ノードの色で塗り、2画素の黒い太枠、黒い文字 |
+| つながる（`Linked`） | そのBotにつながるプレイヤー（自分を除く）で、光らない | ノードの色を50%の明るさにして塗り、白い文字 |
+| つながらない（`Unlinked`） | そのBotにつながらないプレイヤー、または自分 | ボタンの地の色を60%の明るさにした色で、1画素の枠線と文字だけ。押下中で地が黒なら暗い灰色（`0x4208`） |
+
+「そのBotにつながる」は、`nodeLayouts`でそのプレイヤーの下部のボタンにそのBotがあること、「両隣」は自ノードの`nodeLayouts`の左端・右端のノードとする。宛先が両隣のとき、FIFOが空のとき（宛先に`None`を渡す）、宛先がプレイヤーでないときは、どの枠も光らない。現在の配置では、両隣以外の5ノードの宛先は、必ず2つのBotのどちらかで光る。
+
+ゲーム側は、`practice_round()`が成り立つ間だけ、`PacketQueue`の先頭（練習中は練習用キュー。実際のFIFOと区別しない）の宛先から`tutorial_hint()`を求め、`DisplaySnapshot::hint`（ボタンごとの8枠の状態）に入れる。練習の外では空のままで、描画側も`displayed_hint()`で練習の画面以外では空として扱う。混雑は、スナップショットの`status.bots`と自ノードから、描画側が`displayed_bot_load()`（`bot_load()`）で求める。`bottom_bot()`で自ノードの下部の2つのBot（`nodeLayouts`の2番目・3番目）を選び、そのBotの`bots`の値を使う。`botsKnown`がfalse（`bots`が来ていない間）は-1とし、バーもFULLも出さない。混雑は宛先や枠の光り方とは独立に出す。
+
+差分描画では、`DisplayChanges`の`hintBands`・`botBars`（bit iが左からi番目のボタン）で描き直す範囲を決める。
+
+- 帯: 全描画（練習に入ったとき。出るときは画面の種別が変わるので全描画で消える）、帯の判定結果が変わったとき（先頭パケットの宛先が変わって、光る枠が変わったとき）。宛先が同じパケットに入れ替わったときや、隣接宛てから空になったときのように、結果が同じなら描き直さない。
+- バーとFULLの札: 全描画、表示する使用量が変わったとき（`bots`の受信・消失、自ノードの下部のBotの値の変化）。下部にないBotの値の変化や、毎秒の`status`では描き直さない。
+- ボタンの押下・解放や自ノードの変更でBotのボタンを描き直したときは、ボタンの塗りで帯とバーが消えるので、そのボタンの帯とバーも続けて描く（範囲はボタン枠の描き直しに含まれる）。
+
+帯は地の色で帯の範囲を塗ってから8枠を描き、バーはバーの範囲を色または地の色で、FULLの札は札の範囲を赤または地の色で塗る。どれもボタンの文字に重ならないので、文字を描き直さずに置き換えられる。転送範囲は帯（111×11）、バー（119×3）とFULLの札（52×16）だけを16画素のタイルに丸めて登録する。バーは点滅させない。
+
 ### アニメーション
 
 [packet_animation.hpp](../../src/player/packet_animation.hpp)の`PacketAnimation`は、キューの状態からカード位置・透明度を更新する。LCDやFreeRTOSには依存しない。
@@ -282,7 +313,7 @@ nix develop -c arduino-cli compile \
 
 ### テスト
 
-通信処理は`tests/server_link.cpp`、長押し判定は`tests/ready_hold.cpp`、表示状態と転送時刻は`tests/display_snapshot.cpp`、更新矩形は`tests/frame_damage.cpp`、炎は`tests/flame_field.cpp`、順位・コンボの演出とマスコットは`tests/playing_effects.cpp`、結果②のヘッダーの絵は`tests/top_percent_art.cpp`でホスト検証する。以下はplayerブランチのソースを対象に実行する。
+通信処理は`tests/server_link.cpp`、長押し判定は`tests/ready_hold.cpp`、表示状態と転送時刻は`tests/display_snapshot.cpp`、更新矩形は`tests/frame_damage.cpp`、炎は`tests/flame_field.cpp`、順位・コンボの演出とマスコットは`tests/playing_effects.cpp`、結果②のヘッダーの絵は`tests/top_percent_art.cpp`、練習のヒントの帯とBotの混雑の判定は`tests/tutorial_hint.cpp`でホスト検証する。以下はplayerブランチのソースを対象に実行する。
 
 ```sh
 nix shell nixpkgs#gcc -c bash -c '
@@ -293,16 +324,18 @@ nix shell nixpkgs#gcc -c bash -c '
 '
 ```
 
-ArduinoJsonを使わない表示・演出のテストも同じ方法で実行する。
+ArduinoJsonを使わない表示・演出のテストも同じ方法で実行する。`node_config.hpp`はLovyanGFXの色の名前を使うので、`tests/player_stubs`の代替の`LovyanGFX.hpp`（色の名前だけを定義する）を読む。
 
 ```sh
 nix shell nixpkgs#gcc -c bash -c '
-  for test in display_snapshot flame_field playing_effects top_percent_art; do
+  for test in display_snapshot flame_field playing_effects top_percent_art tutorial_hint; do
     c++ -std=c++17 -fno-inline -Wall -Wextra -Werror -fsanitize=address,undefined \
-      tests/$test.cpp -o /tmp/d4-$test-test && /tmp/d4-$test-test || exit 1
+      -I tests/player_stubs tests/$test.cpp -o /tmp/d4-$test-test && /tmp/d4-$test-test || exit 1
   done
 '
 ```
+
+練習のヒントの帯のテストでは、8ノードすべての自ノードと宛先（なしを含む）について、両隣以外の宛先なら2つのBotの少なくとも一方の枠が光り、光るのは宛先の枠だけであること、両隣・空のFIFOでは光らないこと、自分の枠が常に「つながらない」こと、「つながる」が宛先によらず隣接関係だけで決まることを検証する。参考画像の3例（自ノードAで宛先D・G・B）の16枠の結果と、下部の2つのBotと各Botにつながるプレイヤーが仕様のボタン配置表と一致することも確かめる。Botの混雑では、使用量0〜4の色がシグナルタワーの対応どおりであること、4だけFULLを出すこと、`bots`が未受信なら出さないこと、8ノードすべてで下部の2つのBotの値を選ぶことを検証する。配置では、帯・バー・FULLの札がボタン枠に収まり、ボタンの文字と互いに重ならず、枠の名前が光る枠の太枠の内側に収まることを確かめる。`tests/display_snapshot.cpp`では、練習に入ると帯とバーを描くこと、練習の外（通常のPlaying・カウントダウン）では出さないこと、帯は判定結果が変わったときだけ帯の範囲を描き直し、ボタンの文字の範囲を含めないこと、バーは下部のBotの使用量が変わったときだけバーとFULLの札の範囲を描き直すこと、帯と混雑が独立に描き直されること、Botのボタンの押下・自ノードの変更では帯とバーも描き直し、両端のボタンの押下では描き直さないことを検証する。
 
 演出のテストでは、炎が同じシードで同じ格子になること、combo 0で炎が出ないこと、段が上がると高さが単調に増えること、色が上限を超えないこと、炎・火の粉・煙が矩形の外に出ないこと、コンボが切れたら火種を止めて煙を上げることを検証する。順位とコンボでは、順位ごとの冠、上がったときだけのRANK UPと緑の点滅（下がったとき・nullから順位が付いたとき・画面を離れていた間は出さない）、区切りの判定（4→5、9→10、29→30、3→7で出し、同じ値の再通知と5→7では出さない）、BREAKとしょんぼりの顔・落下・煙を検証する。マスコットでは、段階の境界（2・3、4・5、9・10、19・20）、0〜2で出さないこと、位置が時刻だけで決まり発行の間隔に左右されないこと、左の列の外に出ないこと、段階が上がると下端から出直すこと、20以上ですべて炎をまとい高速の1体が4秒に1回だけ出ること、まばたきの間隔が2〜4秒で同じシードなら同じこと、部品を重ねた絵が冠を含めて枠に収まること、左右反転で左右対称の位置に描くことを検証する。`tests/display_snapshot.cpp`では、Playingの通常画面以外で演出を出さないこと、カウントダウン画面へ切り替わると演出を消すこと、何も変わらないときに差分が出ないこと、左の列と右の余白だけを描き直すことを検証する。`tests/server_link.cpp`では`combo`の範囲・型・欠落による再同期と、不正時の値の保持を検証する。
 
