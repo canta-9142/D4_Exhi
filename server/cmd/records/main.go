@@ -27,7 +27,7 @@ const usage = `使い方: records <サブコマンド> [オプション]
 
   histogram  スコア帯ごとの人数を表示する（読み取りだけ。サーバーの動作中も使える）
   clear      すべてのゲーム記録を削除する（サーバーの停止中だけ）
-  seed       空の記録へプレイヤーA（P1）のゲームを追加する（サーバーの停止中だけ）
+  seed       空の記録へプレイヤーA（P1）の通常ラウンドを追加する（サーバーの停止中だけ）
   restore    記録をバックアップの内容に置き換える（サーバーの停止中だけ）
 
 オプションは records <サブコマンド> -h で表示する。`
@@ -292,7 +292,7 @@ const (
 	maxDraws = 10000
 )
 
-// seedPlayer is the only eligible player of a seeded game: A.
+// seedPlayer is the player of a seeded round: A.
 const seedPlayer app.NodeID = 1
 
 func seed(args []string, input io.Reader, output io.Writer, now func() time.Time) (err error) {
@@ -353,7 +353,7 @@ func seed(args []string, input io.Reader, output io.Writer, now func() time.Time
 	}
 
 	fmt.Fprintf(output, "記録ファイル: %s\n", *path)
-	fmt.Fprintf(output, "追加するゲーム: %d件。1件ごとにプレイヤーA（P1）だけがランキング対象で1位、P2〜P8は対象外の0点\n", len(games))
+	fmt.Fprintf(output, "追加するゲーム: %d件。1件ごとにプレイヤーA（P1）1人の通常ラウンド\n", len(games))
 	fmt.Fprintf(output, "終了時刻: %s から1秒ずつ（%s まで）\n", at.In(app.JST).Format(time.RFC3339), last.In(app.JST).Format(time.RFC3339))
 	if *count != 0 {
 		fmt.Fprintf(output, "分布: 平均 %g、標準偏差 %g、範囲 %d〜%d、乱数のシード %d（同じ点数を作り直すには -rand-seed %d）\n", *mean, *sd, *low, *high, *randSeed, *randSeed)
@@ -423,18 +423,13 @@ func drawScores(count int, mean, sd float64, low, high int, seed uint64) ([]int,
 	return scores, nil
 }
 
-// seedGame is a game that ran its full duration, in which A alone was
-// eligible and scored score.
+// seedGame is a normal round of A that ran its full duration and scored
+// score (server.md 3.5.8).
 func seedGame(at time.Time, score int) app.GameRecord {
-	r := app.GameRecord{FinishedAt: at, Duration: app.GameDuration, Elapsed: app.GameDuration, Reason: app.FinishTimeout}
-	for id := app.NodeID(1); id <= app.PlayerCount; id++ {
-		p := app.PlayerResult{Node: id}
-		if id == seedPlayer {
-			p.Score, p.Eligible, p.Rank = score, true, 1
-		}
-		r.Results = append(r.Results, p)
+	return app.GameRecord{
+		Kind: app.RecordRound, FinishedAt: at, Duration: app.GameDuration, Elapsed: app.GameDuration, Reason: app.FinishTimeout,
+		Results: []app.PlayerResult{{Node: seedPlayer, Score: score, Eligible: true, Rank: 1}},
 	}
-	return r
 }
 
 // confirm asks the operator to type phrase and reports errCanceled for

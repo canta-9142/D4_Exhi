@@ -42,6 +42,11 @@ var migrations = [][]string{
 			CHECK (CASE WHEN eligible = 1 THEN rank IS NOT NULL AND rank BETWEEN 1 AND 8 ELSE rank IS NULL END)
 		) STRICT`,
 	},
+	// Version 2 tells a normal round from a simultaneous game. Every game of
+	// version 1 was a simultaneous game.
+	{
+		`ALTER TABLE games ADD COLUMN kind TEXT NOT NULL DEFAULT 'game' CHECK (kind IN ('game', 'round'))`,
+	},
 }
 
 // timeLayout is RFC 3339 in UTC with milliseconds; its fixed width keeps
@@ -214,14 +219,14 @@ func (s *Store) Load() ([]app.GameRecord, error) {
 func load(ctx context.Context, tx *sql.Tx) ([]app.GameRecord, error) {
 	records := make([]app.GameRecord, 0)
 	index := make(map[int64]int)
-	rows, err := tx.QueryContext(ctx, "SELECT id, finished_at, duration_ms, elapsed_ms, reason FROM games ORDER BY id")
+	rows, err := tx.QueryContext(ctx, "SELECT id, kind, finished_at, duration_ms, elapsed_ms, reason FROM games ORDER BY id")
 	if err != nil {
 		return nil, err
 	}
 	for rows.Next() {
 		var id, duration, elapsed int64
-		var finished, reason string
-		if err := rows.Scan(&id, &finished, &duration, &elapsed, &reason); err != nil {
+		var kind, finished, reason string
+		if err := rows.Scan(&id, &kind, &finished, &duration, &elapsed, &reason); err != nil {
 			rows.Close()
 			return nil, err
 		}
@@ -236,7 +241,7 @@ func load(ctx context.Context, tx *sql.Tx) ([]app.GameRecord, error) {
 		}
 		index[id] = len(records)
 		records = append(records, app.GameRecord{
-			FinishedAt: at, Duration: time.Duration(duration) * time.Millisecond, Elapsed: time.Duration(elapsed) * time.Millisecond,
+			Kind: app.RecordKind(kind), FinishedAt: at, Duration: time.Duration(duration) * time.Millisecond, Elapsed: time.Duration(elapsed) * time.Millisecond,
 			Reason: app.FinishReason(reason), Results: make([]app.PlayerResult, 0, app.PlayerCount),
 		})
 	}
@@ -261,12 +266,11 @@ func load(ctx context.Context, tx *sql.Tx) ([]app.GameRecord, error) {
 			return nil, fmt.Errorf("result %s for unknown game %d", node, gameID)
 		}
 		r := &records[i]
-		// Results arrive in node order, so each must be the next player.
-		next := app.NodeID(len(r.Results) + 1)
-		if node != nodeName(next) || eligible < 0 || eligible > 1 || score > math.MaxInt32 {
+		id, ok := nodeID(node)
+		if !ok || eligible < 0 || eligible > 1 || score > math.MaxInt32 {
 			return nil, fmt.Errorf("game %d: invalid result %s", gameID, node)
 		}
-		p := app.PlayerResult{Node: next, Score: int(score), Eligible: eligible == 1}
+		p := app.PlayerResult{Node: id, Score: int(score), Eligible: eligible == 1}
 		if rank.Valid {
 			if rank.Int64 < 1 || rank.Int64 > app.PlayerCount {
 				return nil, fmt.Errorf("game %d: invalid rank of %s", gameID, node)
@@ -318,8 +322,8 @@ func (s *Store) SaveGames(records []app.GameRecord) error {
 }
 
 func insert(ctx context.Context, tx *sql.Tx, r app.GameRecord) error {
-	res, err := tx.ExecContext(ctx, "INSERT INTO games (finished_at, duration_ms, elapsed_ms, reason) VALUES (?, ?, ?, ?)",
-		r.FinishedAt.UTC().Format(timeLayout), r.Duration.Milliseconds(), r.Elapsed.Milliseconds(), string(r.Reason))
+	res, err := tx.ExecContext(ctx, "INSERT INTO games (kind, finished_at, duration_ms, elapsed_ms, reason) VALUES (?, ?, ?, ?, ?)",
+		string(r.Kind), r.FinishedAt.UTC().Format(timeLayout), r.Duration.Milliseconds(), r.Elapsed.Milliseconds(), string(r.Reason))
 	if err != nil {
 		return err
 	}
@@ -412,19 +416,23 @@ func (s *Store) Close() error {
 	return s.db.Close()
 }
 
-// check validates the record invariants of server.md 3.5.1.
+// check validates the record invariants of server.md 3.5.1 and 3.5.3: 1 to 8
+// results of distinct players, in node order.
 func check(r app.GameRecord) error {
+	if r.Kind != app.RecordGame && r.Kind != app.RecordRound {
+		return fmt.Errorf("invalid record kind %q", r.Kind)
+	}
 	if r.Reason != app.FinishTimeout && r.Reason != app.FinishManual {
 		return fmt.Errorf("invalid finish reason %q", r.Reason)
 	}
 	if r.Duration < time.Millisecond || r.Elapsed < 0 || r.Elapsed > r.Duration || (r.Reason == app.FinishTimeout && r.Elapsed != r.Duration) {
 		return fmt.Errorf("invalid duration %s or elapsed %s for %s", r.Duration, r.Elapsed, r.Reason)
 	}
-	if len(r.Results) != app.PlayerCount {
-		return fmt.Errorf("%d results, want %d", len(r.Results), app.PlayerCount)
+	if len(r.Results) < 1 || len(r.Results) > app.PlayerCount {
+		return fmt.Errorf("%d results, want 1 to %d", len(r.Results), app.PlayerCount)
 	}
 	for i, p := range r.Results {
-		if p.Node != app.NodeID(i+1) || p.Score < 0 || p.Score > math.MaxInt32 {
+		if p.Node < 1 || p.Node > app.PlayerCount || i > 0 && p.Node <= r.Results[i-1].Node || p.Score < 0 || p.Score > math.MaxInt32 {
 			return fmt.Errorf("invalid result %d: %+v", i, p)
 		}
 		if p.Eligible != (p.Rank != 0) || p.Rank < 0 || p.Rank > app.PlayerCount {
@@ -436,4 +444,14 @@ func check(r app.GameRecord) error {
 
 func nodeName(id app.NodeID) string {
 	return fmt.Sprintf("P%d", id)
+}
+
+// nodeID is the player of a node name that nodeName gives.
+func nodeID(name string) (app.NodeID, bool) {
+	for id := app.NodeID(1); id <= app.PlayerCount; id++ {
+		if name == nodeName(id) {
+			return id, true
+		}
+	}
+	return 0, false
 }

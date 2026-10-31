@@ -21,7 +21,7 @@ func now() time.Time { return testNow }
 // eligibleGame is a game of the current full duration in which P1-P8 score
 // scores and the first eligible of them are eligible.
 func eligibleGame(at time.Time, eligible int, scores ...int) app.GameRecord {
-	r := app.GameRecord{FinishedAt: at, Duration: app.GameDuration, Elapsed: app.GameDuration, Reason: app.FinishTimeout}
+	r := app.GameRecord{Kind: app.RecordGame, FinishedAt: at, Duration: app.GameDuration, Elapsed: app.GameDuration, Reason: app.FinishTimeout}
 	for i := range app.PlayerCount {
 		p := app.PlayerResult{Node: app.NodeID(i + 1)}
 		if i < len(scores) {
@@ -234,7 +234,7 @@ func TestClearAndSeedRefuseWhileTheServerRuns(t *testing.T) {
 	}
 }
 
-func TestSeedAddsGamesOfA(t *testing.T) {
+func TestSeedAddsRoundsOfA(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "records.sqlite3")
 	writeRecords(t, path)
 	if _, err := runRecords("no\n", "seed", "-records-file", path, "-scores", "1200, 950,2100"); !errors.Is(err, errCanceled) {
@@ -254,7 +254,10 @@ func TestSeedAddsGamesOfA(t *testing.T) {
 	start := time.Date(2026, 10, 29, 13, 0, 0, 0, app.JST)
 	var want []app.GameRecord
 	for i, score := range []int{1200, 950, 2100} {
-		want = append(want, eligibleGame(start.Add(time.Duration(i)*time.Second), 1, score))
+		want = append(want, app.GameRecord{
+			Kind: app.RecordRound, FinishedAt: start.Add(time.Duration(i) * time.Second), Duration: app.GameDuration, Elapsed: app.GameDuration,
+			Reason: app.FinishTimeout, Results: []app.PlayerResult{{Node: 1, Score: score, Eligible: true, Rank: 1}},
+		})
 	}
 	if got := readRecords(t, path); !reflect.DeepEqual(got, want) {
 		t.Fatalf("seeded %+v, want %+v", got, want)

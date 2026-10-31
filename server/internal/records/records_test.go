@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -16,7 +17,7 @@ import (
 // game is a record of the current duration with P1-P8 scoring the given
 // points. eligible players are ranked by them.
 func game(at time.Time, reason app.FinishReason, scores [app.PlayerCount]int, eligible ...app.NodeID) app.GameRecord {
-	r := app.GameRecord{FinishedAt: at, Duration: app.GameDuration, Elapsed: app.GameDuration, Reason: reason}
+	r := app.GameRecord{Kind: app.RecordGame, FinishedAt: at, Duration: app.GameDuration, Elapsed: app.GameDuration, Reason: reason}
 	if reason == app.FinishManual {
 		r.Elapsed = 41*time.Second + 250*time.Millisecond
 	}
@@ -113,7 +114,7 @@ func TestSaveCloseReopenLoad(t *testing.T) {
 		}
 	}
 	db := raw(t, path)
-	if mode, version := pragma(t, db, "journal_mode"), pragma(t, db, "user_version"); mode != "wal" || version != "1" {
+	if mode, version := pragma(t, db, "journal_mode"), pragma(t, db, "user_version"); mode != "wal" || version != "2" {
 		t.Fatalf("journal_mode=%s user_version=%s", mode, version)
 	}
 	var finished string
@@ -137,19 +138,67 @@ func TestOpenUsesEmptyFileAsNewDatabase(t *testing.T) {
 	}
 }
 
-// v1Records is a version 1 file holding one game.
+// v1Records is a version 1 file holding one game, written as the version 1
+// server wrote it, and that game as it loads once migrated.
 func v1Records(t *testing.T) (string, app.GameRecord) {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "records.sqlite3")
-	s := mustOpen(t, path)
+	db := raw(t, path)
+	statements := append(slices.Clone(migrations[0]), "PRAGMA user_version = 1",
+		"INSERT INTO games (finished_at, duration_ms, elapsed_ms, reason) VALUES ('2026-10-28T04:05:12.000Z', 90000, 90000, 'timeout')")
+	for _, statement := range statements {
+		if _, err := db.Exec(statement); err != nil {
+			t.Fatal(err)
+		}
+	}
 	r := game(time.Date(2026, 10, 28, 13, 5, 12, 0, app.JST), app.FinishTimeout, [8]int{812}, 1)
-	if err := s.SaveGame(r); err != nil {
+	for _, p := range r.Results {
+		rank := any(nil)
+		if p.Eligible {
+			rank = p.Rank
+		}
+		if _, err := db.Exec("INSERT INTO results (game_id, node, score, eligible, rank) VALUES (1, ?, ?, ?, ?)", nodeName(p.Node), p.Score, p.Eligible, rank); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return path, r
+}
+
+// round is a normal round of node that scored score.
+func round(at time.Time, node app.NodeID, score int) app.GameRecord {
+	return app.GameRecord{
+		Kind: app.RecordRound, FinishedAt: at, Duration: app.GameDuration, Elapsed: app.GameDuration, Reason: app.FinishTimeout,
+		Results: []app.PlayerResult{{Node: node, Score: score, Eligible: true, Rank: 1}},
+	}
+}
+
+func TestOpenMigratesVersion1GamesToSimultaneousGames(t *testing.T) {
+	path, r := v1Records(t)
+	s := mustOpen(t, path)
+	loaded := mustLoad(t, s)
+	if len(loaded) != 1 || loaded[0].Kind != app.RecordGame || !reflect.DeepEqual(loaded[0].Results, r.Results) {
+		t.Fatalf("migrated games: %+v", loaded)
+	}
+	// Rounds join the migrated games in save order.
+	added := round(time.Date(2026, 10, 28, 13, 7, 0, 0, app.JST), 3, 640)
+	if err := s.SaveGame(added); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.Close(); err != nil {
 		t.Fatal(err)
 	}
-	return path, r
+	s = mustOpen(t, path)
+	defer s.Close()
+	loaded = mustLoad(t, s)
+	if len(loaded) != 2 || loaded[0].Kind != app.RecordGame || !reflect.DeepEqual(loaded[1].Results, added.Results) || loaded[1].Kind != app.RecordRound {
+		t.Fatalf("games after adding a round: %+v", loaded)
+	}
+	if version := pragma(t, raw(t, path), "user_version"); version != "2" {
+		t.Fatalf("user_version = %s, want 2", version)
+	}
 }
 
 func TestOpenMigratesOlderVersion(t *testing.T) {
@@ -165,7 +214,7 @@ func TestOpenMigratesOlderVersion(t *testing.T) {
 	}
 	var version int
 	var note sql.NullString
-	if err := s.db.QueryRow("PRAGMA user_version").Scan(&version); err != nil || version != 2 {
+	if err := s.db.QueryRow("PRAGMA user_version").Scan(&version); err != nil || version != 3 {
 		t.Fatalf("user_version = %d, %v", version, err)
 	}
 	if err := s.db.QueryRow("SELECT note FROM games").Scan(&note); err != nil || note.Valid {
@@ -176,7 +225,7 @@ func TestOpenMigratesOlderVersion(t *testing.T) {
 func TestFailedMigrationKeepsVersionAndRecords(t *testing.T) {
 	path, _ := v1Records(t)
 	broken := append(append([][]string(nil), migrations...), []string{"CREATE TABLE extra (x INTEGER) STRICT", "NOT SQL"})
-	if _, err := open(path, broken); err == nil || !strings.Contains(err.Error(), "migrate records from version 1") {
+	if _, err := open(path, broken); err == nil || !strings.Contains(err.Error(), "migrate records from version 2") {
 		t.Fatalf("broken migration: %v", err)
 	}
 	db := raw(t, path)
@@ -210,11 +259,11 @@ func TestOpenRejectsUnusableFilesWithoutChangingThem(t *testing.T) {
 		}, "not a database"},
 		{"newer version", func(t *testing.T, path string) {
 			db := raw(t, path)
-			if _, err := db.Exec("CREATE TABLE games (id INTEGER PRIMARY KEY); PRAGMA user_version = 2"); err != nil {
+			if _, err := db.Exec("CREATE TABLE games (id INTEGER PRIMARY KEY); PRAGMA user_version = 3"); err != nil {
 				t.Fatal(err)
 			}
 			db.Close()
-		}, "newer than the supported version 1"},
+		}, "newer than the supported version 2"},
 		{"foreign schema", func(t *testing.T, path string) {
 			db := raw(t, path)
 			if _, err := db.Exec("CREATE TABLE other (x)"); err != nil {
@@ -264,7 +313,7 @@ func TestOpenRejectsInvalidRecordsWithoutChangingThem(t *testing.T) {
 		name string
 		sql  string
 	}{
-		{"missing result", "DELETE FROM results WHERE node = 'P8'"},
+		{"no results", "DELETE FROM results"},
 		{"bad time", "UPDATE games SET finished_at = 'yesterday'"},
 		{"unknown game", "PRAGMA foreign_keys = OFF; INSERT INTO results (game_id, node, score, eligible) VALUES (2, 'P1', 0, 0)"},
 	} {
@@ -306,8 +355,12 @@ func TestOpenRejectsPathsTheDriverReadsDifferently(t *testing.T) {
 
 func TestSchemaRejectsInconsistentRows(t *testing.T) {
 	path, _ := v1Records(t)
+	if err := mustOpen(t, path).Close(); err != nil {
+		t.Fatal(err)
+	}
 	db := raw(t, path)
 	for _, statement := range []string{
+		"UPDATE games SET kind = 'other'",
 		"UPDATE results SET rank = NULL WHERE node = 'P1'",
 		"UPDATE results SET rank = 2 WHERE node = 'P2'",
 		"UPDATE results SET score = -1 WHERE node = 'P3'",
@@ -326,13 +379,22 @@ func TestSaveGameRejectsInvalidRecordWithoutWriting(t *testing.T) {
 	s := mustOpen(t, path)
 	defer s.Close()
 	valid := game(time.Now(), app.FinishTimeout, [8]int{1}, 1)
-	short := valid
-	short.Results = short.Results[:7]
+	empty := valid
+	empty.Results = nil
+	duplicate := round(time.Now(), 2, 100)
+	duplicate.Results = append(duplicate.Results, duplicate.Results[0])
+	unordered := game(time.Now(), app.FinishTimeout, [8]int{1}, 1)
+	unordered.Results[0], unordered.Results[1] = unordered.Results[1], unordered.Results[0]
+	unknown := round(time.Now(), 2, 100)
+	unknown.Kind = ""
 	early := valid
 	early.Elapsed = time.Second
 	unranked := game(time.Now(), app.FinishTimeout, [8]int{1}, 1)
 	unranked.Results[0].Rank = 0
-	for name, r := range map[string]app.GameRecord{"seven results": short, "early timeout": early, "unranked": unranked} {
+	for name, r := range map[string]app.GameRecord{
+		"no results": empty, "duplicate node": duplicate, "nodes out of order": unordered, "no kind": unknown,
+		"early timeout": early, "unranked": unranked,
+	} {
 		if err := s.SaveGame(r); err == nil {
 			t.Errorf("%s: SaveGame accepted an invalid record", name)
 		}

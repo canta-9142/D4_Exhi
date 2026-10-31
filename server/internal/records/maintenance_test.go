@@ -90,8 +90,8 @@ func TestDeleteAllKeepsSchemaAndRestartsIDs(t *testing.T) {
 		t.Fatal(err)
 	}
 	db := raw(t, path)
-	if got := pragma(t, db, "user_version"); got != "1" {
-		t.Fatalf("user_version = %s, want 1", got)
+	if got := pragma(t, db, "user_version"); got != "2" {
+		t.Fatalf("user_version = %s, want 2", got)
 	}
 	var id, results int
 	if err := db.QueryRow("SELECT id, (SELECT count(*) FROM results) FROM games").Scan(&id, &results); err != nil {
@@ -160,7 +160,7 @@ func TestSaveGamesSavesNoneIfAnyIsInvalid(t *testing.T) {
 	s := mustOpen(t, filepath.Join(t.TempDir(), "records.sqlite3"))
 	defer s.Close()
 	games := threeGames()
-	games[2].Results = games[2].Results[:app.PlayerCount-1]
+	games[2].Results = nil
 	if err := s.SaveGames(games); err == nil {
 		t.Fatal("SaveGames with an invalid record succeeded")
 	}
