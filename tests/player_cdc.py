@@ -1,4 +1,7 @@
-"""LinuxのUSB CDC実機テスト。--buttons時は案内に従ってEnterと左端スイッチを操作する。"""
+"""LinuxのUSB CDC実機テスト。--buttons時は案内に従ってEnterと左端スイッチを操作する。
+
+CDCは他のCDCテスト（endless_cdc.py・finished_cdc.py）と共通の接続口。
+"""
 
 import argparse
 import fcntl
@@ -69,9 +72,14 @@ class CDC:
             if not os.read(self.fd, 4096):
                 raise ConnectionError("USB CDC disconnected")
 
-    def status(self, score=0, remaining=120, ready=False, countdown=0, rank=None, gains=()):
-        self.send("status", score=score, remaining=remaining, ready=ready, countdown=countdown,
-                  rank=rank, gains=list(gains), combo=0)
+    def status(self, score=0, remaining=120, ready=False, countdown=0, rank=None, gains=(), combo=0,
+               round=None, window=0, bots=None):
+        # 9項目は必須。botsは練習ラウンドの間だけ付く任意の項目（player.md）。
+        data = dict(score=score, remaining=remaining, ready=ready, countdown=countdown, round=round,
+                    window=window, rank=rank, gains=list(gains), combo=combo)
+        if bots is not None:
+            data["bots"] = list(bots)
+        self.send("status", **data)
 
     def reset(self, packets, phase="Playing", with_status=True):
         sync = uuid.uuid4().hex.upper()
@@ -89,6 +97,36 @@ class CDC:
     def close(self):
         fcntl.ioctl(self.fd, termios.TIOCNXCL)
         os.close(self.fd)
+
+
+# 正しいstatus。不正な例は、この1項目だけを変えるか除く。
+VALID_STATUS = {"score": 0, "remaining": 120, "ready": False, "countdown": 0, "round": None, "window": 0,
+                "rank": None, "gains": [], "combo": 0}
+MISSING = object()
+
+
+def invalid_statuses():
+    changes = [
+        ("score", -1), ("score", 2147483648), ("score", 1.0),
+        ("remaining", 121), ("remaining", "120"),
+        ("ready", 1), ("ready", MISSING),
+        ("countdown", -1), ("countdown", 4), ("countdown", 1.0), ("countdown", "1"), ("countdown", MISSING),
+        ("rank", MISSING), ("rank", 0), ("rank", 9), ("rank", "1"),
+        ("gains", MISSING), ("gains", None), ("gains", [0]), ("gains", [16]), ("gains", [8.0]), ("gains", [8] * 17),
+        ("combo", MISSING), ("combo", -1), ("combo", 1000), ("combo", 1.0), ("combo", "3"), ("combo", None),
+        # 連続運転で足した項目。roundはnormal・tutorial・null、windowは0〜60の整数、botsは任意で0〜4の3要素。
+        ("round", MISSING), ("round", "Normal"), ("round", "practice"), ("round", 1),
+        ("window", MISSING), ("window", -1), ("window", 61), ("window", 1.0), ("window", "20"), ("window", None),
+        ("bots", None), ("bots", [0, 0]), ("bots", [0, 0, 0, 0]), ("bots", [0, 0, 5]), ("bots", [0, -1, 0]),
+        ("bots", [1.0, 0, 0]), ("bots", "000"),
+    ]
+    for key, value in changes:
+        fields = dict(VALID_STATUS)
+        if value is MISSING:
+            del fields[key]
+        else:
+            fields[key] = value
+        yield fields
 
 
 def packet(pid, dst=2):
@@ -122,8 +160,11 @@ def exercise_buttons(cdc, packets, sync):
         last_rid = data["rid"]
         return data
 
-    for phase in ("Preparing", "Finished"):
+    # 待機・モード選択では左端だけを押しても、sendもreadyもchooseも送らない。
+    for phase in ("Preparing", "Idle", "Select", "Finished"):
         cdc.send("phase", phase=phase)
+        if phase == "Select":
+            cdc.status(window=20)
         if phase == "Finished":
             cdc.send("summary", sync=sync, score=0, rank=1, eligible=True, topPercent=None, bottomHalf=False, gameBest=None,
                      gameBestNodes=[], hourBest=None, hourBestStart=None, hourBestMine=False, allTimeBest=None,
@@ -131,6 +172,7 @@ def exercise_buttons(cdc, packets, sync):
         input(f"READY: {phase}; press Enter, then press the leftmost switch repeatedly for 10 seconds: ")
         cdc.quiet(10)
         print(f"PASS: no SEND in {phase}", flush=True)
+    cdc.status()
 
     failed = press(1001, sync)
     cdc.result(failed, False)
@@ -198,11 +240,17 @@ def exercise(cdc, buttons, idle_seconds):
     cdc.status(0, 0, True)
     cdc.status(23, 87, True, rank=1, gains=[15, 8, 10])
     cdc.status(23, 87, True, rank=8, gains=[15] * 16)
+    # 連続運転の値: 通常ラウンド、練習（botsあり、範囲の両端）、モード選択・結果の段階の残り時間。
+    cdc.status(23, 87, combo=999, round="normal")
+    cdc.status(round="tutorial", window=60, bots=[0, 4, 2])
+    cdc.status(round="tutorial", window=0, bots=[4, 4, 4])
+    cdc.status(window=20)
+    cdc.status(345, 0, round="normal", window=30)
     cdc.status()
     cdc.quiet()
-    print("PASS: fresh STATUS acquisition, 3-second deadline, full-range absolute values", flush=True)
+    print("PASS: fresh STATUS acquisition, 3-second deadline, full-range absolute values, round/window/bots", flush=True)
 
-    for phase in ("Playing", "Finished", "Preparing"):
+    for phase in ("Playing", "Idle", "Select", "Finished", "Preparing"):
         cdc.reset([packet(10)], phase)
         cdc.quiet(1.2)
     cdc.send("phase", phase="Preparing")
@@ -231,39 +279,14 @@ def exercise(cdc, buttons, idle_seconds):
         ("reset", {"sync": "a" * 32, "packets": []}),
         ("reset", {"packets": []}),
         ("phase", {"phase": "playing"}),
+        ("phase", {"phase": "idle"}),
+        ("phase", {"phase": "SELECT"}),
+        ("phase", {"phase": "Closed"}),
         ("phase", {"phase": "Playing\x00x"}),
         ("result", {"sync": sync, "rid": 0, "ok": 1}),
         ("result", {"sync": sync, "rid": 0x100000000, "ok": True}),
         ("result", {"ok": True}),
-        ("status", {"score": -1, "remaining": 120, "ready": False, "countdown": 0, "rank": None, "gains": [], "combo": 0}),
-        ("status", {"score": 2147483648, "remaining": 120, "ready": False, "countdown": 0, "rank": None, "gains": [], "combo": 0}),
-        ("status", {"score": 1.0, "remaining": 120, "ready": False, "countdown": 0, "rank": None, "gains": [], "combo": 0}),
-        ("status", {"score": 0, "remaining": 121, "ready": False, "countdown": 0, "rank": None, "gains": [], "combo": 0}),
-        ("status", {"score": 0, "remaining": "120", "ready": False, "countdown": 0, "rank": None, "gains": [], "combo": 0}),
-        ("status", {"score": 0, "remaining": 120, "ready": 1, "countdown": 0, "rank": None, "gains": [], "combo": 0}),
-        ("status", {"score": 0, "remaining": 120, "countdown": 0, "rank": None, "gains": [], "combo": 0}),
-        ("status", {"score": 0, "remaining": 120, "ready": False, "countdown": -1, "rank": None, "gains": [], "combo": 0}),
-        ("status", {"score": 0, "remaining": 120, "ready": False, "countdown": 4, "rank": None, "gains": [], "combo": 0}),
-        ("status", {"score": 0, "remaining": 120, "ready": False, "countdown": 1.0, "rank": None, "gains": [], "combo": 0}),
-        ("status", {"score": 0, "remaining": 120, "ready": False, "countdown": "1", "rank": None, "gains": [], "combo": 0}),
-        ("status", {"score": 0, "remaining": 120, "ready": False, "rank": None, "gains": [], "combo": 0}),
-        ("status", {"score": 0, "remaining": 120, "ready": False, "countdown": 0, "gains": [], "combo": 0}),
-        ("status", {"score": 0, "remaining": 120, "ready": False, "countdown": 0, "rank": 0, "gains": [], "combo": 0}),
-        ("status", {"score": 0, "remaining": 120, "ready": False, "countdown": 0, "rank": 9, "gains": [], "combo": 0}),
-        ("status", {"score": 0, "remaining": 120, "ready": False, "countdown": 0, "rank": "1", "gains": [], "combo": 0}),
-        ("status", {"score": 0, "remaining": 120, "ready": False, "countdown": 0, "rank": None, "combo": 0}),
-        ("status", {"score": 0, "remaining": 120, "ready": False, "countdown": 0, "rank": None, "gains": None, "combo": 0}),
-        ("status", {"score": 0, "remaining": 120, "ready": False, "countdown": 0, "rank": None, "gains": [0], "combo": 0}),
-        ("status", {"score": 0, "remaining": 120, "ready": False, "countdown": 0, "rank": None, "gains": [16], "combo": 0}),
-        ("status", {"score": 0, "remaining": 120, "ready": False, "countdown": 0, "rank": None, "gains": [8.0], "combo": 0}),
-        ("status", {"score": 0, "remaining": 120, "ready": False, "countdown": 0, "rank": None, "gains": [8] * 17, "combo": 0}),
-        ("status", {"score": 0, "remaining": 120, "ready": False, "countdown": 0, "rank": None, "gains": []}),
-        ("status", {"score": 0, "remaining": 120, "ready": False, "countdown": 0, "rank": None, "gains": [], "combo": -1}),
-        ("status", {"score": 0, "remaining": 120, "ready": False, "countdown": 0, "rank": None, "gains": [], "combo": 1000}),
-        ("status", {"score": 0, "remaining": 120, "ready": False, "countdown": 0, "rank": None, "gains": [], "combo": 1.0}),
-        ("status", {"score": 0, "remaining": 120, "ready": False, "countdown": 0, "rank": None, "gains": [], "combo": "3"}),
-        ("status", {"score": 0, "remaining": 120, "ready": False, "countdown": 0, "rank": None, "gains": [], "combo": None}),
-    ]
+    ] + [("status", fields) for fields in invalid_statuses()]
     for kind, data in invalid:
         cdc.send(kind, **data)
         cdc.expect("resync")

@@ -1,4 +1,8 @@
-"""Finished/previewのUSB CDC検証。--visualで表示確認を継続する。"""
+"""Finished/previewのUSB CDC検証。--visualで表示確認を継続する。
+
+連続運転の結果（順位なし、eligible=true・rank=null、window=30）を既定とし、一斉ゲーム方式の
+順位付き・対象外の結果と、練習の終わり（Finishedでround=tutorial、summaryなし）も確かめる。
+"""
 
 import argparse
 import select
@@ -27,7 +31,7 @@ def sample_bests(kind, score, eligible):
             "hourBestMine": mine, "allTimeBest": best if kind != "other" else 520, "allTimeBestMine": mine}
 
 
-def result(cdc, sync, score=2147483647, rank=2, eligible=True, top=None, bests=None, bottom=False):
+def result(cdc, sync, score=2147483647, rank=None, eligible=True, top=None, bests=None, bottom=False):
     cdc.send("summary", sync=sync, score=score, rank=rank, eligible=eligible, topPercent=top, bottomHalf=bottom,
              **(bests if bests is not None else NO_BESTS))
 
@@ -45,12 +49,21 @@ def exercise(cdc):
     configure(cdc)
     sync = cdc.reset([], "Playing")
     cdc.send("phase", phase="Finished")
-    cdc.status(2147483647, 0, True)
+    cdc.status(2147483647, 0, round="normal", window=30)
     result(cdc, sync)
     cdc.quiet(3.2)
     result(cdc, sync)
     cdc.quiet()
-    print("PASS: full-range summary, duplicate result, silent Finished", flush=True)
+    print("PASS: full-range round summary (rank null), duplicate result, silent Finished", flush=True)
+
+    # 一斉ゲーム方式の結果（順位付き、window=0）と、練習の終わり（summaryを待たない）。
+    sync = cdc.reset([], "Finished")
+    result(cdc, sync, rank=2)
+    cdc.quiet(3.2)
+    cdc.reset([], "Finished", with_status=False)
+    cdc.status(round="tutorial")
+    cdc.quiet(3.2)
+    print("PASS: ranked simultaneous result; practice over in Finished waits for no summary", flush=True)
 
     # 別世代の結果と重複通知・通常RESETでは、最初の取得期限を延ばさない。
     sync = cdc.reset([], "Finished")
@@ -69,7 +82,6 @@ def exercise(cdc):
         {"score": 1.0, "rank": 1, "eligible": True},
         {"score": 1, "rank": 0, "eligible": True},
         {"score": 1, "rank": 9, "eligible": True},
-        {"score": 1, "rank": None, "eligible": True},
         {"score": 1, "rank": 1, "eligible": False},
         {"score": 1, "eligible": False},
         {"score": 1, "rank": None, "eligible": 0},
@@ -100,6 +112,9 @@ def exercise(cdc):
         sync = cdc.reset([], "Finished")
         result(cdc, sync)
         cdc.quiet(.05)
+    # 対象者のrank=nullはラウンドの正しい組合せ。対象者の1〜8も一斉ゲーム方式で正しい。
+    for rank in (None, 1, 8):
+        result(cdc, sync, 1, rank)
     for top in (1, 50):
         result(cdc, sync, top=top)
     for kind in ("other", "mine", "max"):
@@ -132,20 +147,36 @@ def exercise(cdc):
 
 
 def visual(cdc):
-    phase, score, rank, eligible, preview = "Finished", 2147483647, 2, True, False
+    """結果の画面の目視確認。既定は連続運転の結果（rank=null、window=30）。
+
+    animate: 通常の終了遷移で演出、ranked: 一斉ゲーム方式の順位2、unranked: 対象外、result: 既定へ戻す、
+    preview: 確認表示、reset: 待機（Idle）へ移す、top N・bottom・bests KIND: ②・③の値、
+    window N: 段階の残り秒数（0〜30。1以上でmanualなら両端に「もう一度遊ぶ」）、
+    practice: 一斉ゲーム方式の練習の終わり（round=tutorial、summaryなし）、duplicate・resync・stop。
+    """
+    phase, score, rank, eligible, preview = "Finished", 2147483647, None, True, False
     top = None
     bottom = False
     best_kind = "other"
     mode = "manual"
+    window, practice = 30, False
     sync = ""
 
     def send_result():
         result(cdc, sync, score, rank, eligible, top, sample_bests(best_kind, score, eligible), bottom)
 
+    def send_status():
+        if phase == "Finished":
+            cdc.status(0 if practice else score, 0, round="tutorial" if practice else "normal",
+                       window=0 if practice else window)
+        else:
+            cdc.status()
+
     def synchronize():
         nonlocal sync
-        sync = cdc.reset([], phase)
-        if phase == "Finished" and not preview:
+        sync = cdc.reset([], phase, with_status=False)
+        send_status()
+        if phase == "Finished" and not preview and not practice:
             send_result()
 
     def resynchronize():
@@ -157,8 +188,9 @@ def visual(cdc):
 
     configure(cdc, mode)
     synchronize()
-    print("READY: final score 2147483647 / RANK 2", flush=True)
-    print("Commands: animate/unranked/preview/result/top N/bottom/bests KIND/reset/duplicate/resync/stop", flush=True)
+    print("READY: final score 2147483647 / round result (no rank) / window 30", flush=True)
+    print("Commands: animate/ranked/unranked/preview/result/top N/bottom/bests KIND/window N/practice/reset/"
+          "duplicate/resync/stop", flush=True)
     while True:
         if select.select([sys.stdin], [], [], 0)[0]:
             line = sys.stdin.readline()
@@ -168,32 +200,41 @@ def visual(cdc):
             if command == "duplicate":
                 send_result()
             elif command == "animate":
-                preview, phase, score, rank, eligible = False, "Playing", 345, 2, True
+                preview, phase, score, practice = False, "Playing", 345, False
                 mode = "manual"
                 configure(cdc, mode)
                 synchronize()
                 phase = "Finished"
                 cdc.send("phase", phase=phase)
-                cdc.status(score, 0, True)
+                send_status()
                 send_result()
-            elif command in ("unranked", "preview", "result", "reset"):
-                preview = command == "preview"
-                phase = "Preparing" if command == "reset" else "Finished"
-                score, rank, eligible = (400, None, False) if command == "unranked" else (2147483647, 2, True)
+            elif command in ("ranked", "unranked", "preview", "result", "reset"):
+                preview, practice = command == "preview", False
+                phase = "Idle" if command == "reset" else "Finished"
+                score, rank, eligible = {"unranked": (400, None, False), "ranked": (2147483647, 2, True)}.get(
+                    command, (2147483647, None, True))
                 top, bottom = None, False
                 mode = "auto" if preview else "manual"
                 configure(cdc, mode, preview)
                 synchronize()
+            elif command == "practice":
+                preview, phase, practice, mode = False, "Finished", True, "manual"
+                configure(cdc, mode)
+                synchronize()
+            elif command.startswith("window ") and command[7:].isdigit() and int(command[7:]) <= 30:
+                # 段階の残り秒数だけを変える。同じ世代のstatusなので、結果とページはそのまま。
+                window = int(command[7:])
+                send_status()
             elif command.startswith("top ") and command[4:].isdigit() and 1 <= int(command[4:]) <= 50:
                 # 上位%を付けた結果を静止表示で出す。animateはこの値を保って終了遷移を演出する。
-                preview, phase, score, rank, eligible, top = False, "Finished", 345, 2, True, int(command[4:])
+                preview, phase, score, top, practice = False, "Finished", 345, int(command[4:]), False
                 bottom = False
                 mode = "manual"
                 configure(cdc, mode)
                 synchronize()
             elif command == "bottom":
                 # 下位50%の結果（値を伏せてbottomHalfだけ）を静止表示で出す。animateもこの値を保つ。
-                preview, phase, score, rank, eligible, top, bottom = False, "Finished", 345, 2, True, None, True
+                preview, phase, score, top, bottom, practice = False, "Finished", 345, None, True, False
                 mode = "manual"
                 configure(cdc, mode)
                 synchronize()
@@ -204,9 +245,14 @@ def visual(cdc):
             elif command == "resync":
                 resynchronize()
             print(f"STATE: {phase} preview={preview} score={score} rank={rank} topPercent={top} bottomHalf={bottom} "
-                  f"bests={best_kind}", flush=True)
+                  f"bests={best_kind} window={window} practice={practice}", flush=True)
         message = cdc.read(.05)
-        if message:
+        if message and message["type"] == "ready":
+            # 両端の長押し（もう一度遊ぶ）。この確認では段階を変えず、拒否と同じくstatusだけを返す。
+            assert message["data"] == {"sync": sync} and phase == "Finished" and window >= 1 and mode == "manual"
+            print("PASS: READY from the result (PLAY AGAIN); kept on the result", flush=True)
+            send_status()
+        elif message:
             assert message["type"] == "resync", message
             resynchronize()
 
