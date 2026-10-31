@@ -1065,6 +1065,13 @@ static void test_phases() {
   assert(ctx.receive(reset("0000000000000000000000000000000E", packets3)));
   ctx.receive(message("phase", R"({"phase":"Finished"})"));
   assert(ctx.receive(reset("0000000000000000000000000000000F", packets3)));
+
+  // 練習から待機へ戻るときは、練習用キューから実FIFOへの入れ替えなので、待機のresetでも初期化する。
+  ctx.receive(message("phase", R"({"phase":"Playing"})") + message("status", R"({"score":0,"remaining":0,"ready":false,"countdown":0,"rank":null,"gains":[],"combo":0,"round":"tutorial","window":3,"bots":[0,0,0]})"));
+  ctx.receive(message("phase", R"({"phase":"Idle"})"));
+  assert(ctx.receive(reset("00000000000000000000000000000010", packets3)));
+  ctx.receive(message("status", R"({"score":0,"remaining":0,"ready":false,"countdown":0,"rank":null,"gains":[],"combo":0,"round":null,"window":0})"));
+  assert(!ctx.receive(reset("00000000000000000000000000000011", packets3))); // 待機の自動転送は続きとして扱う。
 }
 
 static void test_round_window_and_bots() {

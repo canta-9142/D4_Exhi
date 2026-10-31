@@ -693,7 +693,8 @@ private:
       state_ = State::Synced;
       pending_ = resyncNeeded_ = false;
       // 待機のresetは同じ列の続き（IDで対応付けて、先頭だけが流れ出る）。それ以外は列が入れ替わるので、アニメーションを初期化する。
-      return phase_ != GamePhase::Idle;
+      // 練習から待機へ戻るときは、phase(Idle)の後に実FIFOのresetが届く。statusはまだ練習のままなので、練習用キューからの入れ替えと分かる。
+      return phase_ != GamePhase::Idle || status_.round == RoundKind::Tutorial;
     } else if (std::strcmp(type, "push") == 0) {
       if (!valid_packet(data)) {
         request_resync();
