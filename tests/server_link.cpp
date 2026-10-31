@@ -61,8 +61,8 @@ static void test_status_and_mode() {
   const std::string manual = message("config", R"({"node":1,"mode":"manual","preview":false})");
   const std::string automatic = message("config", R"({"node":1,"mode":"auto","preview":false})");
   const std::string playing = message("phase", R"({"phase":"Playing"})");
-  const std::string status = message("status", R"({"score":23,"remaining":87,"ready":true,"countdown":0,"rank":null,"gains":[],"combo":0})");
-  const std::string maximum = message("status", R"({"score":2147483647,"remaining":120,"ready":false,"countdown":0,"rank":null,"gains":[],"combo":0})");
+  const std::string status = message("status", R"({"score":23,"remaining":87,"ready":true,"countdown":0,"rank":null,"gains":[],"combo":0,"round":null,"window":0})");
+  const std::string maximum = message("status", R"({"score":2147483647,"remaining":120,"ready":false,"countdown":0,"rank":null,"gains":[],"combo":0,"round":null,"window":0})");
   const std::string hello = message("hello", R"({"uid":"001122334455"})");
   const std::string resync = message("resync", "{}");
   assert(ctx.link.mode() == ControlMode::Auto && !ctx.link.status().known);
@@ -101,7 +101,7 @@ static void test_status_and_mode() {
   assert(!ctx.link.awaiting_status() && ctx.link.status().known); // 通常RESETは取得待ちを増やさない。
 
   // STATUSは加点差分ではなく絶対値。0秒でもフェーズを独自に変更しない。
-  ctx.receive(message("status", R"({"score":0,"remaining":0,"ready":false,"countdown":0,"rank":null,"gains":[],"combo":0})"));
+  ctx.receive(message("status", R"({"score":0,"remaining":0,"ready":false,"countdown":0,"rank":null,"gains":[],"combo":0,"round":null,"window":0})"));
   assert(ctx.link.status().score == 0 && ctx.link.status().remaining == 0 && !ctx.link.status().ready);
   assert(ctx.link.phase() == GamePhase::Playing && ctx.link.mode() == ControlMode::Manual);
   assert(ctx.link.send(ctx.port, ctx.queue, NodeId::P2, ctx.now));
@@ -114,14 +114,14 @@ static void test_status_and_mode() {
   assert(!ctx.link.pending() && ctx.port.output == resync);
 
   const std::string badStatus[] = {
-    R"({"remaining":120,"ready":true,"countdown":0,"rank":null,"gains":[],"combo":0})", R"({"score":0,"ready":true,"countdown":0,"rank":null,"gains":[],"combo":0})",
-    R"({"score":0,"remaining":120,"countdown":0,"rank":null,"gains":[],"combo":0})", R"({"score":-1,"remaining":120,"ready":true,"countdown":0,"rank":null,"gains":[],"combo":0})",
-    R"({"score":2147483648,"remaining":120,"ready":true,"countdown":0,"rank":null,"gains":[],"combo":0})",
-    R"({"score":1.0,"remaining":120,"ready":true,"countdown":0,"rank":null,"gains":[],"combo":0})",
-    R"({"score":true,"remaining":120,"ready":true,"countdown":0,"rank":null,"gains":[],"combo":0})",
-    R"({"score":0,"remaining":-1,"ready":true,"countdown":0,"rank":null,"gains":[],"combo":0})", R"({"score":0,"remaining":121,"ready":true,"countdown":0,"rank":null,"gains":[],"combo":0})",
-    R"({"score":0,"remaining":"120","ready":true,"countdown":0,"rank":null,"gains":[],"combo":0})", R"({"score":0,"remaining":1.0,"ready":true,"countdown":0,"rank":null,"gains":[],"combo":0})",
-    R"({"score":0,"remaining":120,"ready":1,"countdown":0,"rank":null,"gains":[],"combo":0})", R"({"score":0,"remaining":120,"ready":"true","countdown":0,"rank":null,"gains":[],"combo":0})"
+    R"({"remaining":120,"ready":true,"countdown":0,"rank":null,"gains":[],"combo":0,"round":null,"window":0})", R"({"score":0,"ready":true,"countdown":0,"rank":null,"gains":[],"combo":0,"round":null,"window":0})",
+    R"({"score":0,"remaining":120,"countdown":0,"rank":null,"gains":[],"combo":0,"round":null,"window":0})", R"({"score":-1,"remaining":120,"ready":true,"countdown":0,"rank":null,"gains":[],"combo":0,"round":null,"window":0})",
+    R"({"score":2147483648,"remaining":120,"ready":true,"countdown":0,"rank":null,"gains":[],"combo":0,"round":null,"window":0})",
+    R"({"score":1.0,"remaining":120,"ready":true,"countdown":0,"rank":null,"gains":[],"combo":0,"round":null,"window":0})",
+    R"({"score":true,"remaining":120,"ready":true,"countdown":0,"rank":null,"gains":[],"combo":0,"round":null,"window":0})",
+    R"({"score":0,"remaining":-1,"ready":true,"countdown":0,"rank":null,"gains":[],"combo":0,"round":null,"window":0})", R"({"score":0,"remaining":121,"ready":true,"countdown":0,"rank":null,"gains":[],"combo":0,"round":null,"window":0})",
+    R"({"score":0,"remaining":"120","ready":true,"countdown":0,"rank":null,"gains":[],"combo":0,"round":null,"window":0})", R"({"score":0,"remaining":1.0,"ready":true,"countdown":0,"rank":null,"gains":[],"combo":0,"round":null,"window":0})",
+    R"({"score":0,"remaining":120,"ready":1,"countdown":0,"rank":null,"gains":[],"combo":0,"round":null,"window":0})", R"({"score":0,"remaining":120,"ready":"true","countdown":0,"rank":null,"gains":[],"combo":0,"round":null,"window":0})"
   };
   for (const auto& fields : badStatus) {
     ctx.receive(fifo + maximum);
@@ -214,7 +214,7 @@ static void test_utf8_validation() {
   TestContext ctx;
   const std::string config = message("config", R"({"node":1,"mode":"manual","preview":false})");
   const std::string fifo = reset("0000000000000000000000000000000A", R"([{"pid":10,"dst":2}])");
-  const std::string status = message("status", R"({"score":1,"remaining":120,"ready":false,"countdown":0,"rank":null,"gains":[],"combo":0})");
+  const std::string status = message("status", R"({"score":1,"remaining":120,"ready":false,"countdown":0,"rank":null,"gains":[],"combo":0,"round":null,"window":0})");
   const std::string hello = message("hello", R"({"uid":"001122334455"})");
   const auto with_text = [](const std::string& text) {
     return message("config", "{\"node\":1,\"mode\":\"manual\",\"preview\":false,\"extra\":\"" + text + "\"}");
@@ -315,7 +315,7 @@ static void test_partial_writes() {
   const std::string config = message("config", R"({"node":1,"mode":"manual","preview":false})");
   const std::string fifo = reset(sync, R"([{"pid":10,"dst":2}])");
   const std::string playing = message("phase", R"({"phase":"Playing"})");
-  const std::string status = message("status", R"({"score":0,"remaining":120,"ready":false,"countdown":0,"rank":null,"gains":[],"combo":0})");
+  const std::string status = message("status", R"({"score":0,"remaining":120,"ready":false,"countdown":0,"rank":null,"gains":[],"combo":0,"round":null,"window":0})");
   const std::string hello = message("hello", R"({"uid":"001122334455"})");
   const std::string resync = message("resync", "{}");
   const std::string send = message("send", "{\"sync\":\"" + sync + "\",\"rid\":0,\"pid\":10,\"to\":2}");
@@ -418,11 +418,30 @@ static void test_ready() {
   TestContext ctx;
   const std::string syncA = "0000000000000000000000000000000A";
   const std::string syncB = "0000000000000000000000000000000B";
+  const std::string packets = R"([{"pid":10,"dst":2}])";
   const auto config = message("config", R"({"node":1,"mode":"manual","preview":false})");
-  const auto prep = message("phase", R"({"phase":"Preparing"})");
+  const auto idle = message("phase", R"({"phase":"Idle"})");
+  const auto select = message("phase", R"({"phase":"Select"})");
+  const auto stopped = message("phase", R"({"phase":"Preparing"})");
   const auto playing = message("phase", R"({"phase":"Playing"})");
-  const auto no = message("status", R"({"score":0,"remaining":120,"ready":false,"countdown":0,"rank":null,"gains":[],"combo":0})");
-  const auto yes = message("status", R"({"score":0,"remaining":120,"ready":true,"countdown":0,"rank":null,"gains":[],"combo":0})");
+  const auto finished = message("phase", R"({"phase":"Finished"})");
+  const auto no = message("status", R"({"score":0,"remaining":0,"ready":false,"countdown":0,"rank":null,"gains":[],"combo":0,"round":null,"window":0})");
+  const auto yes = message("status", R"({"score":0,"remaining":0,"ready":true,"countdown":0,"rank":null,"gains":[],"combo":0,"round":null,"window":0})");
+  const auto normal_window = [](unsigned window) {
+    return message("status", R"({"score":9,"remaining":0,"ready":false,"countdown":0,"rank":null,"gains":[],"combo":0,"round":"normal","window":)" +
+                   std::to_string(window) + "}");
+  };
+  const auto practice = [](unsigned window, unsigned countdown = 0) {
+    return message("status", R"({"score":0,"remaining":0,"ready":false,"countdown":)" + std::to_string(countdown) +
+                   R"(,"rank":null,"gains":[],"combo":0,"round":"tutorial","window":)" + std::to_string(window) +
+                   R"(,"bots":[1,4,0]})");
+  };
+  // 結果を表示できる状態にして、結果取得の期限で再同期させない。
+  const auto summary = [](const std::string& sync) {
+    return message("summary", "{\"sync\":\"" + sync + R"(","score":9,"rank":null,"eligible":true,"topPercent":null,"bottomHalf":false,)"
+                   R"("gameBest":9,"gameBestNodes":[1],"hourBest":null,"hourBestStart":null,"hourBestMine":false,)"
+                   R"("allTimeBest":null,"allTimeBestMine":false})");
+  };
   const auto readyA = message("ready", "{\"sync\":\"" + syncA + "\"}");
   const auto readyB = message("ready", "{\"sync\":\"" + syncB + "\"}");
   const auto resync = message("resync", "{}");
@@ -431,74 +450,151 @@ static void test_ready() {
     ctx.poll();
     return ctx.link.update_ready(ctx.port, mask, ctx.now);
   };
-  ctx.receive(config + reset(syncA, R"([{"pid":10,"dst":2}])") + prep + no);
+  // 両端を離してから押し直し、2秒保つ。
+  const auto hold = [&]() {
+    step(0);
+    step(9);
+    return step(9, ReadyHold::DURATION_MS);
+  };
+
+  // 待機の手動ノードは、両端の2秒長押しでreadyを送る。内側のボタンは関係しない。
+  ctx.receive(config + reset(syncA, packets) + idle + no);
   ctx.port.output.clear();
-  assert(!step(9, 2000));
+  assert(!step(9, 2000)); // 設定・復旧時の押しっぱなしは引き継がない。
   step(0);
   step(1);
   step(9, 100);
   assert(!step(15, 1999) && ctx.link.ready_progress_ms() == 1999);
   assert(step(9, 1) && ctx.port.output == readyA && ctx.link.ready_pending());
-  assert(ctx.queue.size() == 1 && ctx.link.mode() == ControlMode::Manual && ctx.link.phase() == GamePhase::Preparing);
+  assert(ctx.link.ready_progress_ms() == ReadyHold::DURATION_MS);
+  assert(ctx.queue.size() == 1 && ctx.link.mode() == ControlMode::Manual && ctx.link.phase() == GamePhase::Idle);
+
+  // 確認待ちはphase(Select)を3秒待つ。falseのstatus・同じphase・待機のresetでは、期限を延ばさず解除もしない。
   ctx.port.output.clear();
-  ctx.receive(no + prep); // falseや同一PHASEで確認待ちの期限を延ばさない。
+  ctx.receive(no + idle + reset(syncB, packets));
+  assert(ctx.link.ready_pending() && ctx.link.fifo_synced());
   assert(!step(9, 2999) && ctx.link.ready_pending() && ctx.port.output.empty());
   step(9, 1);
   assert(!ctx.link.ready_pending() && !ctx.link.fifo_synced() && ctx.port.output == resync);
-  ctx.receive(reset(syncB, R"([{"pid":10,"dst":2}])") + prep + no);
+
+  // 復旧後は要求を自動で再送せず、改めて長押ししたときだけ送る。phase(Select)で確認待ちが終わる。
+  ctx.receive(reset(syncB, packets) + idle + no);
   ctx.port.output.clear();
   assert(!step(9, 2000));
+  assert(hold() && ctx.port.output == readyB);
+  ctx.port.output.clear();
+  ctx.receive(select);
+  assert(!ctx.link.ready_pending() && ctx.link.phase() == GamePhase::Select && ctx.port.output.empty());
+  assert(!hold()); // モード選択では長押しを受け付けない。
+  ctx.receive(idle); // 時間切れで待機へ戻る。押したままは持ち越さない。
+  assert(!step(9, 2000));
+  ctx.port.output.clear();
+  assert(hold() && ctx.port.output == readyB);
+  ctx.receive(select + idle);
+
+  // resetだけでは長押しの計測を解除しない。送るreadyには、計測中に適用した最新の同期世代を付ける。
+  ctx.port.output.clear();
   step(0);
   step(9);
-  assert(step(9, 2000) && ctx.port.output == readyB);
+  assert(!step(9, 1000));
+  ctx.receive(reset(syncA, packets));
+  assert(!step(9, 999) && ctx.link.ready_progress_ms() == 1999);
+  assert(step(9, 1) && ctx.port.output == readyA);
+  ctx.receive(select + idle);
+
+  // フェーズの変更は、同じpoll内で戻っても計測を解除する。
+  step(0);
+  step(9);
+  ctx.receive(stopped + idle);
+  assert(!step(9, 2000));
+
+  // status.readyがtrueの待機（一斉ゲーム方式の準備完了）では受け付けない。
   ctx.receive(yes);
-  assert(!ctx.link.ready_pending() && ctx.link.status().ready);
-  ctx.port.output.clear();
-  step(0);
-  assert(!step(9, 10000) && ctx.port.output.empty());
+  assert(!hold());
   ctx.receive(no);
-  step(0);
-  step(9);
-  ctx.receive(playing + prep); // 同じpoll内で戻っても長押しを解除する。
-  assert(!step(9, 2000));
-  step(0);
-  step(9);
-  ctx.receive(reset(syncB, R"([{"pid":10,"dst":2}])") + no);
-  assert(!step(9, 2000));
-  step(0);
-  step(9);
-  assert(step(9, 2000));
-  ctx.receive(playing);
+
+  // 停止中と通常ラウンドでは送れない。
+  ctx.receive(stopped);
+  assert(!hold());
+  ctx.receive(playing + normal_window(0));
+  assert(!hold());
+  ctx.receive(normal_window(30)); // 通常ラウンド中は、windowがあっても長押しを受け付けない。
+  assert(!hold());
+
+  // 結果は、windowが1以上のときだけ。0（一斉ゲーム方式）では受け付けない。
+  ctx.receive(finished + normal_window(0) + summary(syncA));
+  assert(!hold());
+  ctx.receive(normal_window(30));
+  ctx.port.output.clear();
+  assert(!step(9, 2000)); // 段階が変わった後の押しっぱなしは持ち越さない。
+  assert(hold() && ctx.port.output == readyA);
+  ctx.receive(select + finished + normal_window(1) + summary(syncA));
   assert(!ctx.link.ready_pending());
+  assert(hold());
+  ctx.receive(select + finished + normal_window(0) + summary(syncA));
+  assert(!hold());
+
+  // 練習ラウンドは、windowが1以上のときだけ。カウントダウン中でも送れる。
+  ctx.receive(select + playing + practice(0));
+  assert(!hold());
+  ctx.receive(practice(60, 3));
+  ctx.port.output.clear();
+  assert(hold() && ctx.port.output == readyA);
+  ctx.receive(select + playing + practice(48));
+  ctx.port.output.clear();
+  assert(!step(9, 2000));
+  assert(hold() && ctx.port.output == readyA);
+  ctx.receive(select);
+
+  // 練習中の両端は送信ボタンでもあるので、長押しの押し始めで通常どおりsendが送られることがある。
+  ctx.receive(playing + practice(48));
   ctx.port.output.clear();
   assert(ctx.link.send(ctx.port, ctx.queue, NodeId::P2, ctx.now));
-  assert(ctx.port.output.find("\"rid\":0") != std::string::npos); // READYはRIDを消費しない。
-  ctx.receive(result(syncB, 0));
-  ctx.receive(config + reset(syncA, "[]") + prep); // STATUS未取得では要求しない。
+  assert(ctx.port.output.find("\"rid\":") != std::string::npos);
+  ctx.receive(result(syncA, ~0u - 1u, false)); // 応答待ちと違う要求IDの応答は無視する。
+  assert(ctx.link.pending());
+  ctx.receive(result(syncA, 0, false));
+  assert(!ctx.link.pending());
+
+  // STATUS未取得では要求しない。
+  ctx.receive(config + reset(syncA, "[]") + idle);
   ctx.port.output.clear();
   step(0);
   assert(!step(9, 2000));
   ctx.receive(no);
   step(0);
   step(9);
+
+  // 部分書込は次の行より先に完送する。
   ctx.port.writeLimit = 5;
   assert(step(9, 2000));
   for (unsigned i = 0; i < 30; ++i) ctx.poll();
   assert(ctx.port.output == readyA && ctx.link.ready_pending());
   ctx.port.writeLimit = 256;
-  ctx.receive(message("config", R"({"node":1,"mode":"auto","preview":false})") + reset(syncA, "[]") + prep + no);
+
+  // 自動のノードは長押しを受け付けない。
+  ctx.receive(message("config", R"({"node":1,"mode":"auto","preview":false})") + reset(syncA, "[]") + idle + no);
   ctx.port.output.clear();
   step(0);
   assert(!step(9, 3000) && !ctx.link.ready_pending() && ctx.port.output.empty());
-  ctx.receive(config + reset(syncA, "[]") + prep + no);
+
+  // 確認表示中も受け付けない。
+  ctx.receive(message("config", R"({"node":1,"mode":"auto","preview":true})") + reset(syncA, "[]") + idle + no);
+  assert(ctx.link.preview() && !hold());
+
+  // 書込できないときは要求を出さずに再同期する。
+  ctx.receive(config + reset(syncA, "[]") + idle + no);
   step(0);
   step(9);
   ctx.port.writable = 0;
   assert(!step(9, 2000) && !ctx.link.fifo_synced());
   ctx.port.writable = 256;
+  ctx.port.output.clear();
   ctx.poll();
   assert(ctx.port.output == resync);
-  ctx.receive(config + reset(syncA, "[]") + prep + no);
+
+  // 切断では計測も確認待ちも破棄する。
+  ctx.receive(config + reset(syncA, "[]") + idle + no);
   step(0);
   step(9);
   assert(step(9, 2000) && ctx.link.ready_pending());
@@ -518,7 +614,7 @@ static void test_summary_and_preview() {
   const auto config = message("config", R"({"node":1,"mode":"manual","preview":false})");
   const auto playing = message("phase", R"({"phase":"Playing"})");
   const auto finished = message("phase", R"({"phase":"Finished"})");
-  const auto status = message("status", R"({"score":9,"remaining":0,"ready":false,"countdown":0,"rank":null,"gains":[],"combo":0})");
+  const auto status = message("status", R"({"score":9,"remaining":0,"ready":false,"countdown":0,"rank":null,"gains":[],"combo":0,"round":null,"window":0})");
   const auto summary = [&](const std::string& sync, const std::string& fields = R"("score":2147483647,"rank":2,"eligible":true,"topPercent":null)") {
     return message("summary", "{\"sync\":\"" + sync + "\"," + fields + ",\"bottomHalf\":false," + NO_BESTS + "}");
   };
@@ -586,7 +682,6 @@ static void test_summary_and_preview() {
     R"("score":true,"rank":1,"eligible":true,"topPercent":null)",
     R"("score":1.5,"rank":1,"eligible":true,"topPercent":null)",
     R"("score":1,"rank":0,"eligible":true,"topPercent":null)", R"("score":1,"rank":9,"eligible":true,"topPercent":null)",
-    R"("score":1,"rank":null,"eligible":true,"topPercent":null)",
     R"("score":1,"rank":true,"eligible":true,"topPercent":null)",
     R"("score":1,"rank":1,"eligible":false,"topPercent":null)", R"("score":1,"eligible":false,"topPercent":null)",
     R"("score":1,"rank":null,"topPercent":null)", R"("score":1,"rank":null,"eligible":0,"topPercent":null)",
@@ -610,6 +705,10 @@ static void test_summary_and_preview() {
   assert(ctx.link.fifo_synced() && ctx.link.summary().topPercent == 0); // 対象者のnullは上位%なし。
   ctx.receive(summary(a, R"("score":400,"rank":null,"eligible":false,"topPercent":null)"));
   assert(ctx.link.fifo_synced() && !ctx.link.summary().eligible && ctx.link.summary().topPercent == 0);
+  // ラウンドは順位を付けないので、対象者でもrankはnullが正しい。順位は0（なし）で持つ。
+  ctx.receive(summary(a, R"("score":345,"rank":null,"eligible":true,"topPercent":12)"));
+  assert(ctx.link.fifo_synced() && ctx.link.summary().score == 345 && ctx.link.summary().eligible &&
+         ctx.link.summary().rank == 0 && ctx.link.summary().topPercent == 12);
   for (const auto& fields : bad) {
     ctx.receive(config + reset(a, "[]") + finished + status + summary(a));
     ctx.receive(summary(a, fields));
@@ -667,7 +766,7 @@ static void test_summary_bests() {
   const std::string a(32, 'A');
   const auto config = message("config", R"({"node":1,"mode":"manual","preview":false})");
   const auto finished = message("phase", R"({"phase":"Finished"})");
-  const auto status = message("status", R"({"score":9,"remaining":0,"ready":false,"countdown":0,"rank":null,"gains":[],"combo":0})");
+  const auto status = message("status", R"({"score":9,"remaining":0,"ready":false,"countdown":0,"rank":null,"gains":[],"combo":0,"round":null,"window":0})");
   const std::string ranked = R"("score":520,"rank":1,"eligible":true,"topPercent":3,"bottomHalf":false,)";
   const std::string unranked = R"("score":520,"rank":null,"eligible":false,"topPercent":null,"bottomHalf":false,)";
   const auto summary = [&](const std::string& bests, const std::string& head) {
@@ -782,7 +881,7 @@ static void test_countdown() {
   const std::string fifo = reset(sync, R"([{"pid":10,"dst":2}])");
   const std::string resync = message("resync", "{}");
   const auto countdown = [](const std::string& value) {
-    return message("status", R"({"score":0,"remaining":90,"ready":true,"countdown":)" + value + R"(,"rank":null,"gains":[],"combo":0})");
+    return message("status", R"({"score":0,"remaining":90,"ready":true,"countdown":)" + value + R"(,"rank":null,"gains":[],"combo":0,"round":null,"window":0})");
   };
   ctx.receive(message("config", R"({"node":1,"mode":"manual","preview":false})") + fifo +
               message("phase", R"({"phase":"Playing"})"));
@@ -809,7 +908,7 @@ static void test_countdown() {
   }
   ctx.receive(fifo + countdown("2"));
   ctx.port.output.clear();
-  ctx.receive(message("status", R"({"score":0,"remaining":90,"ready":true,"rank":null,"gains":[],"combo":0})")); // 欠落も不正。
+  ctx.receive(message("status", R"({"score":0,"remaining":90,"ready":true,"rank":null,"gains":[],"combo":0,"round":null,"window":0})")); // 欠落も不正。
   assert(ctx.port.output == resync && !ctx.link.fifo_synced() && ctx.link.status().countdown == 2);
 
   // 再同期のSTATUS取得待ちでは、保持中の値でSENDを止めない。
@@ -830,7 +929,7 @@ static void test_rank_and_gains() {
   const std::string resync = message("resync", "{}");
   const auto status = [](const std::string& rank, const std::string& gains) {
     return message("status", R"({"score":23,"remaining":87,"ready":true,"countdown":0,"rank":)" + rank +
-                   R"(,"gains":)" + gains + R"(,"combo":4})");
+                   R"(,"gains":)" + gains + R"(,"combo":4,"round":null,"window":0})");
   };
   const auto values = [](const GainBatch& gains) {
     return std::vector<unsigned>(gains.values, gains.values + gains.count);
@@ -871,8 +970,8 @@ static void test_rank_and_gains() {
     assert(ctx.link.status().rank == 3 && ctx.link.take_gains().count == 0);
   }
   const std::string missing[] = {
-    R"({"score":23,"remaining":87,"ready":true,"countdown":0,"gains":[],"combo":0})",
-    R"({"score":23,"remaining":87,"ready":true,"countdown":0,"rank":null,"combo":0})",
+    R"({"score":23,"remaining":87,"ready":true,"countdown":0,"gains":[],"combo":0,"round":null,"window":0})",
+    R"({"score":23,"remaining":87,"ready":true,"countdown":0,"rank":null,"combo":0,"round":null,"window":0})",
   };
   for (const auto& fields : missing) {
     ctx.receive(fifo + status("3", "[]"));
@@ -895,7 +994,7 @@ static void test_combo() {
   const std::string resync = message("resync", "{}");
   const auto status = [](const std::string& combo) {
     return message("status", R"({"score":23,"remaining":87,"ready":true,"countdown":0,"rank":2,"gains":[],"combo":)" +
-                   combo + "}");
+                   combo + R"(,"round":null,"window":0})");
   };
   ctx.receive(message("config", R"({"node":1,"mode":"manual","preview":false})") + fifo +
               message("phase", R"({"phase":"Playing"})"));
@@ -915,13 +1014,365 @@ static void test_combo() {
   }
   ctx.receive(fifo + status("7"));
   ctx.port.output.clear();
-  ctx.receive(message("status", R"({"score":23,"remaining":87,"ready":true,"countdown":0,"rank":2,"gains":[]})")); // 欠落も不正。
+  ctx.receive(message("status", R"({"score":23,"remaining":87,"ready":true,"countdown":0,"rank":2,"gains":[],"round":null,"window":0})")); // 欠落も不正。
   assert(ctx.port.output == resync && !ctx.link.fifo_synced() && ctx.link.status().combo == 7);
   ctx.receive(fifo + status("8"));
   assert(ctx.link.fifo_synced() && ctx.link.status().combo == 8);
   // 設定の無効化では未取得に戻す。
   ctx.receive(message("identify", "{}"));
   assert(!ctx.link.status().known && ctx.link.status().combo == 0);
+}
+
+static void test_phases() {
+  TestContext ctx;
+  const std::string sync = "0000000000000000000000000000000A";
+  const std::string resync = message("resync", "{}");
+  const auto config = message("config", R"({"node":1,"mode":"manual","preview":false})");
+  const auto fifo = reset(sync, R"([{"pid":10,"dst":2}])");
+  const auto status = message("status", R"({"score":0,"remaining":0,"ready":false,"countdown":0,"rank":null,"gains":[],"combo":0,"round":null,"window":0})");
+  ctx.receive(config + fifo);
+  for (const char* name : {"Preparing", "Idle", "Select", "Playing", "Finished"}) {
+    ctx.receive(message("phase", std::string(R"({"phase":")") + name + "\"}") + status);
+    assert(ctx.link.fifo_synced() && ctx.link.phase() != GamePhase::Unknown);
+  }
+  ctx.receive(message("phase", R"({"phase":"Idle"})"));
+  assert(ctx.link.phase() == GamePhase::Idle);
+  ctx.receive(message("phase", R"({"phase":"Select"})"));
+  assert(ctx.link.phase() == GamePhase::Select);
+  // 未知の値と、大文字・小文字の違いは不正。以前のフェーズを保って再同期する。
+  for (const char* name : {"idle", "IDLE", "select", "Selecting", "Waiting", "Finish", "Resting", ""}) {
+    ctx.receive(fifo + message("phase", R"({"phase":"Select"})") + status);
+    ctx.port.output.clear();
+    ctx.receive(message("phase", std::string(R"({"phase":")") + name + "\"}"));
+    assert(ctx.port.output == resync && !ctx.link.fifo_synced() && ctx.link.phase() == GamePhase::Select);
+  }
+  ctx.receive(fifo + message("phase", R"({"phase":"Select"})") + status);
+  ctx.port.output.clear();
+  ctx.receive(message("phase", R"({"phase":null})"));
+  ctx.receive(message("phase", R"({"phase":1})"));
+  ctx.receive(message("phase", "{}"));
+  assert(ctx.link.phase() == GamePhase::Select);
+
+  // 待機のresetは列の続きなので、描画アニメーションを初期化しない。それ以外の段階では初期化する。
+  const std::string packets3 = R"([{"pid":10,"dst":2},{"pid":11,"dst":3},{"pid":12,"dst":4}])";
+  ctx.receive(message("phase", R"({"phase":"Idle"})"));
+  assert(!ctx.receive(reset("0000000000000000000000000000000B", packets3)) && ctx.queue.size() == 3);
+  assert(!ctx.receive(reset("0000000000000000000000000000000C", R"([{"pid":11,"dst":3},{"pid":12,"dst":4}])")) &&
+         ctx.queue.size() == 2 && ctx.queue.at(0)->id == 11);
+  ctx.receive(message("phase", R"({"phase":"Select"})"));
+  assert(ctx.receive(reset("0000000000000000000000000000000D", packets3)));
+  ctx.receive(message("phase", R"({"phase":"Playing"})"));
+  assert(ctx.receive(reset("0000000000000000000000000000000E", packets3)));
+  ctx.receive(message("phase", R"({"phase":"Finished"})"));
+  assert(ctx.receive(reset("0000000000000000000000000000000F", packets3)));
+}
+
+static void test_round_window_and_bots() {
+  TestContext ctx;
+  const std::string sync = "0000000000000000000000000000000A";
+  const std::string resync = message("resync", "{}");
+  const auto config = message("config", R"({"node":1,"mode":"manual","preview":false})");
+  const auto fifo = reset(sync, R"([{"pid":10,"dst":2}])");
+  const auto tutorial = message("phase", R"({"phase":"Playing"})");
+  const auto status = [](const std::string& tail) {
+    return message("status", R"({"score":0,"remaining":0,"ready":false,"countdown":0,"rank":null,"gains":[],"combo":0,)" + tail + "}");
+  };
+  const std::string good = R"("round":"tutorial","window":48,"bots":[1,4,0])";
+  ctx.receive(config + fifo + tutorial);
+
+  // roundは"normal"・"tutorial"・null、windowは0〜60の整数。
+  struct Expected { const char* round; RoundKind kind; };
+  for (const Expected& round : {Expected{"null", RoundKind::None}, Expected{"\"normal\"", RoundKind::Normal},
+                                Expected{"\"tutorial\"", RoundKind::Tutorial}}) {
+    for (const unsigned window : {0u, 1u, 20u, 59u, 60u}) {
+      ctx.receive(status(std::string("\"round\":") + round.round + ",\"window\":" + std::to_string(window)));
+      assert(ctx.link.fifo_synced() && ctx.link.status().known);
+      assert(ctx.link.status().round == round.kind && ctx.link.status().window == window);
+      assert(!ctx.link.status().botsKnown);
+    }
+  }
+
+  // botsは練習ラウンドの間だけ付く。付いていれば保存し、付いていなければ「なし」にする。
+  ctx.receive(status(good));
+  assert(ctx.link.status().botsKnown && ctx.link.status().bots[0] == 1 && ctx.link.status().bots[1] == 4 &&
+         ctx.link.status().bots[2] == 0 && ctx.link.status().round == RoundKind::Tutorial);
+  ctx.receive(status(R"("round":"tutorial","window":47,"bots":[4,4,4])"));
+  assert(ctx.link.status().botsKnown && ctx.link.status().bots[0] == 4 && ctx.link.status().bots[2] == 4);
+  ctx.receive(status(R"("round":"tutorial","window":46,"bots":[0,0,0])"));
+  assert(ctx.link.status().botsKnown && ctx.link.status().bots[0] == 0 && ctx.link.status().bots[1] == 0);
+  ctx.receive(status(R"("round":"tutorial","window":45)"));
+  assert(ctx.link.fifo_synced() && !ctx.link.status().botsKnown && ctx.link.status().window == 45);
+  ctx.receive(status(good));
+  ctx.receive(status(R"("round":"normal","window":0)"));
+  assert(ctx.link.fifo_synced() && !ctx.link.status().botsKnown && ctx.link.status().bots[1] == 0);
+
+  // 不正な値は以前の正常値を保って再同期する。botsだけが不正でも、statusの他の項目は反映しない。
+  const std::string bad[] = {
+    R"("window":48,"bots":[1,4,0])",                              // roundの欠落
+    R"("round":"Tutorial","window":48,"bots":[1,4,0])", R"("round":"practice","window":48,"bots":[1,4,0])",
+    R"("round":"","window":48,"bots":[1,4,0])", R"("round":1,"window":48,"bots":[1,4,0])",
+    R"("round":true,"window":48,"bots":[1,4,0])", R"("round":["tutorial"],"window":48,"bots":[1,4,0])",
+    R"("round":"tutorial","bots":[1,4,0])",                        // windowの欠落
+    R"("round":"tutorial","window":61,"bots":[1,4,0])", R"("round":"tutorial","window":-1,"bots":[1,4,0])",
+    R"("round":"tutorial","window":256,"bots":[1,4,0])", R"("round":"tutorial","window":1.5,"bots":[1,4,0])",
+    R"("round":"tutorial","window":"48","bots":[1,4,0])", R"("round":"tutorial","window":null,"bots":[1,4,0])",
+    R"("round":"tutorial","window":true,"bots":[1,4,0])",
+    R"("round":"tutorial","window":48,"bots":null)", R"("round":"tutorial","window":48,"bots":[])",
+    R"("round":"tutorial","window":48,"bots":[1,4])", R"("round":"tutorial","window":48,"bots":[1,4,0,0])",
+    R"("round":"tutorial","window":48,"bots":[1,4,5])", R"("round":"tutorial","window":48,"bots":[5,0,0])",
+    R"("round":"tutorial","window":48,"bots":[-1,0,0])", R"("round":"tutorial","window":48,"bots":[1,4,"0"])",
+    R"("round":"tutorial","window":48,"bots":[1,4,null])", R"("round":"tutorial","window":48,"bots":[1,4,1.5])",
+    R"("round":"tutorial","window":48,"bots":[1,4,true])", R"("round":"tutorial","window":48,"bots":[1,4,[0]])",
+    R"("round":"tutorial","window":48,"bots":{"B1":1})", R"("round":"tutorial","window":48,"bots":"140")",
+    R"("round":"tutorial","window":48,"bots":3)", R"("round":"tutorial","window":48,"bots":true)"
+  };
+  for (const auto& tail : bad) {
+    ctx.receive(fifo + tutorial + status(R"("round":"tutorial","window":48,"bots":[1,4,0])"));
+    ctx.port.output.clear();
+    ctx.receive(status(tail));
+    assert(ctx.port.output == resync && !ctx.link.fifo_synced() && ctx.self == NodeId::P1);
+    const PlayerStatus& kept = ctx.link.status();
+    assert(kept.known && kept.round == RoundKind::Tutorial && kept.window == 48 && kept.botsKnown);
+    assert(kept.bots[0] == 1 && kept.bots[1] == 4 && kept.bots[2] == 0 && kept.score == 0);
+  }
+  // 他の項目が不正なstatusでも、round・window・botsを部分的に反映しない。
+  ctx.receive(fifo + tutorial + status(good));
+  ctx.receive(message("status", R"({"score":-1,"remaining":0,"ready":false,"countdown":0,"rank":null,"gains":[],"combo":0,"round":"normal","window":10})"));
+  assert(!ctx.link.fifo_synced() && ctx.link.status().round == RoundKind::Tutorial && ctx.link.status().window == 48);
+
+  // 設定の無効化では、round・window・botsも未取得に戻す。
+  ctx.receive(fifo + tutorial + status(good));
+  ctx.receive(message("identify", "{}"));
+  assert(!ctx.link.status().known && ctx.link.status().round == RoundKind::None &&
+         ctx.link.status().window == 0 && !ctx.link.status().botsKnown);
+}
+
+static void test_choose() {
+  TestContext ctx;
+  const std::string syncA = "0000000000000000000000000000000A";
+  const std::string syncB = "0000000000000000000000000000000B";
+  const std::string packets = R"([{"pid":10,"dst":2}])";
+  const auto config = message("config", R"({"node":1,"mode":"manual","preview":false})");
+  const auto idle = message("phase", R"({"phase":"Idle"})");
+  const auto select = message("phase", R"({"phase":"Select"})");
+  const auto playing = message("phase", R"({"phase":"Playing"})");
+  const auto selectStatus = message("status", R"({"score":0,"remaining":0,"ready":false,"countdown":0,"rank":null,"gains":[],"combo":0,"round":null,"window":20})");
+  const auto idleStatus = message("status", R"({"score":0,"remaining":0,"ready":false,"countdown":0,"rank":null,"gains":[],"combo":0,"round":null,"window":0})");
+  const auto normalStatus = message("status", R"({"score":0,"remaining":90,"ready":false,"countdown":3,"rank":null,"gains":[],"combo":0,"round":"normal","window":0})");
+  const auto resync = message("resync", "{}");
+  const auto choose = [](const std::string& sync, const char* round) {
+    return message("choose", "{\"sync\":\"" + sync + "\",\"round\":\"" + round + "\"}");
+  };
+  constexpr uint8_t END_LEFT = 1, TUTORIAL = 2, NORMAL = 4, END_RIGHT = 8;
+
+  // 内側の2ボタンの押下の立ち上がりで、1回だけ送る。両端は選択に使わない。
+  ctx.receive(config + reset(syncA, packets) + select + selectStatus);
+  ctx.port.output.clear();
+  assert(!ctx.link.update_choose(ctx.port, 0, ctx.now));
+  assert(!ctx.link.update_choose(ctx.port, END_LEFT | END_RIGHT, ctx.now) && ctx.port.output.empty());
+  assert(ctx.link.choose_pending() == RoundKind::None);
+  assert(ctx.link.update_choose(ctx.port, TUTORIAL, ctx.now));
+  assert(ctx.port.output == choose(syncA, "tutorial") && ctx.link.choose_pending() == RoundKind::Tutorial);
+  ctx.port.output.clear();
+  assert(!ctx.link.update_choose(ctx.port, NORMAL, ctx.now) && ctx.port.output.empty()); // 確認待ちの間は追加の選択を送らない。
+  assert(ctx.link.choose_pending() == RoundKind::Tutorial);
+
+  // 確認待ちは、phase(Select)の再通知・status・待機のresetでは延ばさず、解除もしない。3秒でresyncする。
+  ctx.now += ServerLink::CHOOSE_TIMEOUT_MS - 1;
+  ctx.receive(select + selectStatus + reset(syncB, packets));
+  assert(ctx.link.choose_pending() == RoundKind::Tutorial && ctx.link.fifo_synced());
+  ctx.poll();
+  assert(ctx.port.output.empty());
+  ++ctx.now;
+  ctx.poll();
+  assert(ctx.port.output == resync && !ctx.link.fifo_synced() && ctx.link.choose_pending() == RoundKind::None);
+  // 要求は自動で再送しない。復旧後は、改めて押したときだけ送る。
+  ctx.port.output.clear();
+  ctx.receive(reset(syncB, packets) + select + selectStatus);
+  ctx.poll();
+  assert(ctx.port.output.empty());
+  assert(ctx.link.update_choose(ctx.port, NORMAL, ctx.now) && ctx.port.output == choose(syncB, "normal"));
+  assert(ctx.link.choose_pending() == RoundKind::Normal);
+
+  // phase(Playing)で確認待ちが終わる。ラウンドの中ではchooseを送らない。
+  ctx.port.output.clear();
+  ctx.receive(playing + normalStatus);
+  assert(ctx.link.choose_pending() == RoundKind::None && ctx.link.phase() == GamePhase::Playing);
+  assert(!ctx.link.update_choose(ctx.port, TUTORIAL | NORMAL, ctx.now) && ctx.port.output.empty());
+  ctx.now += 10000;
+  ctx.poll();
+  assert(ctx.link.fifo_synced() && ctx.port.output.empty());
+
+  // 時間切れでphase(Idle)になったら、確認待ちも終わる。
+  ctx.receive(select + selectStatus);
+  assert(ctx.link.update_choose(ctx.port, NORMAL, ctx.now));
+  ctx.port.output.clear();
+  ctx.receive(idle + idleStatus);
+  assert(ctx.link.choose_pending() == RoundKind::None && !ctx.link.update_choose(ctx.port, NORMAL, ctx.now));
+
+  // 同時に押された場合は左側（練習）を優先する。
+  ctx.receive(select + selectStatus);
+  ctx.port.output.clear();
+  assert(ctx.link.update_choose(ctx.port, TUTORIAL | NORMAL | END_LEFT, ctx.now));
+  assert(ctx.port.output == choose(syncB, "tutorial"));
+
+  // モード選択以外、同期前、確認表示中、自動のノードでは送らない。
+  const std::string others[] = {"Preparing", "Idle", "Playing", "Finished"};
+  for (const auto& phase : others) {
+    ctx.receive(config + reset(syncA, packets) + message("phase", "{\"phase\":\"" + phase + "\"}") + idleStatus);
+    ctx.port.output.clear();
+    assert(!ctx.link.update_choose(ctx.port, TUTORIAL, ctx.now) && !ctx.link.update_choose(ctx.port, NORMAL, ctx.now));
+    assert(ctx.port.output.empty());
+  }
+  ctx.receive(config + select);
+  assert(!ctx.link.fifo_synced() && !ctx.link.update_choose(ctx.port, TUTORIAL, ctx.now)); // 同期前。
+  ctx.receive(reset(syncA, packets));
+  ctx.port.output.clear();
+  assert(ctx.link.update_choose(ctx.port, TUTORIAL, ctx.now)); // 設定・FIFO同期済みなら、statusの取得前でも選べる。
+  ctx.receive(message("config", R"({"node":1,"mode":"auto","preview":false})") + reset(syncA, packets) + select + selectStatus);
+  ctx.port.output.clear();
+  assert(!ctx.link.update_choose(ctx.port, TUTORIAL, ctx.now) && ctx.port.output.empty());
+  ctx.receive(message("config", R"({"node":1,"mode":"auto","preview":true})") + reset(syncA, packets) + select + selectStatus);
+  assert(ctx.link.preview() && !ctx.link.update_choose(ctx.port, TUTORIAL, ctx.now) && ctx.port.output.empty());
+
+  // chooseはRIDを消費しない。
+  ctx.receive(config + reset(syncA, packets) + select + selectStatus);
+  assert(ctx.link.update_choose(ctx.port, NORMAL, ctx.now));
+  ctx.receive(playing + message("status", R"({"score":0,"remaining":90,"ready":false,"countdown":0,"rank":null,"gains":[],"combo":0,"round":"normal","window":0})"));
+  ctx.port.output.clear();
+  assert(ctx.link.send(ctx.port, ctx.queue, NodeId::P2, ctx.now));
+  assert(ctx.port.output.find("\"rid\":0") != std::string::npos);
+
+  // 部分書込は次の行より先に完送する。書込できないときは要求を出さずに再同期する。
+  ctx.receive(config + reset(syncA, packets) + select + selectStatus);
+  ctx.port.output.clear();
+  ctx.port.writeLimit = 7;
+  assert(ctx.link.update_choose(ctx.port, TUTORIAL, ctx.now));
+  for (unsigned i = 0; i < 30; ++i) ctx.poll();
+  assert(ctx.port.output == choose(syncA, "tutorial") && ctx.link.choose_pending() == RoundKind::Tutorial);
+  ctx.port.writeLimit = 256;
+  ctx.receive(config + reset(syncA, packets) + select + selectStatus);
+  ctx.port.output.clear();
+  ctx.port.writable = 0;
+  assert(!ctx.link.update_choose(ctx.port, TUTORIAL, ctx.now) && !ctx.link.fifo_synced());
+  assert(ctx.link.choose_pending() == RoundKind::None);
+  ctx.port.writable = 256;
+  ctx.poll();
+  assert(ctx.port.output == resync);
+
+  // 設定・識別・切断では確認待ちを破棄する。
+  ctx.receive(config + reset(syncA, packets) + select + selectStatus);
+  assert(ctx.link.update_choose(ctx.port, TUTORIAL, ctx.now));
+  ctx.receive(message("identify", "{}"));
+  assert(ctx.link.choose_pending() == RoundKind::None);
+  ctx.receive(config + reset(syncA, packets) + select + selectStatus);
+  assert(ctx.link.update_choose(ctx.port, NORMAL, ctx.now));
+  ctx.receive(config);
+  assert(ctx.link.choose_pending() == RoundKind::None);
+  ctx.receive(reset(syncA, packets) + select + selectStatus);
+  assert(ctx.link.update_choose(ctx.port, NORMAL, ctx.now));
+  ctx.port.connected = false;
+  ctx.poll();
+  ctx.now += ServerLink::DISCONNECT_GRACE_MS;
+  ctx.poll();
+  assert(ctx.link.choose_pending() == RoundKind::None && ctx.self == NodeId::None);
+}
+
+// 練習ラウンドでは、queueとsendの応答は練習用キューの内容になる。MCUは実FIFOと区別しない。
+static void test_practice_queue() {
+  TestContext ctx;
+  const std::string syncA = "0000000000000000000000000000000A";
+  const std::string syncB = "0000000000000000000000000000000B";
+  const std::string syncC = "0000000000000000000000000000000C";
+  const std::string syncD = "0000000000000000000000000000000D";
+  const std::string resync = message("resync", "{}");
+  const auto config = message("config", R"({"node":1,"mode":"manual","preview":false})");
+  const auto select = message("phase", R"({"phase":"Select"})");
+  const auto playing = message("phase", R"({"phase":"Playing"})");
+  const auto selectStatus = message("status", R"({"score":0,"remaining":0,"ready":false,"countdown":0,"rank":null,"gains":[],"combo":0,"round":null,"window":20})");
+  const auto practice = [](unsigned countdown, unsigned window, const std::string& bots) {
+    return message("status", R"({"score":0,"remaining":0,"ready":false,"countdown":)" + std::to_string(countdown) +
+                   R"(,"rank":null,"gains":[],"combo":0,"round":"tutorial","window":)" + std::to_string(window) +
+                   R"(,"bots":)" + bots + "}");
+  };
+  // 実FIFOのPID（10〜12）と同じ番号を、練習用キューが別のパケットとして使う。
+  const std::string real = R"([{"pid":10,"dst":2},{"pid":11,"dst":3},{"pid":12,"dst":4}])";
+  const std::string drill = R"([{"pid":10,"dst":6},{"pid":11,"dst":7},{"pid":1,"dst":5}])";
+
+  ctx.receive(config + reset(syncA, real) + select + selectStatus);
+  assert(ctx.queue.size() == 3 && ctx.queue.at(0)->destination == NodeId::P2);
+  assert(ctx.link.update_choose(ctx.port, 2, ctx.now));
+
+  // 練習の入り: phase(Playing)、練習用キューのreset、statusの順。PIDが実FIFOと重なっても拒否しない。
+  ctx.port.output.clear();
+  ctx.receive(playing);
+  assert(ctx.receive(reset(syncB, drill))); // 描画アニメーションを初期化する。
+  assert(ctx.port.output.empty() && ctx.link.fifo_synced() && ctx.queue.size() == 3);
+  assert(ctx.queue.at(0)->id == 10 && ctx.queue.at(0)->destination == NodeId::P6);
+  assert(ctx.queue.at(2)->id == 1 && ctx.queue.at(2)->destination == NodeId::P5);
+  ctx.receive(practice(3, 60, "[0,1,2]"));
+  assert(ctx.link.counting_down() && ctx.link.status().botsKnown && ctx.link.status().bots[2] == 2);
+  ctx.port.output.clear();
+  assert(!ctx.link.send(ctx.port, ctx.queue, NodeId::P6, ctx.now)); // カウントダウン中のsendは送らない。
+  ctx.receive(practice(0, 60, "[0,1,2]"));
+
+  // 練習のsend: result(ok=true)で先頭を消し、補充のpushが末尾に入る。
+  ctx.port.output.clear();
+  assert(ctx.link.send(ctx.port, ctx.queue, NodeId::P2, ctx.now));
+  assert(ctx.port.output.find("\"pid\":10") != std::string::npos && ctx.port.output.find(syncB) != std::string::npos);
+  ctx.receive(result(syncB, 0, true) + message("push", R"({"pid":2,"dst":9})"));
+  assert(ctx.queue.size() == 3 && ctx.queue.at(0)->id == 11 && ctx.queue.at(2)->id == 2 && !ctx.link.pending());
+  // 練習用キューの中のPIDの重複は、実FIFOと同じく再同期にする。
+  ctx.receive(message("push", R"({"pid":11,"dst":9})"));
+  assert(!ctx.link.fifo_synced());
+  ctx.receive(reset(syncB, R"([{"pid":11,"dst":7},{"pid":1,"dst":5},{"pid":2,"dst":9}])") + practice(0, 59, "[0,1,2]"));
+  assert(ctx.link.fifo_synced() && ctx.queue.size() == 3);
+
+  // 入れ替え前のsendの応答待ちは、新しい同期世代のresetで取り消される。遅れて届いた旧世代の応答は無視する。
+  assert(ctx.link.send(ctx.port, ctx.queue, NodeId::P2, ctx.now));
+  assert(ctx.link.pending());
+  ctx.receive(reset(syncC, drill));
+  assert(!ctx.link.pending() && ctx.queue.size() == 3 && ctx.queue.at(0)->id == 10);
+  ctx.receive(result(syncB, 1, true));
+  assert(ctx.queue.size() == 3 && ctx.queue.at(0)->id == 10 && ctx.link.fifo_synced());
+
+  // 練習の出: phase(Select)、実FIFOのreset、statusの順。練習用キューのPIDを実FIFOが使っていても拒否しない。
+  ctx.receive(select);
+  assert(ctx.receive(reset(syncD, real)));
+  ctx.receive(selectStatus);
+  assert(ctx.link.fifo_synced() && ctx.queue.size() == 3 && ctx.queue.at(0)->destination == NodeId::P2);
+  assert(ctx.link.status().round == RoundKind::None && !ctx.link.status().botsKnown);
+  ctx.port.output.clear();
+  ctx.poll();
+  assert(ctx.port.output.empty());
+
+  // 練習用のresetが同一の列の中でPIDを重ねたときは、実FIFOと同じく拒否する。
+  ctx.receive(playing + practice(0, 60, "[0,0,0]"));
+  ctx.port.output.clear();
+  ctx.receive(reset(syncB, R"([{"pid":10,"dst":6},{"pid":10,"dst":7},{"pid":1,"dst":5}])"));
+  assert(ctx.port.output == resync && ctx.queue.size() == 3 && ctx.queue.at(0)->destination == NodeId::P2);
+}
+
+// 一斉ゲーム方式の練習の終了（Finishedでround=tutorial）では、summaryが届かないので結果取得の期限を設けない。
+static void test_practice_finish_has_no_summary() {
+  TestContext ctx;
+  const std::string sync = "0000000000000000000000000000000A";
+  const auto config = message("config", R"({"node":1,"mode":"manual","preview":false})");
+  const auto finished = message("phase", R"({"phase":"Finished"})");
+  const auto tutorial = message("status", R"({"score":0,"remaining":0,"ready":false,"countdown":0,"rank":null,"gains":[],"combo":0,"round":"tutorial","window":0,"bots":[0,0,0]})");
+  const auto normal = message("status", R"({"score":9,"remaining":0,"ready":false,"countdown":0,"rank":null,"gains":[],"combo":0,"round":"normal","window":0})");
+  ctx.receive(config + reset(sync, "[]") + message("phase", R"({"phase":"Playing"})") + tutorial + finished + tutorial);
+  ctx.now += 10 * ServerLink::SUMMARY_TIMEOUT_MS;
+  ctx.port.output.clear();
+  ctx.poll();
+  assert(ctx.port.output.empty() && ctx.link.fifo_synced() && !ctx.link.summary().known);
+  // 通常ラウンドの結果は、従来どおりsummaryを3秒待つ。
+  ctx.port.output.clear();
+  ctx.receive(message("phase", R"({"phase":"Playing"})") + normal + finished + normal);
+  ctx.poll();
+  ctx.now += ServerLink::SUMMARY_TIMEOUT_MS;
+  ctx.poll();
+  assert(!ctx.link.fifo_synced() && ctx.port.output == message("resync", "{}"));
 }
 
 int main() {
@@ -931,6 +1382,11 @@ int main() {
   test_summary_and_preview();
   test_summary_bests();
   test_ready();
+  test_phases();
+  test_round_window_and_bots();
+  test_choose();
+  test_practice_queue();
+  test_practice_finish_has_no_summary();
   test_status_and_mode();
   test_utf8_validation();
   test_oversized_line_drop();
@@ -941,7 +1397,7 @@ int main() {
   const std::string syncB = "0000000000000000000000000000000B";
   const std::string packets = R"([{"pid":10,"dst":2}])";
   const std::string config = message("config", R"({"node":1,"mode":"manual","preview":false})");
-  const std::string status = message("status", R"({"score":23,"remaining":87,"ready":true,"countdown":0,"rank":null,"gains":[],"combo":0})");
+  const std::string status = message("status", R"({"score":23,"remaining":87,"ready":true,"countdown":0,"rank":null,"gains":[],"combo":0,"round":null,"window":0})");
   const std::string identify = message("identify", "{}");
   const std::string hello = message("hello", R"({"uid":"001122334455"})");
   const std::string resync = message("resync", "{}");

@@ -5,6 +5,9 @@
 
 enum class ControlMode : uint8_t { Auto, Manual };
 
+// 行っているラウンドの種別。Noneはnullで、ラウンドの外。
+enum class RoundKind : uint8_t { None, Normal, Tutorial };
+
 struct PlayerStatus {
   int32_t score = 0;
   uint8_t remaining = 0;
@@ -16,6 +19,12 @@ struct PlayerStatus {
   uint8_t rank = 0;
   // 送信成功コンボ（0〜999）。表示専用で、筐体では数えない。減ったらコンボが切れたと解釈する。
   uint16_t combo = 0;
+  RoundKind round = RoundKind::None;
+  // その段階が時間切れで待機へ戻るまでの秒数（0〜60）。サーバーの値をそのまま表示し、MCUでは減らさない。
+  uint8_t window = 0;
+  // 練習ラウンドの間だけ付くB1・B2・B3の実際のFIFO使用量（0〜4）。付いていない間はbotsKnownがfalse。
+  bool botsKnown = false;
+  uint8_t bots[3]{};
 };
 
 // status.gainsで受け取った点（1〜15）を、描画側へ渡すまで溜める短命なキュー。

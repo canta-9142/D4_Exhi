@@ -161,6 +161,7 @@ void loop() {
     packetAnimation = PacketAnimation{};
   }
   serverLink.update_ready(Serial, pswPressedMask, nowMs);
+  serverLink.update_choose(Serial, pressedEdges, nowMs);
   // ボタンでSENDするのはPlayingだけ。Finishedの押下は結果のページ送りにだけ使い、両者を混ぜない。
   // Playingの最後に押したボタンで、終了直後のページを送らないようにする。
   if (serverLink.phase() == GamePhase::Finished) resultPageEdges |= pressedEdges;

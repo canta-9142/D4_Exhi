@@ -19,12 +19,15 @@ public:
   static constexpr uint32_t STATUS_TIMEOUT_MS = 3000;
   static constexpr uint32_t SUMMARY_TIMEOUT_MS = 3000;
   static constexpr uint32_t READY_TIMEOUT_MS = 3000;
+  static constexpr uint32_t CHOOSE_TIMEOUT_MS = 3000;
   static constexpr uint32_t RECEIVE_TIMEOUT_MS = 1000;
   static constexpr uint32_t DISCONNECT_GRACE_MS = 100;
   static constexpr unsigned MAX_GAIN = 15;
   static constexpr unsigned MAX_COMBO = 999;
+  static constexpr unsigned MAX_WINDOW = 60;
+  static constexpr unsigned MAX_BOT_BUFFER = 4;
 
-  // FIFOの置換・設定の無効化でtrueを返し、描画アニメーションも初期化する。
+  // FIFOの置換・設定の無効化でtrueを返し、描画アニメーションも初期化する。待機のresetは列の続きなので初期化しない。
   template<class Port>
   bool poll(Port& port, const char* uid, PacketQueue& queue, NodeId& selfId, uint32_t nowMs) {
     if (!port) {
@@ -85,7 +88,7 @@ public:
         request_resync();
       }
     }
-    if (fifo_synced() && phase_ == GamePhase::Finished && !preview_ && !summary_.known) {
+    if (fifo_synced() && phase_ == GamePhase::Finished && !preview_ && !summary_.known && !practice_result()) {
       if (!summaryTimerStarted_) {
         summaryTimerStarted_ = true;
         summaryStartedMs_ = nowMs;
@@ -95,6 +98,7 @@ public:
     }
     if (pending_ && nowMs - sentMs_ >= SEND_TIMEOUT_MS) request_resync();
     if (readyPending_ && nowMs - readySentMs_ >= READY_TIMEOUT_MS) request_resync();
+    if (choosePending_ != RoundKind::None && nowMs - chooseSentMs_ >= CHOOSE_TIMEOUT_MS) request_resync();
     if ((!fifo_synced() || phase_ == GamePhase::Unknown) &&
         (resyncNeeded_ || nowMs - handshakeMs_ >= RETRY_MS)) {
       handshake(port, uid, nowMs);
@@ -143,10 +147,14 @@ public:
   const FinalSummary& summary() const { return summary_; }
   bool ready_pending() const { return readyPending_; }
   uint16_t ready_progress_ms() const { return readyPending_ ? ReadyHold::DURATION_MS : readyHold_.progress_ms(); }
+  // 送信済みで、phase(Playing)を待っている選択。選択していなければNone。
+  RoundKind choose_pending() const { return choosePending_; }
 
+  // 両端の長押しで、待機・結果・練習ラウンドからモード選択へ進む合図を送る。
+  // 結果と練習は、段階の残り時間があるとき（window=1以上）だけ。windowが0の運転方式では受け付けない。
   template<class Port>
   bool update_ready(Port& port, uint8_t pressedMask, uint32_t nowMs) {
-    const bool enabled = port && !preview_ && fifo_synced() && phase_ == GamePhase::Preparing &&
+    const bool enabled = port && !preview_ && fifo_synced() && ready_phase() &&
                          mode_ == ControlMode::Manual && !awaiting_status() && status_.known &&
                          !status_.ready && !readyPending_;
     if (!readyHold_.update(pressedMask, enabled, nowMs)) return false;
@@ -158,6 +166,26 @@ public:
     }
     readyPending_ = true;
     readySentMs_ = nowMs;
+    return true;
+  }
+
+  // モード選択で、左から2番目（練習）か左から3番目（通常）の押下の立ち上がりを受けて、chooseを1回送る。
+  // 両端は長押しの合図に使うので選択には使わない。同時に押された場合は左側を優先する。
+  template<class Port>
+  bool update_choose(Port& port, uint8_t pressedEdges, uint32_t nowMs) {
+    constexpr uint8_t TUTORIAL_BUTTON = 1u << 1, NORMAL_BUTTON = 1u << 2;
+    if (!port || preview_ || !fifo_synced() || phase_ != GamePhase::Select || mode_ != ControlMode::Manual ||
+        choosePending_ != RoundKind::None || !(pressedEdges & (TUTORIAL_BUTTON | NORMAL_BUTTON))) return false;
+    const RoundKind round = pressedEdges & TUTORIAL_BUTTON ? RoundKind::Tutorial : RoundKind::Normal;
+    char message[128];
+    std::snprintf(message, sizeof(message), "{\"type\":\"choose\",\"data\":{\"sync\":\"%s\",\"round\":\"%s\"}}\n",
+                  sync_, round == RoundKind::Tutorial ? "tutorial" : "normal");
+    if (!write_line(port, message)) {
+      request_resync();
+      return false;
+    }
+    choosePending_ = round;
+    chooseSentMs_ = nowMs;
     return true;
   }
 
@@ -215,12 +243,28 @@ private:
     allowIntro_ = false;
     summary_.animate = false;
     cancel_ready();
+    cancel_choose();
   }
 
   void cancel_ready() {
     readyHold_.reset();
     readyPending_ = false;
   }
+
+  void cancel_choose() { choosePending_ = RoundKind::None; }
+
+  // 長押しでreadyを送れる段階。結果と練習ラウンドは、段階の残り時間があるときだけ。
+  bool ready_phase() const {
+    switch (phase_) {
+      case GamePhase::Idle: return true;
+      case GamePhase::Finished: return status_.window >= 1;
+      case GamePhase::Playing: return status_.round == RoundKind::Tutorial && status_.window >= 1;
+      default: return false;
+    }
+  }
+
+  // 一斉ゲーム方式の練習の終了では、結果のsummaryが届かない。
+  bool practice_result() const { return status_.known && !awaiting_status() && status_.round == RoundKind::Tutorial; }
 
   bool forget_config(PacketQueue& queue, NodeId& selfId) {
     queue.clear();
@@ -305,10 +349,40 @@ private:
     return true;
   }
 
+  // roundは必須で、"normal"・"tutorial"・nullのいずれか。
+  static bool parse_round(JsonVariantConst value, RoundKind& round) {
+    if (!value.isUnbound() && value.isNull()) {
+      round = RoundKind::None;
+      return true;
+    }
+    if (!value.is<const char*>()) return false;
+    const JsonString name = value.as<JsonString>();
+    if (name == "normal") round = RoundKind::Normal;
+    else if (name == "tutorial") round = RoundKind::Tutorial;
+    else return false;
+    return true;
+  }
+
+  // windowは必須で、0〜60の整数。
+  static bool valid_window(JsonVariantConst value) {
+    return value.is<uint8_t>() && value.as<unsigned>() <= MAX_WINDOW;
+  }
+
+  // botsは練習ラウンドの間だけ付く任意の項目。付いている場合は、0〜4の整数が3つの配列。
+  static bool valid_bots(JsonVariantConst value) {
+    if (!value.is<JsonArrayConst>() || value.as<JsonArrayConst>().size() != 3) return false;
+    for (JsonVariantConst use : value.as<JsonArrayConst>()) {
+      if (!use.is<uint8_t>() || use.as<unsigned>() > MAX_BOT_BUFFER) return false;
+    }
+    return true;
+  }
+
   static GamePhase parse_phase(JsonVariantConst value) {
     if (!value.is<const char*>()) return GamePhase::Unknown;
     const JsonString phase = value.as<JsonString>();
     if (phase == "Preparing") return GamePhase::Preparing;
+    if (phase == "Idle") return GamePhase::Idle;
+    if (phase == "Select") return GamePhase::Select;
     if (phase == "Playing") return GamePhase::Playing;
     if (phase == "Finished") return GamePhase::Finished;
     return GamePhase::Unknown;
@@ -533,23 +607,36 @@ private:
                         fifo_synced() && !preview_ && !awaiting_status();
           summary_ = {};
           summaryTimerStarted_ = false;
+          // 段階が変わったので、長押しの計測と、readyやchooseの確認待ちを終える。押したままは持ち越さない。
           cancel_ready();
+          cancel_choose();
         }
         phase_ = phase;
       }
     } else if (std::strcmp(type, "status") == 0) {
+      RoundKind round = RoundKind::None;
+      const bool hasBots = !data["bots"].isUnbound();
       if (!data["score"].is<int32_t>() || data["score"].as<int32_t>() < 0 ||
           !data["remaining"].is<uint8_t>() || data["remaining"].as<unsigned>() > 120 ||
           !data["ready"].is<bool>() ||
           !data["countdown"].is<uint8_t>() || data["countdown"].as<unsigned>() > 3 ||
           !valid_rank(data["rank"]) || !valid_gains(data["gains"]) ||
-          !data["combo"].is<uint16_t>() || data["combo"].as<unsigned>() > MAX_COMBO) {
+          !data["combo"].is<uint16_t>() || data["combo"].as<unsigned>() > MAX_COMBO ||
+          !parse_round(data["round"], round) || !valid_window(data["window"]) ||
+          (hasBots && !valid_bots(data["bots"]))) {
         request_resync();
       } else if (state_ != State::AwaitConfig) {
-        status_ = {data["score"].as<int32_t>(), data["remaining"].as<uint8_t>(),
-                   data["ready"].as<bool>(), true, data["countdown"].as<uint8_t>(),
-                   data["rank"].isNull() ? uint8_t(0) : data["rank"].as<uint8_t>(),
-                   data["combo"].as<uint16_t>()};
+        PlayerStatus next{data["score"].as<int32_t>(), data["remaining"].as<uint8_t>(),
+                          data["ready"].as<bool>(), true, data["countdown"].as<uint8_t>(),
+                          data["rank"].isNull() ? uint8_t(0) : data["rank"].as<uint8_t>(),
+                          data["combo"].as<uint16_t>()};
+        next.round = round;
+        next.window = data["window"].as<uint8_t>();
+        next.botsKnown = hasBots;
+        if (hasBots) {
+          for (size_t i = 0; i < 3; ++i) next.bots[i] = data["bots"][i].as<uint8_t>();
+        }
+        status_ = next;
         for (JsonVariantConst gain : data["gains"].as<JsonArrayConst>()) gains_.push(gain.as<uint8_t>());
         if (status_.ready) cancel_ready();
         if (statusSync_ == StatusSync::AwaitStatus) {
@@ -559,9 +646,8 @@ private:
       }
     } else if (std::strcmp(type, "summary") == 0) {
       const bool eligible = data["eligible"].as<bool>();
-      const bool validRank = eligible ?
-          data["rank"].is<uint8_t>() && data["rank"].as<unsigned>() >= 1 && data["rank"].as<unsigned>() <= 8 :
-          !data["rank"].isUnbound() && data["rank"].isNull();
+      // rankは必須。対象外ではnullだけ、対象者ではnullまたは1〜8（ラウンドは順位を付けないので、対象者でもnullが正しい）。
+      const bool validRank = valid_rank(data["rank"]) && (eligible || data["rank"].isNull());
       // topPercentは必須。対象外ではnullだけ、対象者ではnullまたは1〜50。
       const JsonVariantConst top = data["topPercent"];
       const bool validTop = (!top.isUnbound() && top.isNull()) ||
@@ -581,7 +667,7 @@ private:
         result.revision = first ? ++summaryRevision_ : summary_.revision;
         result.animate = first ? allowIntro_ : summary_.animate;
         result.score = data["score"].as<int32_t>();
-        result.rank = eligible ? data["rank"].as<uint8_t>() : uint8_t(0);
+        result.rank = data["rank"].isNull() ? uint8_t(0) : data["rank"].as<uint8_t>();
         result.eligible = eligible;
         result.known = true;
         result.topPercent = top.isNull() ? uint8_t(0) : top.as<uint8_t>();
@@ -602,11 +688,12 @@ private:
         summary_.animate = false;
       }
       std::memcpy(sync_, data["sync"].as<const char*>(), sizeof(sync_));
-      cancel_ready();
+      // 待機では自動転送によるresetが頻繁に届くので、resetだけでは長押しの計測もreadyの確認待ちも解除しない。
       if (statusSync_ == StatusSync::AwaitReset) statusSync_ = StatusSync::AwaitStatus;
       state_ = State::Synced;
       pending_ = resyncNeeded_ = false;
-      return true;
+      // 待機のresetは同じ列の続き（IDで対応付けて、先頭だけが流れ出る）。それ以外は列が入れ替わるので、アニメーションを初期化する。
+      return phase_ != GamePhase::Idle;
     } else if (std::strcmp(type, "push") == 0) {
       if (!valid_packet(data)) {
         request_resync();
@@ -674,6 +761,8 @@ private:
   ReadyHold readyHold_;
   bool readyPending_ = false;
   uint32_t readySentMs_ = 0;
+  RoundKind choosePending_ = RoundKind::None;
+  uint32_t chooseSentMs_ = 0;
 };
 
 #endif // SERVER_LINK_HPP_
