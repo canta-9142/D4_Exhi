@@ -139,10 +139,12 @@ inline bool same_gain_pixels(const GainFloat& previous, const GainFloat& next) {
                           gain_level(previous) == gain_level(next));
 }
 
-enum class FinishedState : uint8_t { Syncing, Status, Result, Ready };
+// PracticeEndedは、一斉ゲーム方式の練習の終了（status.roundがtutorial）。summaryが届かないので結果を出さない。
+enum class FinishedState : uint8_t { Syncing, Status, Result, Ready, PracticeEnded };
 inline FinishedState finished_state(const DisplaySnapshot& s) {
   if (!s.synced || s.selfId == NodeId::None) return FinishedState::Syncing;
   if (s.awaitingStatus || !s.status.known) return FinishedState::Status;
+  if (s.status.round == RoundKind::Tutorial) return FinishedState::PracticeEnded;
   return s.summary.known ? FinishedState::Ready : FinishedState::Result;
 }
 inline bool same_bests(const FinalSummary& a, const FinalSummary& b) {
@@ -166,9 +168,20 @@ inline int32_t displayed_final_score(const DisplaySnapshot& s) {
   return static_cast<int32_t>(uint64_t(s.summary.score) * (1000000000 - left * left * left) / 1000000000);
 }
 
-// 見出しの隅に出す段階の残り秒数。モード選択で、操作を受け付けられる状態のとき。出さないときは-1。
+// 結果①の順位を出すか。対象外はNOT RANKED、対象者で順位があればRANK n。
+// ラウンドは順位を付けない（対象者でrankがnull）ので、何も出さない。
+inline bool rank_shown(const FinalSummary& summary) { return !summary.eligible || summary.rank != 0; }
+// 結果で、両端の枠に「もう一度遊ぶ」の長押しの案内を出すか。ボット固定と、時間制限のない運転方式（window=0）では出さない。
+inline bool result_again(const DisplaySnapshot& s) {
+  return display_screen(s) == DisplayScreen::Finished && finished_state(s) == FinishedState::Ready &&
+         s.mode == ControlMode::Manual && s.status.window >= 1;
+}
+
+// 見出しの隅に出す段階の残り秒数。モード選択で操作を受け付けられる状態のとき、結果で確定結果を表示できるとき。出さないときは-1。
 inline int header_window(const DisplaySnapshot& s) {
-  const bool shown = display_screen(s) == DisplayScreen::Select && lobby_state(s) != LobbyState::Waiting;
+  const DisplayScreen screen = display_screen(s);
+  const bool shown = screen == DisplayScreen::Select ? lobby_state(s) != LobbyState::Waiting :
+                     screen == DisplayScreen::Finished && finished_state(s) == FinishedState::Ready;
   return shown && s.status.window >= 1 ? s.status.window : -1;
 }
 
@@ -202,12 +215,13 @@ struct DisplayChanges {
   bool full = false, lobbyHeader = false, lobbyBody = false, headerWindow = false;
   bool idleGuide = false, idleBar = false, idleArrows = false; // 待機の右の情報欄の案内・バーと、両端の枠の矢印
   bool resultHeader = false, resultBody = false, resultScore = false, resultRank = false, resultAccent = false;
+  bool resultAgain = false; // 両端の枠の「もう一度遊ぶ」の案内（矢印・長押しのバー）
   bool previewBody = false, countdownBody = false;
   bool topBody = false, topCurve = false; // topCurveはベルカーブとマスの両方を描き直す。
   uint8_t topCell = 0; // 点滅で描き直すマスの番号（1〜50）。0は描き直さない。
   bool topArt = false; // ②のヘッダーのドット絵の範囲
   bool any() const {
-    return resultHeader || resultBody || resultScore || resultRank || resultAccent || topBody || topCurve || topCell || topArt || previewBody || countdownBody || full || lobbyHeader || lobbyBody || headerWindow || idleGuide || idleBar || idleArrows || cards.any() || buttons || self || label || score || remaining || ready || rank || gains || leftColumn || rightMargin;
+    return resultHeader || resultBody || resultScore || resultRank || resultAccent || resultAgain || topBody || topCurve || topCell || topArt || previewBody || countdownBody || full || lobbyHeader || lobbyBody || headerWindow || idleGuide || idleBar || idleArrows || cards.any() || buttons || self || label || score || remaining || ready || rank || gains || leftColumn || rightMargin;
   }
 };
 
@@ -249,10 +263,17 @@ inline DisplayChanges display_changes(const DisplaySnapshot& previous, const Dis
       changes.resultScore = changes.resultBody || displayed_final_score(previous) != displayed_final_score(next);
       changes.resultRank = changes.resultBody || previous.summary.rank != next.summary.rank ||
           previous.summary.eligible != next.summary.eligible ||
-          (previous.finishedProgress != next.finishedProgress &&
+          (rank_shown(next.summary) && previous.finishedProgress != next.finishedProgress &&
            (previous.finishedProgress >= 500 || next.finishedProgress >= 500));
       changes.resultAccent = changes.resultBody || previous.finishedProgress != next.finishedProgress || changes.self;
     }
+    changes.headerWindow = first || header_window(previous) != header_window(next);
+    // 「もう一度遊ぶ」の案内は、出し入れのとき、本文を描き直したとき、ボタン・長押しの進捗・確認待ちが変わったときに描き直す。
+    const bool again = result_again(next), wasAgain = result_again(previous);
+    changes.resultAgain = again != wasAgain ||
+        (again && (first || changes.resultBody || changes.topBody ||
+                   ((previous.pressedMask ^ next.pressedMask) & ReadyHold::END_BUTTONS) ||
+                   previous.readyHoldMs != next.readyHoldMs || previous.readyPending != next.readyPending));
     return changes;
   }
   if (lobby_screen(next)) {
@@ -320,7 +341,11 @@ inline FrameDamage display_damage(const DisplayChanges& changes, bool first) {
   if (changes.resultBody || changes.previewBody || changes.countdownBody) damage.markRect(0, 81, 480, 239);
   if (changes.resultHeader) damage.markRect(RESULT_MODE_X, RESULT_MODE_Y, RESULT_MODE_WIDTH, RESULT_MODE_HEIGHT);
   if (changes.resultScore) damage.markRect(24, 128, 432, 56);
-  if (changes.resultRank) damage.markRect(24, 216, 336, 104);
+  if (changes.resultRank) damage.markRect(RESULT_RANK_X, RESULT_RANK_Y, RESULT_RANK_WIDTH, RESULT_RANK_HEIGHT);
+  if (changes.resultAgain) {
+    damage.markRect(button_frame_x(0), BUTTON_FRAME_Y, BUTTON_FRAME_WIDTH, BUTTON_FRAME_HEIGHT);
+    damage.markRect(button_frame_x(3), BUTTON_FRAME_Y, BUTTON_FRAME_WIDTH, BUTTON_FRAME_HEIGHT);
+  }
   if (changes.resultAccent) damage.markRect(40, 192, 400, 4);
   if (changes.topBody) damage.markRect(0, 81, 480, 239);
   if (changes.topCurve) {

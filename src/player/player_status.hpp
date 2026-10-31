@@ -106,10 +106,11 @@ inline uint8_t result_page_index(const FinalSummary& summary, ResultPage page) {
 // 結果画面のページ。筐体だけの表示状態で、サーバーへは何も送らない。
 class ResultPager {
 public:
-  static constexpr uint8_t NEXT_BUTTON = 1u << 3;
+  // ページ送りは左から3番目のボタン。両端は「もう一度遊ぶ」の長押し（ready）に使うので、押し始めでページを送らない。
+  static constexpr uint8_t NEXT_BUTTON = 1u << 2;
   static constexpr uint32_t INTRO_MS = 1000;
 
-  // finished: 確認表示でないFinished。ready: 確定結果を表示できる。next: 右端ボタンを押した。
+  // finished: 確認表示でないFinished。ready: 確定結果を表示できる。next: 左から3番目のボタンを押した。
   void update(const FinalSummary& summary, bool finished, bool ready, bool next, uint32_t nowMs) {
     // Finishedから離れたとき・設定の無効化・別世代の結果では①へ戻す。
     if (!finished || !summary.known || summary.revision != revision_) {

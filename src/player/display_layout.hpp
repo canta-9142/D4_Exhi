@@ -34,6 +34,9 @@ constexpr int WINDOW_WARNING_SECONDS = 10;
 constexpr int IDLE_GUIDE_Y = 113, IDLE_GUIDE_HEIGHT = 127;
 constexpr int IDLE_BAR_X = 364, IDLE_BAR_Y = 152, IDLE_BAR_WIDTH = 112, IDLE_BAR_HEIGHT = 14;
 
+// 結果①の順位（対象者のRANK nと対象外のNOT RANKED）。ボタン枠（y=241〜）に掛けない。
+constexpr int RESULT_RANK_X = 24, RESULT_RANK_Y = 200, RESULT_RANK_WIDTH = 336, RESULT_RANK_HEIGHT = 40;
+
 // 結果③のベストスコアの3行。ボタン枠（y=240〜）より上に収める。
 constexpr int BEST_ROW_X = 16, BEST_ROW_Y = 84, BEST_ROW_PITCH = 52, BEST_ROW_WIDTH = 448, BEST_ROW_HEIGHT = 48;
 

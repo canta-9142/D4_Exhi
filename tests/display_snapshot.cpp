@@ -359,8 +359,10 @@ int main() {
   auto diff = display_changes(result, moving, false);
   assert(diff.resultScore && diff.resultRank && diff.resultAccent && !diff.full && !diff.resultBody);
   auto area = display_damage(diff, false);
-  assert(area.containsPixel(24, 128) && area.containsPixel(359, 319) && !area.containsPixel(0, 0));
-  assert(!area.containsPixel(420, 300)); // 演出中も右端の枠（ページ送りの案内）は描かない。
+  assert(area.containsPixel(24, 128) && area.containsPixel(359, 239) && !area.containsPixel(0, 0));
+  // 演出中もボタン枠（ページ送りと「もう一度遊ぶ」の案内）は描かない。順位の欄はボタン枠（y=241〜）の上に収める。
+  assert(!area.containsPixel(300, 300) && !area.containsPixel(60, 300) && !area.containsPixel(420, 300) && !area.containsPixel(180, 250));
+  assert(RESULT_RANK_Y + RESULT_RANK_HEIGHT <= BUTTON_FRAME_Y && RESULT_RANK_X + RESULT_RANK_WIDTH <= 360);
   moving.summary.eligible = false;
   moving.summary.rank = 0;
   assert(display_changes(result, moving, false).resultRank);
@@ -596,6 +598,101 @@ int main() {
   assert(diff.full && diff.lobbyBody && !diff.resultBody);
   resetToPrep.phase = GamePhase::Playing;
   assert(display_screen(resetToPrep) == DisplayScreen::Playing);
+
+  // ページ送りは左から3番目のボタン。両端は「もう一度遊ぶ」の長押しに使うので、押し始めでページを送らない。
+  assert(ResultPager::NEXT_BUTTON == 4 && !(ResultPager::NEXT_BUTTON & ReadyHold::END_BUTTONS));
+  // 連続運転の通常ラウンドの結果: 順位は付けない（対象者でrankがnull）。両端の枠に長押しの案内、見出しの隅に残り秒数を出す。
+  auto round = displayed;
+  round.phase = GamePhase::Finished;
+  round.pressedMask = 0;
+  round.status = {345, 0, false, true};
+  round.status.round = RoundKind::Normal;
+  round.status.window = 30;
+  round.summary = {345, 0, true, true, 1, false};
+  round.finishedProgress = 1000;
+  assert(finished_state(round) == FinishedState::Ready && !rank_shown(round.summary));
+  assert(result_again(round) && header_window(round) == 30);
+  auto roundEnter = display_changes(displayed, round, false);
+  assert(roundEnter.full && roundEnter.resultBody && roundEnter.resultAgain && roundEnter.headerWindow);
+  // 終了演出（スコアの数え上げと下線）は進むが、順位の欄は何も描かないので描き直さない。
+  auto roundMoving = round;
+  roundMoving.finishedProgress = 750;
+  auto roundDiff = display_changes(round, roundMoving, false);
+  assert(roundDiff.resultScore && roundDiff.resultAccent && !roundDiff.resultRank && !roundDiff.resultAgain);
+  // 順位を付ける結果（一斉ゲーム方式の対象者）と対象外は、従来どおり順位の欄を描く。
+  auto rankedRound = round;
+  rankedRound.summary.rank = 3;
+  rankedRound.status.window = 0;
+  assert(rank_shown(rankedRound.summary) && !result_again(rankedRound) && header_window(rankedRound) == -1);
+  rankedRound.finishedProgress = 750;
+  roundMoving = rankedRound;
+  roundMoving.finishedProgress = 1000;
+  assert(display_changes(rankedRound, roundMoving, false).resultRank);
+  auto unrankedRound = round;
+  unrankedRound.summary.eligible = false;
+  assert(rank_shown(unrankedRound.summary));
+  // 残り秒数は1秒ごとに見出しの隅だけを描き直す。10秒以下は注意色なので、秒数の変化でも描き直す。
+  auto roundTick = round;
+  roundTick.status.window = 29;
+  roundDiff = display_changes(round, roundTick, false);
+  assert(roundDiff.headerWindow && !roundDiff.resultBody && !roundDiff.resultAgain && !roundDiff.full && !roundDiff.resultHeader);
+  auto roundTickArea = display_damage(roundDiff, false);
+  assert(roundTickArea.containsPixel(HEADER_WINDOW_X, HEADER_WINDOW_Y) && !roundTickArea.containsPixel(0, 81) && !roundTickArea.containsPixel(24, 56));
+  roundTick.status.window = 10;
+  assert(display_changes(round, roundTick, false).headerWindow && header_window(roundTick) == 10);
+  // 長押し・確認待ちの進捗は、両端の枠だけを描き直す。内側の枠（ページ送り）と本文は触れない。
+  auto holdRound = round;
+  holdRound.pressedMask = 9;
+  holdRound.readyHoldMs = 1000;
+  roundDiff = display_changes(round, holdRound, false);
+  assert(roundDiff.resultAgain && !roundDiff.resultBody && !roundDiff.headerWindow && !roundDiff.full);
+  auto againArea = display_damage(roundDiff, false);
+  assert(againArea.containsPixel(60, 300) && againArea.containsPixel(420, 300));
+  assert(!againArea.containsPixel(300, 300) && !againArea.containsPixel(180, 300) && !againArea.containsPixel(24, 128));
+  holdRound.readyPending = true;
+  holdRound.readyHoldMs = ReadyHold::DURATION_MS;
+  assert(display_changes(round, holdRound, false).resultAgain);
+  auto noHold = round;
+  noHold.pressedMask = 2; // 内側のボタンを押しても、案内は描き直さない（ページ送りは左から3番目）。
+  assert(!display_changes(round, noHold, false).any());
+  noHold.pressedMask = ResultPager::NEXT_BUTTON;
+  assert(!display_changes(round, noHold, false).any());
+  // ページ送りの案内は左から3番目の枠、「もう一度遊ぶ」は両端の枠、左から2番目の枠は空にする。
+  assert(button_frame_x(2) == 241 && button_frame_x(1) == 121);
+  auto pageRound = round;
+  pageRound.summary.topPercent = 12;
+  pageRound.resultPage = ResultPage::TopPercent;
+  roundDiff = display_changes(round, pageRound, false);
+  assert(roundDiff.resultBody && roundDiff.topBody && roundDiff.resultAgain && !roundDiff.full); // ページが変わると枠も描き直す。
+  assert(display_damage(roundDiff, false).containsPixel(300, 300) && display_damage(roundDiff, false).containsPixel(60, 300));
+  // 時間制限のない運転方式（window=0）とボット固定では、長押しの案内も残り秒数も出さない。
+  auto oneShot = round;
+  oneShot.status.window = 0;
+  assert(!result_again(oneShot) && header_window(oneShot) == -1);
+  roundDiff = display_changes(round, oneShot, false);
+  assert(roundDiff.headerWindow && roundDiff.resultAgain && !roundDiff.resultBody); // 出ていた案内を消す。
+  auto autoRound = round;
+  autoRound.mode = ControlMode::Auto;
+  assert(!result_again(autoRound) && header_window(autoRound) == 30);
+  assert(display_changes(round, autoRound, false).resultAgain);
+  // 結果を表示できる状態だけに出す。取得中は案内も残り秒数も出さない。
+  auto notReady = round;
+  notReady.summary.known = false;
+  assert(finished_state(notReady) == FinishedState::Result && !result_again(notReady) && header_window(notReady) == -1);
+  notReady = round;
+  notReady.synced = false;
+  assert(finished_state(notReady) == FinishedState::Syncing && !result_again(notReady) && header_window(notReady) == -1);
+  // 一斉ゲーム方式の練習の終了（status.roundがtutorial）は、summaryが届かないので結果を出さない。
+  auto practiceEnd = round;
+  practiceEnd.summary = {};
+  practiceEnd.status.round = RoundKind::Tutorial;
+  practiceEnd.status.window = 0;
+  assert(finished_state(practiceEnd) == FinishedState::PracticeEnded && !result_again(practiceEnd));
+  assert(display_screen(practiceEnd) == DisplayScreen::Finished && header_window(practiceEnd) == -1);
+  roundDiff = display_changes(round, practiceEnd, false);
+  assert(roundDiff.resultBody && !roundDiff.full);
+  practiceEnd.status.known = false;
+  assert(finished_state(practiceEnd) == FinishedState::Status);
 
   auto preview = result;
   preview.preview = true;

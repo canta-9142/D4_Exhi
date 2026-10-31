@@ -20,19 +20,22 @@ inline void draw_final_score(FrameBuffer& frame, const DisplaySnapshot& s) {
   preparing_text(frame, text, 128, 6);
 }
 
+// 順位の欄はボタン枠（y=241〜）の上に収める。ボタン枠にはページ送りと「もう一度遊ぶ」の案内を描くので、触れない。
+// ラウンドは順位を付けないので（対象者でrankがnull）、何も出さない。
 inline void draw_final_rank(FrameBuffer& frame, const DisplaySnapshot& s) {
-  // 右端のボタン枠（x=360〜）にはページ送りの案内を描くため、消去しない。
-  frame.fillRect(24, 216, 336, 104, TFT_BLACK);
-  if (s.finishedProgress < 500) return;
+  frame.fillRect(RESULT_RANK_X, RESULT_RANK_Y, RESULT_RANK_WIDTH, RESULT_RANK_HEIGHT, TFT_BLACK);
+  if (s.finishedProgress < 500 || !rank_shown(s.summary)) return;
   const unsigned progress = std::min<unsigned>(s.finishedProgress, 1000);
-  const int offset = (1000 - progress) * 24 / 500;
+  const int offset = (1000 - progress) * 8 / 500;
+  frame.setClipRect(RESULT_RANK_X, RESULT_RANK_Y, RESULT_RANK_WIDTH, RESULT_RANK_HEIGHT);
   if (!s.summary.eligible) {
-    preparing_text(frame, "NOT RANKED", 240 + offset, 3);
+    preparing_text(frame, "NOT RANKED", 208 + offset, 3);
   } else {
     char text[12];
     snprintf(text, sizeof(text), "RANK %u", unsigned(s.summary.rank));
-    preparing_text(frame, text, 228 + offset, 6);
+    preparing_text(frame, text, 200 + offset, 4);
   }
+  frame.clearClipRect();
 }
 
 inline void draw_result_accent(FrameBuffer& frame, const DisplaySnapshot& s) {
@@ -41,20 +44,43 @@ inline void draw_result_accent(FrameBuffer& frame, const DisplaySnapshot& s) {
   if (width) frame.fillRect(40, 192, width, 4, nodeVisuals[static_cast<int>(s.selfId)].color);
 }
 
-// 右端のボタン枠に、押すと次のページへ進むことと現在のページを示す。英語が読めなくても分かるよう矢印を大きくする。
+// 左から3番目のボタン枠に、押すと次のページへ進むことと現在のページを示す。英語が読めなくても分かるよう矢印を大きくする。
 inline void draw_next_hint(FrameBuffer& frame, const DisplaySnapshot& s) {
-  frame.fillRect(361, 241, 119, 79, TFT_BLACK);
+  const int left = button_frame_x(2);
+  frame.fillRect(left, BUTTON_FRAME_Y, BUTTON_FRAME_WIDTH, BUTTON_FRAME_HEIGHT, TFT_BLACK);
   frame.setFont(&fonts::Font0);
   frame.setTextSize(2);
   frame.setTextColor(TFT_WHITE, TFT_BLACK);
-  frame.drawString("NEXT", 374, 264);
-  frame.fillTriangle(430, 254, 430, 290, 466, 272, TFT_WHITE);
+  frame.drawString("NEXT", left + 13, 264);
+  frame.fillTriangle(left + 69, 254, left + 69, 290, left + 105, 272, TFT_WHITE);
   const int count = result_page_count(s.summary);
   const int current = result_page_index(s.summary, s.resultPage);
   for (int page = 0; page < count; ++page) {
-    const int x = 420 - (count - 1) * 8 + page * 16;
+    const int x = left + 59 - (count - 1) * 8 + page * 16;
     if (page == current) frame.fillCircle(x, 306, 4, TFT_WHITE);
     else frame.drawCircle(x, 306, 4, TFT_WHITE);
+  }
+}
+
+// 両端の枠に「もう一度遊ぶ」の長押しの案内を描く。文字、実際のボタンを指す矢印、2秒で満ちるバー。
+// 案内を出さないとき（ボット固定・時間制限のない運転方式）は、枠を空にする。
+inline void draw_play_again(FrameBuffer& frame, const DisplaySnapshot& s) {
+  const bool shown = result_again(s);
+  const unsigned progress = s.readyPending ? ReadyHold::DURATION_MS :
+                            std::min<unsigned>(s.readyHoldMs, ReadyHold::DURATION_MS);
+  for (unsigned side = 0; side < 2; ++side) {
+    const int index = side ? 3 : 0;
+    const int left = button_frame_x(index), center = left + BUTTON_FRAME_WIDTH / 2;
+    frame.fillRect(left, BUTTON_FRAME_Y, BUTTON_FRAME_WIDTH, BUTTON_FRAME_HEIGHT, TFT_BLACK);
+    if (!shown) continue;
+    frame.setFont(&fonts::Font0);
+    frame.setTextSize(2);
+    frame.setTextColor(TFT_WHITE, TFT_BLACK);
+    frame.drawString("PLAY", center - frame.textWidth("PLAY") / 2, 246);
+    frame.drawString("AGAIN", center - frame.textWidth("AGAIN") / 2, 264);
+    draw_down_arrow(frame, center, 284, 24, s.pressedMask & (side ? 8 : 1) ? TFT_WHITE : TFT_DARKGREY);
+    frame.drawRect(center - 50, 310, 100, 8, TFT_WHITE);
+    if (progress) frame.fillRect(center - 48, 312, progress * 96 / ReadyHold::DURATION_MS, 4, TFT_WHITE);
   }
 }
 
@@ -210,16 +236,22 @@ inline void render_finished(FrameBuffer& frame, const DisplaySnapshot& s, const 
     frame.setTextColor(TFT_WHITE, TFT_BLACK);
     frame.drawString(s.mode == ControlMode::Manual ? "MANUAL" : "AUTO", 24, 56);
   }
+  if (changes.headerWindow) draw_header_window(frame, s);
   if (changes.topArt) draw_top_art_area(frame, s);
   if (changes.resultBody) {
     frame.fillRect(0, 81, 480, 239, TFT_BLACK);
-    if (state != FinishedState::Ready) {
+    if (state == FinishedState::PracticeEnded) {
+      // 一斉ゲーム方式の練習の終了。結果は届かないので、次のゲームを待つ表示にする。
+      preparing_text(frame, "PRACTICE OVER", 128, 3);
+      preparing_text(frame, "Waiting for the next game.", 184);
+    } else if (state != FinishedState::Ready) {
       preparing_text(frame, state == FinishedState::Syncing ? "SYNCING" :
           state == FinishedState::Status ? "WAIT STATUS" : "WAIT RESULT", 152, 3);
       preparing_text(frame, "Please wait.", 208);
     } else if (s.resultPage == ResultPage::Score) preparing_text(frame, "FINAL SCORE", 96, 2);
   }
   if (state != FinishedState::Ready) return;
+  if (changes.resultAgain) draw_play_again(frame, s);
   if (s.resultPage == ResultPage::Bests) {
     if (changes.resultBody) draw_best_body(frame, s);
     return;
