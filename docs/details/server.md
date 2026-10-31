@@ -369,6 +369,8 @@ nix develop -c go -C server run ./cmd/records restore -from data/records.sqlite3
 `go -C server`では作業ディレクトリが`server/`になるので、サーバーと同じ指定にする。
 
 `histogram`はサーバーの動作中も使える。`records.Open`で開くので、古い版のファイルはサーバーの起動時と同じく移行される。
+帯のラベルは`0-99`、`100-199`、…、`1400-1499`、`1500~`の16行で、スコアは0以上の整数なので、下限より下の帯は設けない。
+`seed`の確認前に表示する帯ごとの件数も、同じ帯を使う。
 `clear`・`seed`・`restore`はサーバーを止めてから実行し、終わったらサーバーを起動する。
 `records.OpenExclusive`は`locking_mode=EXCLUSIVE`を接続設定に加え、最初のアクセスで`BEGIN EXCLUSIVE`を実行する。
 サーバーの接続が開いている間は、ここで`busy_timeout`の1000ms待った後に`SQLITE_BUSY`になる（LinuxとWindowsのテストで確認）。
