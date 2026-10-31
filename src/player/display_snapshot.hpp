@@ -51,10 +51,25 @@ inline bool countdown_enabled(const DisplaySnapshot& s) {
 
 // Closedは停止中（phase=Preparing）の休止中の表示。Idleはボットとしてパケットが流れる待機。
 // Standbyは一斉ゲーム方式で、モード選択を終えた準備完了の待機。
-enum class DisplayScreen : uint8_t { Playing, Closed, Finished, Preview, Countdown, Idle, Standby, Select };
+enum class DisplayScreen : uint8_t { Playing, Closed, Finished, Preview, Countdown, Idle, Standby, Select, Practice };
 
 // 待機・停止中・モード選択で、操作を受け付けられる状態か。取得前は接続・同期の表示を優先する。
 enum class LobbyState : uint8_t { Waiting, Auto, Manual, Confirming, Ready };
+
+// 練習ラウンドの画面を出すか。表示値が揃ったPlayingで、status.roundがtutorialのとき。
+inline bool practice_round(const DisplaySnapshot& s) {
+  return countdown_enabled(s) && s.status.round == RoundKind::Tutorial;
+}
+// 練習の時間欄。連続運転ではwindow（無操作の残り秒数）が10以下になったときだけ秒数を出し、それ以外は-1（--）。
+// 一斉ゲーム方式ではwindowが0で、ゲームの残り秒数（remaining）が1以上ならその値、0なら-1。
+inline int practice_time(const PlayerStatus& status) {
+  if (status.window >= 1) return status.window <= WINDOW_WARNING_SECONDS ? status.window : -1;
+  return status.remaining >= 1 ? status.remaining : -1;
+}
+// 残りの無操作の時間が10秒以下で、待機へ戻る前の注意色にする。
+inline bool practice_time_warn(const PlayerStatus& status) {
+  return status.window >= 1 && status.window <= WINDOW_WARNING_SECONDS;
+}
 
 inline LobbyState lobby_state(const DisplaySnapshot& s) {
   if (s.selfId == NodeId::None || !s.synced || s.awaitingStatus || !s.status.known) return LobbyState::Waiting;
@@ -73,7 +88,7 @@ inline DisplayScreen display_screen(const DisplaySnapshot& s) {
     case GamePhase::Idle: return lobby_state(s) == LobbyState::Ready ? DisplayScreen::Standby : DisplayScreen::Idle;
     case GamePhase::Select: return DisplayScreen::Select;
     case GamePhase::Finished: return DisplayScreen::Finished;
-    default: return DisplayScreen::Playing;
+    default: return practice_round(s) ? DisplayScreen::Practice : DisplayScreen::Playing;
   }
 }
 // 本文の全体を描き直す画面（案内の文字が中心で、パケットは流れない）。
@@ -273,6 +288,13 @@ inline DisplayChanges display_changes(const DisplaySnapshot& previous, const Dis
     changes.idleArrows = arrows && (changes.self || !wasArrows || ((previous.pressedMask ^ next.pressedMask) & ENDS));
     if (arrows) changes.buttons &= static_cast<uint8_t>(~ENDS);
     else if (wasArrows) changes.buttons |= ENDS;
+    return changes;
+  }
+  if (display_screen(next) == DisplayScreen::Practice) {
+    // 練習は得点・獲得点・コンボ・順位・演出を出さない。情報欄はPRACTICEの表示と、時間欄だけ。
+    changes.ready = first;
+    changes.remaining = first || practice_time(previous.status) != practice_time(next.status) ||
+                        practice_time_warn(previous.status) != practice_time_warn(next.status);
     return changes;
   }
   const bool validity = first || previous.status.known != next.status.known;

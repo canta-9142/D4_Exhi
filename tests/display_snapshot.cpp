@@ -240,6 +240,107 @@ int main() {
   timeout.chooseRound = RoundKind::None;
   assert(display_screen(timeout) == DisplayScreen::Idle && display_changes(chosen, timeout, false).full);
 
+  // 練習ラウンド: パケットが降る画面に、TUTORIALの札とPRACTICEを加える。得点・順位・演出は出さない。
+  auto normalRound = displayed;
+  normalRound.pressedMask = 0;
+  normalRound.status = {40, 70, false, true};
+  normalRound.status.round = RoundKind::Normal;
+  assert(display_screen(normalRound) == DisplayScreen::Playing);
+  auto tutorial = normalRound;
+  tutorial.status = {0, 0, false, true};
+  tutorial.status.round = RoundKind::Tutorial;
+  tutorial.status.window = 60;
+  assert(display_screen(tutorial) == DisplayScreen::Practice && !lobby_screen(tutorial) && practice_round(tutorial));
+  assert(displayed_cards(tutorial)[0].active && !gains_enabled(tutorial)); // 練習でもパケットは流れるが、獲得点・演出は流さない。
+  // 表示値が揃うまでは、練習の画面にしない（接続・同期の表示を優先する）。
+  auto tutorialWait = tutorial;
+  tutorialWait.awaitingStatus = true;
+  assert(display_screen(tutorialWait) == DisplayScreen::Playing);
+  tutorialWait = tutorial;
+  tutorialWait.synced = false;
+  assert(display_screen(tutorialWait) == DisplayScreen::Playing);
+  tutorialWait = tutorial;
+  tutorialWait.status.known = false;
+  assert(display_screen(tutorialWait) == DisplayScreen::Playing);
+  tutorialWait = tutorial;
+  tutorialWait.status.round = RoundKind::None;
+  assert(display_screen(tutorialWait) == DisplayScreen::Playing);
+  tutorialWait = tutorial;
+  tutorialWait.preview = true;
+  assert(display_screen(tutorialWait) == DisplayScreen::Preview);
+  tutorialWait = tutorial;
+  tutorialWait.phase = GamePhase::Finished;
+  assert(display_screen(tutorialWait) == DisplayScreen::Finished); // 一斉ゲーム方式の練習の終了は結果の画面。
+  tutorialWait = tutorial;
+  tutorialWait.status.countdown = 3; // 練習もカウントダウンの数字を出す。
+  assert(display_screen(tutorialWait) == DisplayScreen::Countdown);
+  tutorialWait.status.countdown = 0;
+  tutorialWait.countdownGo = true;
+  assert(display_screen(tutorialWait) == DisplayScreen::Countdown);
+  auto toPractice = display_changes(normalRound, tutorial, false);
+  assert(toPractice.full && toPractice.ready && toPractice.remaining && toPractice.self && toPractice.label);
+  assert(!toPractice.score && !toPractice.rank && !toPractice.gains && !toPractice.leftColumn && !toPractice.rightMargin);
+  assert(toPractice.buttons == 0x0f && toPractice.cards.all());
+  assert(display_changes(tutorial, normalRound, false).full); // 練習を出ると通常の画面へ全描画で戻る。
+  assert(!display_changes(tutorial, tutorial, false).any());
+  // 時間欄: 連続運転ではwindowが10以下になるまで--。注意色で残り秒数を出す。
+  assert(practice_time(tutorial.status) == -1 && !practice_time_warn(tutorial.status));
+  auto timed = tutorial;
+  for (unsigned window = 60; window > 11; --window) {
+    timed.status.window = static_cast<uint8_t>(window - 1);
+    assert(!display_changes(tutorial, timed, false).any() && practice_time(timed.status) == -1); // 毎秒の通知でも描き直さない。
+    tutorial.status.window = static_cast<uint8_t>(window - 1);
+  }
+  tutorial.status.window = 11;
+  timed = tutorial;
+  timed.status.window = 10;
+  auto timeDiff = display_changes(tutorial, timed, false);
+  assert(timeDiff.remaining && !timeDiff.ready && !timeDiff.label && !timeDiff.full && !timeDiff.score);
+  assert(practice_time(timed.status) == 10 && practice_time_warn(timed.status));
+  auto timeArea = display_damage(timeDiff, false);
+  assert(timeArea.containsPixel(366, INFO_REMAINING_Y) && timeArea.containsPixel(438, INFO_REMAINING_Y + 23));
+  assert(!timeArea.containsPixel(366, INFO_SCORE_Y) && !timeArea.containsPixel(0, 0) && !timeArea.containsPixel(180, 100));
+  tutorial.status.window = 10;
+  timed.status.window = 9;
+  assert(display_changes(tutorial, timed, false).remaining && practice_time(timed.status) == 9);
+  timed.status.window = 1;
+  assert(practice_time(timed.status) == 1 && practice_time_warn(timed.status));
+  timed.status.window = 0; // 練習の終わり（phase(Idle)が届く直前）。連続運転ではremainingが0なので--。
+  assert(practice_time(timed.status) == -1 && !practice_time_warn(timed.status));
+  timed.status.remaining = 37; // 一斉ゲーム方式ではwindowが0で、ゲームの残り秒数を出す（注意色にしない）。
+  assert(practice_time(timed.status) == 37 && !practice_time_warn(timed.status));
+  timed.status.remaining = 120;
+  assert(practice_time(timed.status) == 120);
+  // 得点・獲得点・コンボ・順位・Botの使用量が来ても、練習の画面は描き直さない。
+  timed = tutorial;
+  timed.status.score = 1234;
+  timed.status.rank = 3;
+  timed.status.combo = 25;
+  timed.status.ready = true;
+  timed.status.botsKnown = true;
+  timed.status.bots[0] = 1;
+  timed.status.bots[1] = 4;
+  timed.status.bots[2] = 0;
+  timed.rankFlash = true;
+  timed.gains[0] = {15, 0, true};
+  assert(!display_changes(tutorial, timed, false).any());
+  // ボタンとカードは、通常のPlayingと同じ規則で描き直す。
+  timed = tutorial;
+  timed.pressedMask = 6;
+  auto buttonDiff = display_changes(tutorial, timed, false);
+  assert(buttonDiff.buttons == 6 && buttonDiff.cards.none() && !buttonDiff.remaining);
+  timed = tutorial;
+  timed.cards[0].y = 30;
+  assert(display_changes(tutorial, timed, false).cards.any());
+  timed = tutorial;
+  timed.selfId = NodeId::P3;
+  buttonDiff = display_changes(tutorial, timed, false);
+  assert(buttonDiff.self && buttonDiff.buttons == 0x0f && buttonDiff.label && !buttonDiff.full);
+  // 札は左上、キュー位置の数字3より上。左の列の演出は出さない。
+  assert(PRACTICE_TAG_X >= LEFT_COLUMN_X && PRACTICE_TAG_X + PRACTICE_TAG_WIDTH <= ANIMATION_X);
+  assert(PRACTICE_TAG_Y >= 0 && PRACTICE_TAG_Y + PRACTICE_TAG_HEIGHT <= 28);
+  assert(INFO_READY_Y + 8 <= INFO_REMAINING_Y);
+
   auto result = displayed;
   result.phase = GamePhase::Finished;
   result.summary = {INT32_MAX, 1, true, true, 1, true};

@@ -23,6 +23,9 @@ constexpr int GAIN_START_Y = GAIN_LANE_Y + GAIN_LANE_HEIGHT - GAIN_TEXT_HEIGHT;
 constexpr int BUTTON_FRAME_Y = 241, BUTTON_FRAME_WIDTH = 119, BUTTON_FRAME_HEIGHT = 79;
 constexpr int button_frame_x(int index) { return index * 120 + 1; }
 
+// 練習ラウンド。左上（キュー位置の数字3の上）のTUTORIALの札。READYの位置にPRACTICE、残り時間の位置にTIMEを出す。
+constexpr int PRACTICE_TAG_X = 4, PRACTICE_TAG_Y = 2, PRACTICE_TAG_WIDTH = 112, PRACTICE_TAG_HEIGHT = 22;
+
 // 見出しの隅に出す、段階の残り秒数（モード選択・結果）。10秒以下は注意色。結果②のヘッダーの絵（x=200〜）と重ねない。
 constexpr int HEADER_WINDOW_X = 144, HEADER_WINDOW_Y = 20, HEADER_WINDOW_WIDTH = 56, HEADER_WINDOW_HEIGHT = 24;
 constexpr int WINDOW_WARNING_SECONDS = 10;

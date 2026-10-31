@@ -64,7 +64,8 @@ inline const char* round_label(RoundKind round) {
   return round == RoundKind::Tutorial ? "TUTORIAL" : round == RoundKind::Normal ? "NORMAL" : "--";
 }
 
-constexpr uint16_t SELECT_TUTORIAL_COLOR = TFT_GREEN, SELECT_NORMAL_COLOR = TFT_WHITE, SELECT_DIM_COLOR = 0x39E7;
+// 練習（TUTORIAL）は緑。モード選択の枠、練習ラウンドの札とPRACTICEの表示に使う。
+constexpr uint16_t TUTORIAL_COLOR = TFT_GREEN, SELECT_NORMAL_COLOR = TFT_WHITE, SELECT_DIM_COLOR = 0x39E7;
 
 // モード選択の枠（左から2番目が練習、3番目が通常）。ラベルと、実際のボタンを指す矢印を描く。
 // 選んだ枠は色で塗って強調し、もう一方は暗くする。選んでいなければ両方を通常の色で描く。
@@ -99,7 +100,7 @@ inline void draw_select_body(FrameBuffer& frame, const DisplaySnapshot& s) {
     preparing_text(frame, "NORMAL: 90-second round", 160);
   }
   const bool tutorial = s.chooseRound == RoundKind::Tutorial, normal = s.chooseRound == RoundKind::Normal;
-  draw_select_frame(frame, 1, "TUTORIAL", SELECT_TUTORIAL_COLOR, confirming && tutorial, confirming && normal);
+  draw_select_frame(frame, 1, "TUTORIAL", TUTORIAL_COLOR, confirming && tutorial, confirming && normal);
   draw_select_frame(frame, 2, "NORMAL", SELECT_NORMAL_COLOR, confirming && normal, confirming && tutorial);
 }
 

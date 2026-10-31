@@ -11,6 +11,7 @@
 #include "packet_renderer.hpp"
 #include "preparing_renderer.hpp"
 #include "idle_renderer.hpp"
+#include "practice_renderer.hpp"
 #include "finished_renderer.hpp"
 #include "countdown_renderer.hpp"
 
@@ -327,9 +328,17 @@ void draw_static_layout() {
   frame.drawString("RANK", 366, INFO_RANK_Y + 13);
 }
 
+// 練習ラウンド。得点・順位の欄は持たず、時間欄の単位と左上のTUTORIALの札だけを描く。
+void draw_practice_layout() {
+  draw_packet_frame();
+  frame.drawString("s", 438, INFO_REMAINING_Y);
+  draw_practice_tag(frame);
+}
+
 void draw_screen_layout(const DisplaySnapshot& snapshot) {
   if (lobby_screen(snapshot)) draw_lobby_layout(frame, lobby_title(snapshot));
   else if (display_screen(snapshot) == DisplayScreen::Idle) draw_packet_frame();
+  else if (display_screen(snapshot) == DisplayScreen::Practice) draw_practice_layout();
   else if (display_screen(snapshot) == DisplayScreen::Finished) draw_result_layout(frame, false);
   else if (display_screen(snapshot) == DisplayScreen::Preview) draw_result_layout(frame, true);
   else if (display_screen(snapshot) == DisplayScreen::Countdown) frame.fillScreen(TFT_BLACK);
@@ -373,6 +382,11 @@ void render_snapshot(const DisplaySnapshot& snapshot, const DisplayChanges& chan
   if (changes.self) draw_button(360, 0, snapshot.selfId, false);
   draw_neighbor_buttons(snapshot.selfId, snapshot.pressedMask, changes.buttons);
   if (changes.label) draw_game_status(snapshot);
+  if (display_screen(snapshot) == DisplayScreen::Practice) {
+    if (changes.ready) draw_practice_label(frame);
+    if (changes.remaining) draw_practice_time(frame, snapshot);
+    return;
+  }
   if (display_screen(snapshot) == DisplayScreen::Idle) {
     if (changes.idleGuide) draw_idle_guide(frame, snapshot);
     else if (changes.idleBar) draw_idle_bar(frame, snapshot);
