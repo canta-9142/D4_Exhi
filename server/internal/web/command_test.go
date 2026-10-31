@@ -488,7 +488,9 @@ func TestCommandPlayersNotReady(t *testing.T) {
 // With the real app, rejections carry app's English messages, which must not
 // reach the response.
 func TestCommandWithApp(t *testing.T) {
-	a := app.New(app.Options{Logger: slog.New(slog.DiscardHandler)})
+	// The simultaneous game keeps the Start, mode and Reset rules this test
+	// follows.
+	a := app.New(app.Options{Mode: app.Simultaneous, Logger: slog.New(slog.DiscardHandler)})
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
 	go func() { done <- a.Run(ctx) }()
