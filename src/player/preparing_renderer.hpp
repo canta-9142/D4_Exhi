@@ -4,6 +4,7 @@
 #include "frame_buffer.hpp"
 #include "display_snapshot.hpp"
 
+// 案内の文字を横方向の中央に描く。停止中・準備完了の待機・結果など、パケットが流れない画面で使う。
 inline void preparing_text(FrameBuffer& frame, const char* text, int y, int size = 2) {
   frame.setFont(&fonts::Font0);
   frame.setTextSize(size);
@@ -22,80 +23,50 @@ inline void preparing_start_wait(FrameBuffer& frame, int y) {
   preparing_text(frame, "administrator to start.", y + 24);
 }
 
-inline void draw_preparing_layout(FrameBuffer& frame) {
+// 停止中（休止中の表示）と、準備完了の待機（一斉ゲーム方式）の見出し。
+inline const char* lobby_title(const DisplaySnapshot& s) {
+  return display_screen(s) == DisplayScreen::Standby ? "STANDBY" : "CLOSED";
+}
+
+inline void draw_lobby_layout(FrameBuffer& frame, const char* title) {
   frame.fillScreen(TFT_BLACK);
   frame.setFont(&fonts::Font0);
   frame.setTextSize(3);
   frame.setTextColor(TFT_WHITE, TFT_BLACK);
-  frame.drawString("PREPARING", 24, 20);
+  frame.drawString(title, 24, 20);
   frame.drawFastHLine(0, 80, FrameBuffer::WIDTH, TFT_WHITE);
 }
 
-inline void draw_preparing_bar(FrameBuffer& frame, const DisplaySnapshot& s) {
-  const auto state = preparing_state(s);
-  if (state != PreparingState::Manual && state != PreparingState::Confirming && state != PreparingState::Ready) return;
-  const unsigned progress = state == PreparingState::Manual ?
-      std::min<unsigned>(s.readyHoldMs, ReadyHold::DURATION_MS) : ReadyHold::DURATION_MS;
-  frame.fillRect(40, 152, 400, 32, TFT_BLACK);
-  frame.drawRect(40, 152, 400, 32, TFT_WHITE);
-  const int width = progress * 392 / ReadyHold::DURATION_MS;
-  if (width) frame.fillRect(44, 156, width, 24, TFT_WHITE);
+inline const char* round_label(RoundKind round) {
+  return round == RoundKind::Tutorial ? "TUTORIAL" : round == RoundKind::Normal ? "NORMAL" : "--";
 }
 
-inline void draw_preparing_arrows(FrameBuffer& frame, const DisplaySnapshot& s) {
-  if (preparing_state(s) != PreparingState::Manual) return;
-  for (unsigned side = 0; side < 2; ++side) {
-    const int x = side ? 420 : 60;
-    const uint8_t bit = side ? 8 : 1;
-    const uint16_t color = s.pressedMask & bit ? TFT_WHITE : TFT_DARKGREY;
-    frame.fillRect(x - 16, 264, 32, 52, TFT_BLACK);
-    frame.fillRect(x - 2, 264, 4, 36, color);
-    frame.fillTriangle(x - 12, 296, x + 12, 296, x, 312, color);
-  }
-}
-
-inline void draw_preparing_body(FrameBuffer& frame, const DisplaySnapshot& s) {
+inline void draw_lobby_body(FrameBuffer& frame, const DisplaySnapshot& s) {
   frame.fillRect(0, 81, 480, 239, TFT_BLACK);
-  switch (preparing_state(s)) {
-    case PreparingState::Waiting:
-      preparing_text(frame, preparing_wait_label(s), 128, 3);
-      preparing_text(frame, "Please wait.", 184);
-      break;
-    case PreparingState::Auto:
-      preparing_text(frame, "AUTO", 120, 4);
-      preparing_start_wait(frame, 184);
-      break;
-    case PreparingState::Manual:
-      preparing_text(frame, "Press and hold both end buttons.", 104);
-      preparing_text(frame, "Hold for 2 seconds.", 208);
-      break;
-    case PreparingState::Confirming:
-      preparing_text(frame, "CONFIRMING...", 104, 3);
-      preparing_text(frame, "Waiting for confirmation.", 208);
-      break;
-    case PreparingState::Ready:
-      preparing_text(frame, "READY", 104, 4);
-      preparing_start_wait(frame, 208);
-      break;
+  if (lobby_state(s) == LobbyState::Waiting) {
+    preparing_text(frame, preparing_wait_label(s), 128, 3);
+    preparing_text(frame, "Please wait.", 184);
+  } else if (display_screen(s) == DisplayScreen::Standby) {
+    // 一斉ゲーム方式で、モード選択を終えた準備完了。選んだ種別を出して、管理者の開始を待つ。
+    preparing_text(frame, round_label(s.status.round), 96, 3);
+    preparing_text(frame, "READY", 136, 4);
+    preparing_start_wait(frame, 192);
+  } else {
+    preparing_text(frame, "OUT OF SERVICE", 112, 3);
+    preparing_text(frame, "The exhibit is not running.", 168);
   }
-  draw_preparing_bar(frame, s);
-  draw_preparing_arrows(frame, s);
 }
 
-inline void render_preparing(FrameBuffer& frame, const DisplaySnapshot& s, const DisplayChanges& changes) {
-  if (changes.preparingHeader) {
+inline void render_lobby(FrameBuffer& frame, const DisplaySnapshot& s, const DisplayChanges& changes) {
+  if (changes.lobbyHeader) {
     frame.fillRect(24, 48, 320, 24, TFT_BLACK);
     frame.setFont(&fonts::Font0);
     frame.setTextSize(1);
     frame.setTextColor(TFT_WHITE, TFT_BLACK);
-    frame.drawString(preparing_state(s) == PreparingState::Waiting ? preparing_wait_label(s) :
+    frame.drawString(lobby_state(s) == LobbyState::Waiting ? preparing_wait_label(s) :
                      s.mode == ControlMode::Manual ? "MANUAL" : "AUTO", 24, 56);
   }
-  if (changes.preparingBody) draw_preparing_body(frame, s);
-  else {
-    if (changes.preparingBar) draw_preparing_bar(frame, s);
-    if (changes.preparingArrows) draw_preparing_arrows(frame, s);
-  }
+  if (changes.lobbyBody) draw_lobby_body(frame, s);
 }
 
 #endif // PREPARING_RENDERER_HPP_

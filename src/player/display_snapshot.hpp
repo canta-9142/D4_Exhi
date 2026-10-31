@@ -48,15 +48,41 @@ inline bool countdown_enabled(const DisplaySnapshot& s) {
          !s.awaitingStatus && s.status.known;
 }
 
-enum class DisplayScreen : uint8_t { Playing, Preparing, Finished, Preview, Countdown };
+// Closedは停止中（phase=Preparing）の休止中の表示。Idleはボットとしてパケットが流れる待機。
+// Standbyは一斉ゲーム方式で、モード選択を終えた準備完了の待機。
+enum class DisplayScreen : uint8_t { Playing, Closed, Finished, Preview, Countdown, Idle, Standby };
+
+// 待機・停止中・モード選択で、操作を受け付けられる状態か。取得前は接続・同期の表示を優先する。
+enum class LobbyState : uint8_t { Waiting, Auto, Manual, Confirming, Ready };
+
+inline LobbyState lobby_state(const DisplaySnapshot& s) {
+  if (s.selfId == NodeId::None || !s.synced || s.awaitingStatus || !s.status.known) return LobbyState::Waiting;
+  if (s.mode == ControlMode::Auto) return LobbyState::Auto;
+  if (s.phase == GamePhase::Idle && s.status.ready) return LobbyState::Ready;
+  if (s.readyPending) return LobbyState::Confirming;
+  return LobbyState::Manual;
+}
+
 inline DisplayScreen display_screen(const DisplaySnapshot& s) {
   if (s.preview && s.synced && s.selfId != NodeId::None && s.phase != GamePhase::Unknown) return DisplayScreen::Preview;
   if (countdown_enabled(s) && (s.status.countdown || s.countdownGo)) return DisplayScreen::Countdown;
-  if (s.phase == GamePhase::Preparing) return DisplayScreen::Preparing;
-  if (s.phase == GamePhase::Finished) return DisplayScreen::Finished;
-  return DisplayScreen::Playing;
+  switch (s.phase) {
+    case GamePhase::Preparing: return DisplayScreen::Closed;
+    case GamePhase::Idle: return lobby_state(s) == LobbyState::Ready ? DisplayScreen::Standby : DisplayScreen::Idle;
+    case GamePhase::Finished: return DisplayScreen::Finished;
+    default: return DisplayScreen::Playing;
+  }
 }
-inline bool preparing_screen(const DisplaySnapshot& s) { return display_screen(s) == DisplayScreen::Preparing; }
+// 本文の全体を描き直す画面（案内の文字が中心で、パケットは流れない）。
+inline bool lobby_screen(const DisplaySnapshot& s) {
+  const DisplayScreen screen = display_screen(s);
+  return screen == DisplayScreen::Closed || screen == DisplayScreen::Standby;
+}
+// 待機で、両端の長押しの案内（右の情報欄の文と、両端の枠の矢印）を出すか。
+inline bool idle_guide(const DisplaySnapshot& s) {
+  const LobbyState state = lobby_state(s);
+  return display_screen(s) == DisplayScreen::Idle && (state == LobbyState::Manual || state == LobbyState::Confirming);
+}
 
 // 獲得点を流し、順位を光らせるのは、表示値が揃った通常のPlaying画面だけ。カウントダウン・GO!・確認表示中は流さない。
 inline bool gains_enabled(const DisplaySnapshot& s) {
@@ -122,19 +148,10 @@ inline int32_t displayed_final_score(const DisplaySnapshot& s) {
   return static_cast<int32_t>(uint64_t(s.summary.score) * (1000000000 - left * left * left) / 1000000000);
 }
 
-enum class PreparingState : uint8_t { Waiting, Auto, Manual, Confirming, Ready };
-
-inline PreparingState preparing_state(const DisplaySnapshot& s) {
-  if (s.selfId == NodeId::None || !s.synced || s.awaitingStatus || !s.status.known) return PreparingState::Waiting;
-  if (s.mode == ControlMode::Auto) return PreparingState::Auto;
-  if (s.status.ready) return PreparingState::Ready;
-  if (s.readyPending) return PreparingState::Confirming;
-  return PreparingState::Manual;
-}
-
 inline const PacketAnimation::Snapshot& displayed_cards(const DisplaySnapshot& s) {
   static const PacketAnimation::Snapshot empty{};
-  return s.phase == GamePhase::Playing && s.synced && s.selfId != NodeId::None ? s.cards : empty;
+  const bool cardPhase = s.phase == GamePhase::Playing || s.phase == GamePhase::Idle;
+  return cardPhase && s.synced && s.selfId != NodeId::None ? s.cards : empty;
 }
 
 inline bool same_card_pixels(const PacketCard& previous, const PacketCard& next) {
@@ -158,14 +175,15 @@ struct DisplayChanges {
   uint8_t buttons = 0;
   bool self = false, label = false, score = false, remaining = false, ready = false, rank = false, gains = false;
   bool leftColumn = false, rightMargin = false; // 炎・マスコット・コンボの演出を描く左の列とカード欄の右の余白
-  bool full = false, preparingHeader = false, preparingBody = false, preparingBar = false, preparingArrows = false;
+  bool full = false, lobbyHeader = false, lobbyBody = false;
+  bool idleGuide = false, idleBar = false, idleArrows = false; // 待機の右の情報欄の案内・バーと、両端の枠の矢印
   bool resultHeader = false, resultBody = false, resultScore = false, resultRank = false, resultAccent = false;
   bool previewBody = false, countdownBody = false;
   bool topBody = false, topCurve = false; // topCurveはベルカーブとマスの両方を描き直す。
   uint8_t topCell = 0; // 点滅で描き直すマスの番号（1〜50）。0は描き直さない。
   bool topArt = false; // ②のヘッダーのドット絵の範囲
   bool any() const {
-    return resultHeader || resultBody || resultScore || resultRank || resultAccent || topBody || topCurve || topCell || topArt || previewBody || countdownBody || full || preparingHeader || preparingBody || preparingBar || preparingArrows || cards.any() || buttons || self || label || score || remaining || ready || rank || gains || leftColumn || rightMargin;
+    return resultHeader || resultBody || resultScore || resultRank || resultAccent || topBody || topCurve || topCell || topArt || previewBody || countdownBody || full || lobbyHeader || lobbyBody || idleGuide || idleBar || idleArrows || cards.any() || buttons || self || label || score || remaining || ready || rank || gains || leftColumn || rightMargin;
   }
 };
 
@@ -213,16 +231,15 @@ inline DisplayChanges display_changes(const DisplaySnapshot& previous, const Dis
     }
     return changes;
   }
-  if (preparing_screen(next)) {
-    const auto state = preparing_state(next);
-    changes.preparingHeader = changes.label || previous.status.known != next.status.known;
+  if (lobby_screen(next)) {
+    const auto state = lobby_state(next);
+    changes.lobbyHeader = changes.label || previous.status.known != next.status.known;
     changes.label = false;
-    changes.preparingBody = first || preparing_state(previous) != state ||
-                            (state == PreparingState::Waiting && changes.preparingHeader);
-    changes.preparingBar = changes.preparingBody ||
-        (state == PreparingState::Manual && previous.readyHoldMs != next.readyHoldMs);
-    changes.preparingArrows = changes.preparingBody ||
-        (state == PreparingState::Manual && ((previous.pressedMask ^ next.pressedMask) & ReadyHold::END_BUTTONS));
+    // 準備完了の待機は、選んだ種別（status.round）も本文に出す。
+    // 本文が変わるのは、取得中かどうか。操作モードや長押しの状態は、停止中と準備完了の本文に出さない。
+    changes.lobbyBody = first || (lobby_state(previous) == LobbyState::Waiting) != (state == LobbyState::Waiting) ||
+                        (state == LobbyState::Waiting && changes.lobbyHeader) ||
+                        (display_screen(next) == DisplayScreen::Standby && previous.status.round != next.status.round);
     return changes;
   }
   const auto& oldCards = displayed_cards(previous);
@@ -234,6 +251,17 @@ inline DisplayChanges display_changes(const DisplaySnapshot& previous, const Dis
     mark_card_rows(changes.cards, newCards[i]);
   }
   changes.buttons = changes.self ? 0x0f : (previous.pressedMask ^ next.pressedMask) & 0x0f;
+  if (display_screen(next) == DisplayScreen::Idle) {
+    // 待機は得点・時間・順位・獲得点を持たない。長押しの案内の間は、両端の枠にボタンの代わりに矢印を描く。
+    constexpr uint8_t ENDS = ReadyHold::END_BUTTONS;
+    const bool arrows = idle_guide(next), wasArrows = idle_guide(previous);
+    changes.idleGuide = first || lobby_state(previous) != lobby_state(next);
+    changes.idleBar = changes.idleGuide || (arrows && previous.readyHoldMs != next.readyHoldMs);
+    changes.idleArrows = arrows && (changes.self || !wasArrows || ((previous.pressedMask ^ next.pressedMask) & ENDS));
+    if (arrows) changes.buttons &= static_cast<uint8_t>(~ENDS);
+    else if (wasArrows) changes.buttons |= ENDS;
+    return changes;
+  }
   const bool validity = first || previous.status.known != next.status.known;
   changes.score = validity || previous.status.score != next.status.score;
   changes.remaining = validity || previous.status.remaining != next.status.remaining;
@@ -266,12 +294,13 @@ inline FrameDamage display_damage(const DisplayChanges& changes, bool first) {
   }
   if (changes.topCell) damage.markRect(grid_cell_x(changes.topCell - 1), grid_cell_y(changes.topCell - 1), GRID_CELL, GRID_CELL);
   if (changes.topArt) damage.markRect(TOP_ART_X, TOP_ART_Y, TOP_ART_WIDTH, TOP_ART_HEIGHT);
-  if (changes.preparingBody) damage.markRect(0, 81, 480, 239);
-  if (changes.preparingHeader) damage.markRect(24, 48, 320, 24);
-  if (changes.preparingBar) damage.markRect(40, 152, 400, 32);
-  if (changes.preparingArrows) {
-    damage.markRect(44, 264, 32, 52);
-    damage.markRect(404, 264, 32, 52);
+  if (changes.lobbyBody) damage.markRect(0, 81, 480, 239);
+  if (changes.lobbyHeader) damage.markRect(24, 48, 320, 24);
+  if (changes.idleGuide) damage.markRect(INFO_X, IDLE_GUIDE_Y, INFO_WIDTH, IDLE_GUIDE_HEIGHT);
+  else if (changes.idleBar) damage.markRect(IDLE_BAR_X, IDLE_BAR_Y, IDLE_BAR_WIDTH, IDLE_BAR_HEIGHT);
+  if (changes.idleArrows) {
+    damage.markRect(button_frame_x(0), BUTTON_FRAME_Y, BUTTON_FRAME_WIDTH, BUTTON_FRAME_HEIGHT);
+    damage.markRect(button_frame_x(3), BUTTON_FRAME_Y, BUTTON_FRAME_WIDTH, BUTTON_FRAME_HEIGHT);
   }
   for (int row = 0; row < ANIMATION_HEIGHT;) {
     if (!changes.cards[row]) { ++row; continue; }

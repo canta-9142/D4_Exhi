@@ -19,6 +19,14 @@ constexpr int INFO_RANK_X = 418, INFO_RANK_Y = 205, INFO_RANK_WIDTH = 60, INFO_R
 constexpr int GAIN_COLUMN_X = 364, GAIN_COLUMN_PITCH = 39, GAIN_TEXT_HEIGHT = 16;
 constexpr int GAIN_START_Y = GAIN_LANE_Y + GAIN_LANE_HEIGHT - GAIN_TEXT_HEIGHT;
 
+// 下部の4つのボタン枠（左から順にx=0,120,240,360。枠線の内側）。
+constexpr int BUTTON_FRAME_Y = 241, BUTTON_FRAME_WIDTH = 119, BUTTON_FRAME_HEIGHT = 79;
+constexpr int button_frame_x(int index) { return index * 120 + 1; }
+
+// 待機の右の情報欄。状態の下から枠の上端までに、長押しの案内と2秒で満ちるバーを出す。
+constexpr int IDLE_GUIDE_Y = 113, IDLE_GUIDE_HEIGHT = 127;
+constexpr int IDLE_BAR_X = 364, IDLE_BAR_Y = 152, IDLE_BAR_WIDTH = 112, IDLE_BAR_HEIGHT = 14;
+
 // 結果③のベストスコアの3行。ボタン枠（y=240〜）より上に収める。
 constexpr int BEST_ROW_X = 16, BEST_ROW_Y = 84, BEST_ROW_PITCH = 52, BEST_ROW_WIDTH = 448, BEST_ROW_HEIGHT = 48;
 

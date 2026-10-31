@@ -61,27 +61,113 @@ int main() {
   assert(damage.containsPixel(120, 20) && damage.containsPixel(319, 89));
   assert(!damage.containsPixel(400, 200));
 
+  // 停止中は休止中の表示。パケットとボタンは描かず、本文は状態が変わったときだけ描き直す。
   next = displayed;
   next.phase = GamePhase::Preparing;
   next.status.ready = false;
-  auto prep = display_changes(displayed, next, false);
-  assert(prep.full && prep.cards.none() && prep.buttons == 0 && prep.preparingBody);
-  assert(preparing_state(next) == PreparingState::Manual);
-  auto holding = next;
-  holding.readyHoldMs = 1000;
-  prep = display_changes(next, holding, false);
-  assert(prep.preparingBar && !prep.full && !prep.preparingBody && !prep.cards.any());
-  assert(display_damage(prep, false).changedTiles() < 100);
-  holding.readyPending = true;
-  assert(preparing_state(holding) == PreparingState::Confirming);
-  holding.status.ready = true;
-  assert(preparing_state(holding) == PreparingState::Ready);
-  holding.mode = ControlMode::Auto;
-  assert(preparing_state(holding) == PreparingState::Auto);
-  holding.synced = false;
-  assert(preparing_state(holding) == PreparingState::Waiting);
+  auto closed = display_changes(displayed, next, false);
+  assert(display_screen(next) == DisplayScreen::Closed && lobby_screen(next));
+  assert(closed.full && closed.lobbyBody && closed.cards.none() && closed.buttons == 0);
+  assert(lobby_state(next) == LobbyState::Manual);
+  auto operated = next;
+  operated.pressedMask = 9;
+  operated.readyHoldMs = 1500;
+  operated.readyPending = true;
+  assert(!display_changes(next, operated, false).any()); // 停止中は操作を受け付けず、長押しの進捗も出さない。
+  operated = next;
+  operated.synced = false;
+  auto closedWait = display_changes(next, operated, false);
+  assert(lobby_state(operated) == LobbyState::Waiting && closedWait.lobbyBody && closedWait.lobbyHeader && !closedWait.full);
+  operated.mode = ControlMode::Auto;
+  operated.synced = true;
+  assert(lobby_state(operated) == LobbyState::Auto && display_screen(operated) == DisplayScreen::Closed);
   assert(display_changes(next, displayed, false).full);
 
+  // 待機は、ボットとしてパケットが流れる画面。受付中は右の情報欄に長押しの案内とバー、両端の枠に矢印を出す。
+  auto idle = displayed;
+  idle.phase = GamePhase::Idle;
+  idle.status = {0, 0, false, true};
+  idle.pressedMask = 0;
+  assert(display_screen(idle) == DisplayScreen::Idle && !lobby_screen(idle));
+  assert(lobby_state(idle) == LobbyState::Manual && idle_guide(idle));
+  assert(displayed_cards(idle)[0].active); // 待機でもパケットを流す。
+  auto enter = display_changes(displayed, idle, false);
+  assert(enter.full && enter.cards.all() && enter.self && enter.idleGuide && enter.idleBar && enter.idleArrows);
+  assert(enter.buttons == 0x06); // 両端の枠はボタンの代わりに矢印を描く。
+  assert(!enter.score && !enter.remaining && !enter.ready && !enter.rank && !enter.gains);
+  assert(!enter.leftColumn && !enter.rightMargin && !enter.lobbyBody);
+  assert(display_damage(enter, false).containsPixel(0, 0) && display_damage(enter, false).containsPixel(479, 319));
+  assert(!display_changes(idle, idle, false).any());
+  auto idleTick = idle;
+  idleTick.status.window = 5;
+  idleTick.status.score = 99; // 待機は得点・時間を持たない。
+  idleTick.status.remaining = 9;
+  assert(!display_changes(idle, idleTick, false).any());
+  auto holding = idle;
+  holding.pressedMask = 1;
+  holding.readyHoldMs = 700;
+  auto hold = display_changes(idle, holding, false);
+  assert(hold.idleBar && hold.idleArrows && !hold.idleGuide && !hold.full && hold.buttons == 0 && hold.cards.none());
+  auto holdArea = display_damage(hold, false);
+  assert(holdArea.containsPixel(IDLE_BAR_X, IDLE_BAR_Y) && holdArea.containsPixel(60, 300) && holdArea.containsPixel(420, 300));
+  assert(!holdArea.containsPixel(INFO_X + 5, 121) && !holdArea.containsPixel(180, 300)); // 案内の文と内側の枠は触れない。
+  auto holdMore = holding;
+  holdMore.readyHoldMs = 1400;
+  hold = display_changes(holding, holdMore, false);
+  assert(hold.idleBar && !hold.idleArrows && !hold.idleGuide && hold.buttons == 0);
+  assert(display_damage(hold, false).changedTiles() <= 16);
+  holdMore.pressedMask = 9;
+  hold = display_changes(holding, holdMore, false);
+  assert(hold.idleArrows && hold.buttons == 0);
+  auto inner = idle;
+  inner.pressedMask = 2;
+  hold = display_changes(idle, inner, false);
+  assert(hold.buttons == 2 && !hold.idleArrows && !hold.idleBar);
+  auto confirming = holding;
+  confirming.readyPending = true;
+  confirming.readyHoldMs = ReadyHold::DURATION_MS;
+  assert(lobby_state(confirming) == LobbyState::Confirming && idle_guide(confirming));
+  hold = display_changes(holding, confirming, false);
+  assert(hold.idleGuide && hold.idleBar && !hold.idleArrows && !hold.full && hold.buttons == 0);
+  auto automatic = idle;
+  automatic.mode = ControlMode::Auto;
+  assert(lobby_state(automatic) == LobbyState::Auto && !idle_guide(automatic)); // ボット固定では案内も矢印も出さない。
+  hold = display_changes(idle, automatic, false);
+  assert(hold.label && hold.idleGuide && !hold.idleArrows && hold.buttons == 0x09 && !hold.full); // 端の枠はボタンに戻す。
+  automatic.readyHoldMs = 900;
+  automatic.pressedMask = 9;
+  assert(display_changes(automatic, automatic, false).buttons == 0);
+  auto autoPressed = automatic;
+  autoPressed.pressedMask = 0;
+  assert(display_changes(automatic, autoPressed, false).buttons == 0x09 && !display_changes(automatic, autoPressed, false).idleArrows);
+  auto unsynced = idle;
+  unsynced.synced = false;
+  assert(lobby_state(unsynced) == LobbyState::Waiting && !idle_guide(unsynced) && !displayed_cards(unsynced)[0].active);
+  hold = display_changes(idle, unsynced, false);
+  assert(hold.idleGuide && hold.label && hold.cards.any() && hold.buttons == 0x09 && !hold.idleArrows);
+  auto unknown = idle;
+  unknown.status.known = false;
+  assert(lobby_state(unknown) == LobbyState::Waiting && !idle_guide(unknown));
+  assert(BUTTON_FRAME_Y == 241 && button_frame_x(0) == 1 && button_frame_x(3) == 361);
+  assert(IDLE_GUIDE_Y > 112 && IDLE_GUIDE_Y + IDLE_GUIDE_HEIGHT == 240 && INFO_X + INFO_WIDTH == 479);
+  assert(IDLE_BAR_Y >= IDLE_GUIDE_Y && IDLE_BAR_Y + IDLE_BAR_HEIGHT < 240 && IDLE_BAR_X + IDLE_BAR_WIDTH <= 480);
+  // 一斉ゲーム方式で準備完了の待機は、選んだ種別と開始待ちの案内（パケットは流さない）。
+  auto standby = idle;
+  standby.status.ready = true;
+  standby.status.round = RoundKind::Normal;
+  assert(display_screen(standby) == DisplayScreen::Standby && lobby_screen(standby) && lobby_state(standby) == LobbyState::Ready);
+  assert(!idle_guide(standby));
+  auto standbyEnter = display_changes(idle, standby, false);
+  assert(standbyEnter.full && standbyEnter.lobbyBody && standbyEnter.cards.none() && standbyEnter.buttons == 0);
+  auto standbyTutorial = standby;
+  standbyTutorial.status.round = RoundKind::Tutorial;
+  assert(display_changes(standby, standbyTutorial, false).lobbyBody);
+  standbyTutorial.pressedMask = 15;
+  standbyTutorial.readyHoldMs = 800;
+  assert(!display_changes(standbyTutorial, standbyTutorial, false).any());
+  auto standbyAuto = standby;
+  standbyAuto.mode = ControlMode::Auto; // ボット固定は準備完了の表示にしない。
+  assert(display_screen(standbyAuto) == DisplayScreen::Idle && lobby_state(standbyAuto) == LobbyState::Auto);
 
   auto result = displayed;
   result.phase = GamePhase::Finished;
@@ -333,9 +419,9 @@ int main() {
   // Finished以外では、ページの状態を使わずにそのフェーズの画面を出す（リセットで準備画面へ戻る）。
   auto resetToPrep = bestPage;
   resetToPrep.phase = GamePhase::Preparing;
-  assert(display_screen(resetToPrep) == DisplayScreen::Preparing);
+  assert(display_screen(resetToPrep) == DisplayScreen::Closed);
   diff = display_changes(bestPage, resetToPrep, false);
-  assert(diff.full && diff.preparingBody && !diff.resultBody);
+  assert(diff.full && diff.lobbyBody && !diff.resultBody);
   resetToPrep.phase = GamePhase::Playing;
   assert(display_screen(resetToPrep) == DisplayScreen::Playing);
 

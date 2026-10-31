@@ -10,6 +10,7 @@
 #include "frame_presenter.hpp"
 #include "packet_renderer.hpp"
 #include "preparing_renderer.hpp"
+#include "idle_renderer.hpp"
 #include "finished_renderer.hpp"
 #include "countdown_renderer.hpp"
 
@@ -78,6 +79,8 @@ void draw_neighbor_buttons(NodeId id, uint8_t pressedMask, uint8_t changedMask) 
 const char* phase_label(GamePhase phase) {
   switch (phase) {
     case GamePhase::Preparing: return "PREPARING";
+    case GamePhase::Idle: return "IDLE";
+    case GamePhase::Select: return "SELECT";
     case GamePhase::Playing: return "PLAYING";
     case GamePhase::Finished: return "FINISHED";
     case GamePhase::Unknown: return "WAITING";
@@ -301,7 +304,8 @@ void draw_right_margin(const DisplaySnapshot& snapshot) {
   frame.clearClipRect();
 }
 
-void draw_static_layout() {
+// パケットが流れる画面（待機・ラウンド）に共通の枠線とキュー位置の数字。
+void draw_packet_frame() {
   frame.fillScreen(TFT_BLACK);
   frame.drawLine(360, 0, 360, 240, TFT_WHITE);
   frame.drawLine(360, 80, 479, 80, TFT_WHITE);
@@ -313,6 +317,10 @@ void draw_static_layout() {
   frame.drawChar('3', 51, 28);
   frame.drawChar('2', 51, 108);
   frame.drawChar('1', 51, 188);
+}
+
+void draw_static_layout() {
+  draw_packet_frame();
   frame.drawString("pt", 438, INFO_SCORE_Y);
   frame.drawString("s", 438, INFO_REMAINING_Y);
   frame.setTextSize(1);
@@ -320,7 +328,8 @@ void draw_static_layout() {
 }
 
 void draw_screen_layout(const DisplaySnapshot& snapshot) {
-  if (preparing_screen(snapshot)) draw_preparing_layout(frame);
+  if (lobby_screen(snapshot)) draw_lobby_layout(frame, lobby_title(snapshot));
+  else if (display_screen(snapshot) == DisplayScreen::Idle) draw_packet_frame();
   else if (display_screen(snapshot) == DisplayScreen::Finished) draw_result_layout(frame, false);
   else if (display_screen(snapshot) == DisplayScreen::Preview) draw_result_layout(frame, true);
   else if (display_screen(snapshot) == DisplayScreen::Countdown) frame.fillScreen(TFT_BLACK);
@@ -355,15 +364,21 @@ void render_snapshot(const DisplaySnapshot& snapshot, const DisplayChanges& chan
     if (changes.countdownBody) render_countdown(frame, snapshot);
     return;
   }
-  if (preparing_screen(snapshot)) {
+  if (lobby_screen(snapshot)) {
     if (changes.self) draw_button(360, 0, snapshot.selfId, false);
-    render_preparing(frame, snapshot, changes);
+    render_lobby(frame, snapshot, changes);
     return;
   }
   packetRenderer.draw(displayed_cards(snapshot), changes.cards);
   if (changes.self) draw_button(360, 0, snapshot.selfId, false);
   draw_neighbor_buttons(snapshot.selfId, snapshot.pressedMask, changes.buttons);
   if (changes.label) draw_game_status(snapshot);
+  if (display_screen(snapshot) == DisplayScreen::Idle) {
+    if (changes.idleGuide) draw_idle_guide(frame, snapshot);
+    else if (changes.idleBar) draw_idle_bar(frame, snapshot);
+    if (changes.idleArrows) draw_idle_arrows(frame, snapshot);
+    return;
+  }
   draw_info(snapshot, changes);
   if (changes.leftColumn) draw_left_column(snapshot);
   if (changes.rightMargin) draw_right_margin(snapshot);
