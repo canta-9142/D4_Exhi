@@ -75,7 +75,10 @@ func newTransportHarness(t *testing.T) *transportHarness {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	h := &transportHarness{t: t, ctx: ctx, transport: New(logger), started: make(chan app.SessionID, 16)}
+	// The simultaneous game accepts READY and CHOOSE without a running
+	// operation, so that a test reaches a ready player at once.
 	h.app = app.New(app.Options{
+		Mode:   app.Simultaneous,
 		Logger: logger,
 		Send: func(id app.SessionID, message app.Message) error {
 			err := h.transport.Send(id, message)
@@ -300,15 +303,33 @@ func TestTransportReconnectAndReady(t *testing.T) {
 		t.Fatal(err)
 	}
 	generation := h.syncPlayer(peer, reader)
-	if _, err := io.WriteString(peer, `{"type":"ready","data":{"sync":"`+generation+`"}}`+"\n"); err != nil {
-		t.Fatal(err)
-	}
-	var status struct {
-		Type string         `json:"type"`
-		Data app.StatusData `json:"data"`
-	}
-	if err := json.Unmarshal([]byte(h.line(peer, reader)), &status); err != nil || status.Type != "status" || !status.Data.Ready {
-		t.Fatalf("READY response = %+v, %v", status, err)
+	// A long press opens the mode selection, and the selection makes the
+	// player ready.
+	for _, tc := range []struct {
+		line  string
+		phase app.Phase
+		ready bool
+	}{
+		{`{"type":"ready","data":{"sync":"` + generation + `"}}`, app.Select, false},
+		{`{"type":"choose","data":{"sync":"` + generation + `","round":"normal"}}`, app.Idle, true},
+	} {
+		if _, err := io.WriteString(peer, tc.line+"\n"); err != nil {
+			t.Fatal(err)
+		}
+		var phase struct {
+			Type string        `json:"type"`
+			Data app.PhaseData `json:"data"`
+		}
+		var status struct {
+			Type string         `json:"type"`
+			Data app.StatusData `json:"data"`
+		}
+		if err := json.Unmarshal([]byte(h.line(peer, reader)), &phase); err != nil || phase.Type != "phase" || phase.Data.Phase != tc.phase {
+			t.Fatalf("%s: phase = %+v, %v", tc.line, phase, err)
+		}
+		if err := json.Unmarshal([]byte(h.line(peer, reader)), &status); err != nil || status.Type != "status" || status.Data.Ready != tc.ready {
+			t.Fatalf("%s: status = %+v, %v", tc.line, status, err)
+		}
 	}
 	if err := peer.Close(); err != nil {
 		t.Fatal(err)

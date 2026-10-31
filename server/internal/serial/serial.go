@@ -228,12 +228,20 @@ func parseLine(line []byte) (app.IncomingMessage, error) {
 			return message, errors.New("invalid player UID")
 		}
 		message.Kind = app.PlayerDevice
-	case "send", "ready":
+	case "send", "ready", "choose":
 		if err := requiredField(data, "sync", &message.Sync); err != nil {
 			return message, err
 		}
 		if !upperHex(message.Sync, 32) {
 			return message, errors.New("invalid synchronization ID")
+		}
+		if message.Type == "choose" {
+			if err := requiredField(data, "round", &message.Round); err != nil {
+				return message, err
+			}
+			if message.Round != "normal" && message.Round != "tutorial" {
+				return message, errors.New("invalid round")
+			}
 		}
 		if message.Type == "send" {
 			if err := requiredField(data, "rid", &message.RID); err != nil {

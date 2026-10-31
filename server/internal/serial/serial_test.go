@@ -20,6 +20,7 @@ const (
 	playerHello = `{"type":"hello","data":{"uid":"001122AABBCC"}}`
 	generation  = "0123456789ABCDEF0123456789ABCDEF"
 	readyLine   = `{"type":"ready","data":{"sync":"` + generation + `"}}`
+	chooseLine  = `{"type":"choose","data":{"sync":"` + generation + `","round":"tutorial"}}`
 	sendLine    = `{"type":"send","data":{"sync":"` + generation + `","rid":0,"pid":0,"to":1}}`
 	resyncLine  = `{"type":"resync","data":{}}`
 )
@@ -36,6 +37,8 @@ func TestParseMessages(t *testing.T) {
 		{" \tHELLO\t  AABBCCDDEEFF\t ", app.IncomingMessage{Type: "hello", UID: "AABBCCDDEEFF", Kind: app.LEDDevice}},
 		{resyncLine, app.IncomingMessage{Type: "resync"}},
 		{readyLine, app.IncomingMessage{Type: "ready", Sync: generation}},
+		{chooseLine, app.IncomingMessage{Type: "choose", Sync: generation, Round: "tutorial"}},
+		{`{"type":"choose","data":{"sync":"` + generation + `","round":"normal"}}`, app.IncomingMessage{Type: "choose", Sync: generation, Round: "normal"}},
 		{sendLine, app.IncomingMessage{Type: "send", Sync: generation, To: 1}},
 		{`{"type":"send","data":{"sync":"` + generation + `","rid":4294967295,"pid":65535,"to":11}}`, app.IncomingMessage{Type: "send", Sync: generation, RID: 4294967295, PID: 65535, To: 11}},
 		{`{"type":"resync","data":{"uid":null,"rid":"ignored","extra":[1]},"extra":true}`, app.IncomingMessage{Type: "resync"}},
@@ -67,6 +70,10 @@ func TestInvalidMessages(t *testing.T) {
 		`{"type":"ready","data":{"sync":"0123456789abcdef0123456789abcdef"}}`,
 		`{"type":"ready","data":{"sync":"0123456789ABCDEF"}}`,
 		`{"type":"ready","data":{"sync":"0123456789ABCDEF0123456789ABCDEG"}}`,
+		`{"type":"choose","data":{"sync":"` + generation + `","round":"hard"}}`,
+		`{"type":"choose","data":{"sync":"` + generation + `","round":"NORMAL"}}`,
+		`{"type":"choose","data":{"sync":"` + generation + `","round":1}}`,
+		`{"type":"choose","data":{"sync":"0123456789abcdef0123456789abcdef","round":"normal"}}`,
 		`{"type":"unknown","data":{}}`, `{"type":"SEND","data":{}}`,
 		`{"type":"identify","data":{}}`, `{"type":"config","data":{}}`,
 		`{"type":"reset","data":{}}`, `{"type":"push","data":{}}`,
@@ -76,13 +83,13 @@ func TestInvalidMessages(t *testing.T) {
 		playerHello[:len(playerHello)-1] + string([]byte{0xff}) + "}", "HELLO led\xff",
 	}
 	// Zero is valid for RID and PID, so absence/null must not become zero.
-	for _, original := range []string{playerHello, readyLine, sendLine} {
+	for _, original := range []string{playerHello, readyLine, chooseLine, sendLine} {
 		var envelope map[string]any
 		if err := json.Unmarshal([]byte(original), &envelope); err != nil {
 			t.Fatal(err)
 		}
 		data := envelope["data"].(map[string]any)
-		for _, field := range []string{"uid", "sync", "rid", "pid", "to"} {
+		for _, field := range []string{"uid", "sync", "round", "rid", "pid", "to"} {
 			value, exists := data[field]
 			if !exists {
 				continue
