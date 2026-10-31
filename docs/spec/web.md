@@ -199,6 +199,7 @@ JSONはUTF-8とし、APIが生成する応答のContent-Typeは`application/json
 | finish | `{}` | Finish |
 | reset | `{}` | Reset |
 | set_node_mode | `{"nodeId":"P1","mode":"manual"}` | SetNodeEnabled |
+| set_all_node_modes | `{"mode":"manual"}` | SetAllNodesEnabled |
 | set_bot_rate | `{"nodeId":"B1","ratePps":1.5}` | SetBotRate |
 | set_device_assignment | `{"deviceId":"AABBCCDDEEFF","target":{"kind":"player","nodeId":"P1"}}` | SetDeviceAssignment |
 | swap_device_assignments | `{"firstDeviceId":"AABBCCDDEEFF","secondDeviceId":"112233445566"}` | SwapDeviceAssignments |
@@ -207,7 +208,7 @@ JSONはUTF-8とし、APIが生成する応答のContent-Typeは`application/json
 
 各操作の例は独立したものとし、swap・replaceの2台は同じ機器種別を想定する。表に示した各引数は必須とし、トップレベル・data・targetに未知のフィールドがある場合も拒否する。操作名、列挙値、ノードID、型、必須項目の不正は`400 invalid_request`とする。
 
-`set_node_mode`はプレイヤーだけを対象とし、`manual`をSetNodeEnabledの有効、`auto`を無効へ対応付ける。`set_bot_rate`はBotだけを対象とし、ratePpsは有限の正数とする。0・負数・文字列を受け付けない。
+`set_node_mode`はプレイヤーだけを対象とし、`manual`をSetNodeEnabledの有効、`auto`を無効へ対応付ける。`set_all_node_modes`は全プレイヤー（P1〜P8）を対象とし、`mode`は`manual`または`auto`で、`manual`をSetAllNodesEnabledの有効、`auto`を無効へ対応付ける。`set_bot_rate`はBotだけを対象とし、ratePpsは有限の正数とする。0・負数・文字列を受け付けない。
 
 `set_device_assignment`の解除は`target:null`、`set_device_preview`の停止は`deviceId:null`を指定する。nullを許すのはこの2項目だけとし、省略で代用しない。それ以外のDevice IDは空でない文字列とする。swap・replaceでは異なる2台を指定する。同一Device IDの指定は`400 invalid_request`とする。
 
@@ -220,11 +221,19 @@ JSONはUTF-8とし、APIが生成する応答のContent-Typeは`application/json
 
 ### 4.2. 成功応答
 
-操作の確定後に`200 OK`で次を返す。
+操作の確定後に`200 OK`で次を返す。`set_all_node_modes`だけは、次項の例外とする。
 
 ```json
 {"ok":true}
 ```
+
+`set_all_node_modes`の成功応答は、手動にできなかったノードを`skipped`に含める。
+
+```json
+{"ok":true,"skipped":["P3","P6"]}
+```
+
+`skipped`は`app`が返した、手動にできなかったプレイヤーのノードIDを昇順に並べた配列とする。`mode`が`auto`のとき、および全員を手動にできたときは`[]`とし、省略しない。手動にできなかったノードは、未接続などで対応するプレイヤーMCUが接続・識別済みでないノードであり、自動のまま残る。これは拒否ではない（[サーバー仕様4.2](./server.md#42-管理クライアントからの入力)）。
 
 成功は`app`で管理操作が確定したことを表し、MCUによる受信・適用完了を保証しない。変更後のSnapshotはこの応答に含めず、クライアントが`GET /api/state`で再取得する。操作間に別のイベントが入る可能性があるため、再取得したSnapshotを当該操作直後の状態に限定しない。
 

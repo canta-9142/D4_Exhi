@@ -71,6 +71,7 @@ Botのゲーム処理は`app`が実行する。B1〜B3のLED制御基板は担�
 | 操作 | 入力 | 戻り値 |
 |---|---|---|
 | `Execute(ctx, command)` | 管理操作 | 成否・拒否理由 |
+| `ExecuteWithResult(ctx, command)` | 管理操作 | 成否・拒否理由と、操作の結果（`SetAllNodesEnabled`だけが結果を持つ） |
 | `State(ctx)` | なし | 状態のSnapshot |
 
 `Execute`が受け付ける操作は以下とする。
@@ -81,6 +82,7 @@ Botのゲーム処理は`app`が実行する。B1〜B3のLED制御基板は担�
 | `Finish` | なし |
 | `Reset` | なし |
 | `SetNodeEnabled` | 論理ノードID、有効/無効 |
+| `SetAllNodesEnabled` | 有効/無効 |
 | `SetBotRate` | BotノードID、処理速度（pkt/s） |
 | `SetDeviceAssignment` | Device ID、対応先の種別とノードID（未指定で対応解除） |
 | `SwapDeviceAssignments` | 割当を交換する2台のDevice ID |
@@ -88,6 +90,8 @@ Botのゲーム処理は`app`が実行する。B1〜B3のLED制御基板は担�
 | `SetDevicePreview` | 確認表示を行うDevice ID（未指定で停止） |
 
 `SetNodeEnabled`の有効は手動操作、無効は自動操作を意味し、Preparing・Finishedでのみ受け付ける。論理ノード自体の生成・転送処理を停止する操作ではない。Playing中の管理操作による切替は拒否する。
+
+`SetAllNodesEnabled`は全プレイヤー（P1〜P8）に`SetNodeEnabled`と同じ切替を1つの入力イベントとして行う。`Execute`は成否だけを返し、手動にできなかったノードは`ExecuteWithResult`の結果の`Skipped`（ノードIDの昇順。なければ空）で返す。`Execute`は`ExecuteWithResult`の結果を捨てるだけで、既存の呼び出し元の動作は変わらない。
 
 Device IDの対応付けはプレイヤーMCU・LED制御MCUの両方を対象とし、`app`が管理する。初回は4.5に従って空きIDへ自動で仮割当し、管理者が実機の表示・点灯から配置を確認してWeb管理画面から本番の割当へ変更する。管理画面は通常の割当・解除、2台の割当交換、予備基板への交換を上記の操作で要求し、対応表を直接変更しない。LED制御ノードの担当リンクはLEDノード仕様の対応表に従う。
 
@@ -347,6 +351,7 @@ finished_atはゲーム時間と同じ基準で求めるため、遅れたTick�
 | Finish | Playing | Finishedへ遷移し、最終スコア・ランキング資格・順位を確定して、3.5に従ってゲーム記録を保存し、上位%（手動の終了では付けない）とプレイヤーへ送るベストスコアを確定 | 成否 |
 | Reset | 全フェーズ | Preparingへ遷移し、パケット・PID採番・スコア・タイマーを初期化 | 成否 |
 | SetNodeEnabled | PreparingまたはFinished。プレイヤーが指定され、手動操作にする場合は対応MCUが接続・識別済み | 操作状態を変更し、接続中ならconfigから再同期 | 成否 |
+| SetAllNodesEnabled | PreparingまたはFinished | P1〜P8を番号順に、SetNodeEnabledと同じ処理で切り替える。有効（手動）は対応MCUが接続・識別済みのノードだけに適用し、それ以外は自動のまま残す。無効（自動）は全員に適用する | 成否と、手動にできなかったノードID（昇順。無効では常に空） |
 | SetBotRate | 全フェーズ。Botが指定され、設定値が有限の正数 | 処理速度を変更 | 成否 |
 | SetDeviceAssignment | PreparingまたはFinished。識別済みDevice IDと同じ機器種別の有効な対応先で、対応が競合しない。解除も可 | 対応表を更新し、接続中なら対象MCUを再設定 | 成否 |
 | SwapDeviceAssignments | PreparingまたはFinished。同じ機器種別の異なる2台が割当済み | 2台の対応を一括で交換し、接続中なら再設定 | 成否 |
@@ -363,6 +368,8 @@ Start時に現在の操作状態からランキング対象情報を設定する
 SetBotRateで速度を変更した場合、Playing中でFIFOが空でなければ、変更時刻から新しい速度に基づく1パケット分の待ち時間を経て次回の転送を行う。FIFOが空の場合は、次にパケットが到着した時点から待ち時間を計る。PreparingとFinishedでは設定のみ変更し、転送を実行しない。
 
 SetNodeEnabledの対象はプレイヤーノードのみとする。Botは常に自動操作とし、この操作の対象に含めない。
+
+SetAllNodesEnabledは、手動にできないノードがあっても拒否しない（`device_disconnected`を返さない）。そのノードは自動のまま残して結果に含め、残りのノードを切り替える。受理するフェーズはSetNodeEnabledと同じで、Playingでは`phase_conflict`で拒否し、何も変更しない。各ノードの処理（準備完了の解除、`config`・`reset`・`phase`・`status`、Finishedなら`summary`の送信、確認表示の解除）はSetNodeEnabledと同じで、各MCU宛の送信順序も同じとする。MCUをまたぐ順序は、`config`・`reset`・`phase`がノードの番号順で、`status`・`summary`は入力イベントの最後にまとめて送り、MCU間の順序を定めない。入力イベントとしては1つなので、途中で別の入力イベントは処理しない。
 
 SetNodeEnabledで操作モードを変更した場合、対象ノードの準備完了をfalseにし、接続済みの対象MCUへ現在のモードを含む`config(preview=false)`、現在のFIFOの`reset`、現在の`phase`、現在の`status`の順に送信する。Finishedなら続けて`summary`を送る。同じセッション内の要求IDの履歴は維持する。同じモードの再設定では準備完了を保持する。Playing中の再接続・識別に伴う`config`は現在モードの通知であり、管理操作による切替や手動操作への復帰を意味しない。
 
