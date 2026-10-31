@@ -44,6 +44,7 @@ JSONはUTF-8とし、APIが生成する応答のContent-Typeは`application/json
 ```json
 {
   "game": {
+    "mode": "endless",
     "operation": "running",
     "durationSeconds": 90,
     "elapsedMs": 734100,
@@ -105,7 +106,8 @@ JSONはUTF-8とし、APIが生成する応答のContent-Typeは`application/json
 
 | gameの項目 | 型と意味 |
 |---|---|
-| operation | 運転状態の文字列。`stopped`（停止中）または`running`（運転中） |
+| mode | 運転方式の文字列。`endless`（連続運転）または`simultaneous`（一斉ゲーム方式）。サーバーの起動時に決まり、起動中は変わらない |
+| operation | 運転状態の文字列。`stopped`（停止中）または`running`（運転中）。一斉ゲーム方式では常に`running` |
 | durationSeconds | ルールで定める通常ラウンドのゲーム時間の整数秒。現行90 |
 | elapsedMs | 運転を開始してからの経過時間をミリ秒未満切り捨てで表した非負整数。停止中は0 |
 | canStart | 現在のStart受理条件を満たすかの真偽値。停止中だけtrue |
@@ -125,8 +127,11 @@ JSONはUTF-8とし、APIが生成する応答のContent-Typeは`application/json
 | fifoLength | 実際のFIFOの件数を表す非負整数。練習ラウンドと確認表示中も実際のFIFOの件数を返し、練習用キューは含めない |
 | score | 現在のラウンドの得点を表す整数。0〜2147483647。通常ラウンドの`playing`では現在の得点、`finished`では確定した得点、それ以外と練習ラウンドでは0 |
 | topPercent | `finished`で上位%が付いたプレイヤーは、上位何%かを表す1〜100の整数。それ以外はnull |
+| ready | 準備完了の真偽値。連続運転では常に`false`。一斉ゲーム方式は3.4 |
+| rankingEligible | ランキング資格の真偽値またはnull。連続運転では常にnull。一斉ゲーム方式は3.4 |
+| rank | 最終順位を表す1〜8の整数またはnull。連続運転では常にnull。一斉ゲーム方式は3.4 |
 
-一斉ゲームで返していた`ready`（準備完了）、`rankingEligible`、`rank`は、準備完了の廃止とラウンドが1人で行われること（順位を付けない）により、返さない。
+一斉ゲーム方式の`ready`（準備完了）、`rankingEligible`、`rank`は、3.4に定める。連続運転では、準備完了を設けず、ラウンドが1人で行われて順位を付けないため、`ready`は`false`、`rankingEligible`と`rank`は`null`で返す。
 
 `topPercent`は`app`が通常ラウンドの結果を確定したときの値をそのまま返す。求め方（母集団、切り上げ）は[ゲームのルール](../rules.md#上位)と[サーバー仕様3.5.6](./server.md#356-上位の計算)に従い、`web`は計算しない。結果の段階（`station`が`finished`）の間は、モード・割当の変更や再同期で再計算せず、結果の段階を出るとnullへ戻る。プレイヤーの`summary`の`topPercent`は50以下の値だけを送り、51以上の人には値を伏せて`bottomHalf=true`だけを送るが、この値は51〜100も含めて全員分を返す。そのため、`summary`の`topPercent`が整数のとき、この値は`summary`と同じである。`records.available`がfalseの起動では、この起動中に終わったラウンドだけを母集団として求めた値を返す。その場合も`summary`の`topPercent`はnull、`bottomHalf`はfalseになる。
 
@@ -153,7 +158,8 @@ JSONはUTF-8とし、APIが生成する応答のContent-Typeは`application/json
 
 | recordsの項目 | 型と意味 |
 |---|---|
-| recentRounds | 直近のラウンドの配列。この起動中に結果を確定した通常ラウンドを、新しい順に最大10件含める。打ち切ったラウンドと練習は含まない。なければ`[]` |
+| recentRounds | 直近のラウンドの配列。この起動中に結果を確定した通常ラウンドを、新しい順に最大10件含める。打ち切ったラウンドと練習は含まない。なければ`[]`。一斉ゲーム方式では常に`[]` |
+| gameBest | 一斉ゲーム方式で、終了したゲームでの、ランキング対象者の最高点を表すベストスコア。手動の終了でも返す。終了以外と、対象者のいないゲーム、連続運転ではnull |
 | hourlyBests | 1時間ごとのベストスコアの配列。対象の結果がある時間帯をすべて、新しい時間帯から順に含める。なければ`[]` |
 | allTimeBest | 通算のベストスコア。対象の結果がなければnull |
 | available | 起動時に記録ファイルを使えたかの真偽値 |
@@ -180,6 +186,8 @@ JSONはUTF-8とし、APIが生成する応答のContent-Typeは`application/json
 
 ### 3.3. 開始不可理由
 
+連続運転の開始不可理由を述べる。一斉ゲーム方式は3.4に従う。
+
 `startBlockers`には該当する条件を各1件返す。
 
 | code | 意味・追加項目 |
@@ -189,6 +197,35 @@ JSONはUTF-8とし、APIが生成する応答のContent-Typeは`application/json
 各要素は`code`を必須とし、追加の項目は持たない。該当する理由はすべて返し、理由が空であることと`canStart=true`を一致させる。一斉ゲームにあった`players_not_ready`（準備完了）と`pid_exhausted`（PIDの不足）は、準備完了の廃止と、PIDを周回させる採番（[サーバー仕様3.2](./server.md#32-論理ノード)）により返さない。
 
 管理画面は`canStart=true`の場合だけ運転開始の操作を有効にする。Snapshot取得後の状態変更もあるため、Startの要求時には`app`が受理条件を再検証する。
+
+### 3.4. 一斉ゲーム方式のSnapshot
+
+`game.mode`が`simultaneous`のとき、[サーバー仕様3.7](./server.md#37-一斉ゲーム方式)の状態を次の項目で表す。項目は省略せず、連続運転では下表の「連続運転」の値を返す。「3.2」とある欄は、3.2の定義に従う。
+
+| 項目 | 一斉ゲーム方式 | 連続運転 |
+|---|---|---|
+| game.phase | `Preparing`・`Playing`・`Finished` | `null` |
+| game.elapsedMs | ゲームの確定済み経過時間。`Preparing`とカウントダウン中は0。`Finished`は終了時点の値 | 運転開始からの経過時間 |
+| game.remainingSeconds | 0〜durationSecondsの整数。MCUの`status.remaining`と同じ計算で、カウントダウン中はdurationSeconds。`Preparing`はdurationSeconds、`Finished`は終了時点の値を保持 | 0 |
+| game.countdownSeconds | カウントダウン中の3・2・1、それ以外は0 | 0 |
+| players[].station | `Preparing`は`idle`（モード選択中は`select`）、`Playing`は`playing`、`Finished`は`finished` | 3.2 |
+| players[].round | モード選択後の準備完了と`Playing`で、選んだ種別（自動は`playing`で`normal`）。`Finished`は通常・自動で`normal`、練習で`tutorial`。それ以外は`null` | 3.2 |
+| players[].ready | 準備完了（モード選択を終えた手動のプレイヤー）。自動は`false` | `false` |
+| players[].rankingEligible | `Preparing`は`null`。`Playing`・`Finished`はそのゲームのランキング資格 | `null` |
+| players[].rank | `Finished`のランキング対象者は最終順位（1〜8）。それ以外は`null` | `null` |
+| players[].windowSeconds | 常に0 | 3.2 |
+| players[].score | 現在のスコア。練習のプレイヤーは0 | 3.2 |
+| players[].topPercent | `Finished`で上位%が付いたランキング対象者の1〜100の整数。手動の終了、対象外、`Finished`以外は`null` | 3.2 |
+| records.gameBest | 3.2 | `null` |
+
+開始不可理由は次の順で各1件返す。
+
+| code | 意味・追加項目 |
+|---|---|
+| not_preparing | `Preparing`ではない |
+| players_not_ready | manualの未準備プレイヤーがある。nodeIdsに対象IDを番号順で列挙 |
+
+`players_not_ready`の要素だけが`nodeIds`を含む。manualが0台なら準備完了の条件を満たす。Startの拒否は`not_preparing`が`phase_conflict`、`players_not_ready`が同名のcodeに対応する。連続運転では、この2件を返さない。
 
 ## 4. 管理操作
 
@@ -203,10 +240,12 @@ JSONはUTF-8とし、APIが生成する応答のContent-Typeは`application/json
 | type | dataの例 | appへの対応 |
 |---|---|---|
 | start | `{}` | Start |
-| stop | `{}` | Stop |
+| stop | `{}` | Stop（連続運転だけ） |
+| finish | `{}` | Finish（一斉ゲーム方式だけ） |
+| reset | `{}` | Reset（一斉ゲーム方式だけ） |
 | set_node_mode | `{"nodeId":"P1","mode":"manual"}` | SetNodeEnabled |
 | set_all_node_modes | `{"mode":"manual"}` | SetAllNodesEnabled |
-| return_to_bot | `{"nodeId":"P3"}` | ReturnToBot |
+| return_to_bot | `{"nodeId":"P3"}` | ReturnToBot（連続運転だけ） |
 | set_bot_rate | `{"nodeId":"B1","ratePps":1.5}` | SetBotRate |
 | set_device_assignment | `{"deviceId":"AABBCCDDEEFF","target":{"kind":"player","nodeId":"P1"}}` | SetDeviceAssignment |
 | swap_device_assignments | `{"firstDeviceId":"AABBCCDDEEFF","secondDeviceId":"112233445566"}` | SwapDeviceAssignments |
@@ -215,7 +254,7 @@ JSONはUTF-8とし、APIが生成する応答のContent-Typeは`application/json
 
 各操作の例は独立したものとし、swap・replaceの2台は同じ機器種別を想定する。表に示した各引数は必須とし、トップレベル・data・targetに未知のフィールドがある場合も拒否する。操作名、列挙値、ノードID、型、必須項目の不正は`400 invalid_request`とする。
 
-`set_node_mode`はプレイヤーだけを対象とし、`manual`をSetNodeEnabledの有効、`auto`を無効へ対応付ける。`set_all_node_modes`は全プレイヤー（P1〜P8）を対象とし、`mode`は`manual`または`auto`で、`manual`をSetAllNodesEnabledの有効、`auto`を無効へ対応付ける。`return_to_bot`はプレイヤーだけを対象とし、`nodeId`は`P1`〜`P8`とする。そのプレイヤーのラウンド・モード選択・結果を打ち切って待機へ戻す。操作モードは変えない（手動なら受付を続ける）。`set_bot_rate`はBotだけを対象とし、ratePpsは有限の正数とする。0・負数・文字列を受け付けない。一斉ゲームの`finish`と`reset`は廃止した。要求すると未知の操作として`400 invalid_request`になる。
+`set_node_mode`はプレイヤーだけを対象とし、`manual`をSetNodeEnabledの有効、`auto`を無効へ対応付ける。`set_all_node_modes`は全プレイヤー（P1〜P8）を対象とし、`mode`は`manual`または`auto`で、`manual`をSetAllNodesEnabledの有効、`auto`を無効へ対応付ける。`return_to_bot`はプレイヤーだけを対象とし、`nodeId`は`P1`〜`P8`とする。そのプレイヤーのラウンド・モード選択・結果を打ち切って待機へ戻す。操作モードは変えない（手動なら受付を続ける）。`set_bot_rate`はBotだけを対象とし、ratePpsは有限の正数とする。0・負数・文字列を受け付けない。現在の運転方式で受理しない操作（連続運転の`finish`・`reset`、一斉ゲーム方式の`stop`・`return_to_bot`）は、`409 phase_conflict`で拒否する。運転方式は起動時に決まるので、管理画面はSnapshotの`game.mode`で出す操作を切り替える。
 
 `set_device_assignment`の解除は`target:null`、`set_device_preview`の停止は`deviceId:null`を指定する。nullを許すのはこの2項目だけとし、省略で代用しない。それ以外のDevice IDは空でない文字列とする。swap・replaceでは異なる2台を指定する。同一Device IDの指定は`400 invalid_request`とする。
 
@@ -268,7 +307,8 @@ APIが生成するエラー応答は次の共通形式とする。状態取得�
 | 400 | invalid_request | JSON、未知の操作・フィールド、引数の型・範囲・必須項目などの不正 |
 | 404 | not_found | 未知のDevice IDまたはエンドポイント |
 | 405 | method_not_allowed | 既知のエンドポイントに対する未対応メソッド。Allowヘッダーで対応メソッドを返す |
-| 409 | phase_conflict | 現在の運転状態では受理できない操作。運転中のstart、停止中のstop・return_to_bot |
+| 409 | phase_conflict | 現在の運転状態・運転方式では受理できない操作。連続運転では、運転中のstart、停止中のstop・return_to_bot、finish・reset。一斉ゲーム方式では、`Preparing`以外のstart、`Playing`以外のfinish、`Playing`中のset_node_mode・set_all_node_modes・割当の操作、stop・return_to_bot |
+| 409 | players_not_ready | 一斉ゲーム方式で、manualの未準備プレイヤーがある。details.nodeIdsに対象IDを番号順で列挙 |
 | 409 | assignment_conflict | 通常割当の対象が他UIDに使用されているなど、対応が競合 |
 | 409 | device_disconnected | 操作に必要な機器が接続・識別済みでない |
 | 409 | device_kind_mismatch | 機器と割当先の種別、または交換する機器同士の種別が不一致 |
@@ -278,7 +318,7 @@ APIが生成するエラー応答は次の共通形式とする。状態取得�
 | 500 | internal_error | デバイス対応表の保存失敗、その他の内部エラー |
 | 503 | unavailable | アプリ停止中など、要求を受け付けられない状態。管理操作では6節に従い結果不明として扱う |
 
-Startの拒否理由は`not_stopped`だけで、HTTPエラーの`phase_conflict`へ対応付ける。複数の拒否理由がある操作では、該当する理由の一つを返す。codeの名前は、一斉ゲームの時代の`phase_conflict`のまま残す。変えると、管理画面の文言表とテストへの変更が広がるためである。
+連続運転のStartの拒否理由は`not_stopped`だけで、HTTPエラーの`phase_conflict`へ対応付ける。一斉ゲーム方式は3.4に従う。複数の拒否理由がある操作では、該当する理由の一つを返す。codeの名前は、一斉ゲームの時代の`phase_conflict`のまま残す。変えると、管理画面の文言表とテストへの変更が広がるためである。
 
 形式が不正な要求や、未知のDevice ID、操作の受理条件を満たさない要求では、要求された管理操作を適用しない。割当・解除・交換・付け替えでは、保存成功後に変更を確定して成功応答を返す。置換前の保存失敗・置換自体の失敗では`500 internal_error`を返し、その操作に伴う対応表・自動仮割当の対象外情報・操作モード・準備完了状態・確認表示を変更しない。ゲームの通常の時間進行はサーバー仕様に従って継続する。置換後の親ディレクトリ同期失敗では保存結果を不明とし、成功応答を返さずサーバーを停止する。クライアントは内部エラー・切断・タイムアウト時の結果不明として扱い、6節に従って自動再送せず、再起動後の状態を取得する。存在していて切断中のDevice IDは404にせず、対象操作が接続を必要とする場合に409で拒否する。
 
