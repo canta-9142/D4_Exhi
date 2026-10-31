@@ -23,7 +23,9 @@ JSONはUTF-8とし、APIが生成する応答のContent-Typeは`application/json
 | BotノードID | `B1`〜`B3` |
 | 機器・割当先の種別 | `player`・`led` |
 | LED制御ノードID | `B1`・`B2`・`B3`・`P1`・`P3`・`P5`・`P7` |
-| フェーズ | `Preparing`・`Playing`・`Finished` |
+| 運転状態 | `stopped`・`running` |
+| 筐体の段階 | `stopped`・`idle`・`select`・`playing`・`finished` |
+| ラウンドの種別 | `normal`・`tutorial` |
 | プレイヤーの操作モード | `manual`・`auto` |
 | Device ID | MCUの識別で得たUIDの文字列。そのまま照合し、別の表記へ補正しない |
 
@@ -35,32 +37,32 @@ JSONはUTF-8とし、APIが生成する応答のContent-Typeは`application/json
 
 本文なしで要求し、成功時は`200 OK`でSnapshotを返す。応答には`Cache-Control: no-store`を付ける。
 
-1回の`app.State`が返した整合したコピーをJSONへ変換する。項目ごとに別の時点の状態を読み直さない。GETは時間進行・生成・転送・準備完了・割当などを変更せず、ゲーム時刻も最後に確定した値を使用する。
+1回の`app.State`が返した整合したコピーをJSONへ変換する。項目ごとに別の時点の状態を読み直さない。GETは時間進行・生成・転送・割当などを変更せず、ゲーム時刻も最後に確定した値を使用する。
 
-以下は`players`・`bots`を一部省略した例である。実際の応答は全プレイヤー・全Botを含む。`records`は、13時台に1件の対象ゲームが終わった後のPreparingを表す。
+以下は`players`・`bots`を一部省略した例である。実際の応答は全プレイヤー・全Botを含む。運転中で、P1が通常ラウンドの62秒を残していて、13時台に1件のラウンドが終わった状態を表す。
 
 ```json
 {
   "game": {
-    "phase": "Preparing",
+    "operation": "running",
     "durationSeconds": 90,
-    "elapsedMs": 0,
-    "remainingSeconds": 90,
-    "countdownSeconds": 0,
+    "elapsedMs": 734100,
     "canStart": false,
     "startBlockers": [
-      {"code": "players_not_ready", "nodeIds": ["P1"]}
+      {"code": "not_stopped"}
     ]
   },
   "players": [
     {
       "nodeId": "P1",
       "mode": "manual",
-      "ready": false,
-      "fifoLength": 0,
-      "score": 0,
-      "rankingEligible": null,
-      "rank": null,
+      "station": "playing",
+      "round": "normal",
+      "countdownSeconds": 0,
+      "remainingSeconds": 62,
+      "windowSeconds": 0,
+      "fifoLength": 3,
+      "score": 118,
       "topPercent": null
     }
   ],
@@ -83,7 +85,9 @@ JSONはUTF-8とし、APIが生成する応答のContent-Typeは`application/json
   ],
   "preview": {"deviceId": "001122334455", "nodeId": "P1"},
   "records": {
-    "gameBest": null,
+    "recentRounds": [
+      {"nodeId": "P3", "score": 812, "topPercent": 1, "finishedAt": "2026-10-28T13:05:12+09:00"}
+    ],
     "hourlyBests": [
       {"hourStart": "2026-10-28T13:00:00+09:00", "score": 812, "nodeIds": ["P3"], "finishedAt": "2026-10-28T13:05:12+09:00"}
     ],
@@ -101,12 +105,10 @@ JSONはUTF-8とし、APIが生成する応答のContent-Typeは`application/json
 
 | gameの項目 | 型と意味 |
 |---|---|
-| phase | 現在のフェーズの文字列 |
-| durationSeconds | ルールで定めるゲーム時間の整数秒。現行90 |
-| elapsedMs | 確定済み経過時間をミリ秒未満切り捨てで表した非負整数。Preparingと、Playingの開始直後のカウントダウン中は0。Finishedは終了時点の値を保持 |
-| remainingSeconds | 0〜durationSecondsの整数。MCUの`status.remaining`と同じ計算・保持規則に従う。カウントダウン中はdurationSeconds |
-| countdownSeconds | ゲーム時間が始まるまでの秒数を表す0〜3の整数。Startの受理から3秒間のカウントダウン中は3・2・1、それ以外は0。MCUの`status.countdown`と同じ値 |
-| canStart | 現在のStart受理条件を満たすかの真偽値 |
+| operation | 運転状態の文字列。`stopped`（停止中）または`running`（運転中） |
+| durationSeconds | ルールで定める通常ラウンドのゲーム時間の整数秒。現行90 |
+| elapsedMs | 運転を開始してからの経過時間をミリ秒未満切り捨てで表した非負整数。停止中は0 |
+| canStart | 現在のStart受理条件を満たすかの真偽値。停止中だけtrue |
 | startBlockers | 満たしていないStart受理条件の配列。開始可能なら空配列 |
 
 `players`はP1〜P8の8件、`bots`はB1〜B3の3件を番号順に返す。機器が未接続でも論理ノードを省略しない。配列の区別でプレイヤー・Botを表し、Botは常に自動操作とする。
@@ -114,19 +116,19 @@ JSONはUTF-8とし、APIが生成する応答のContent-Typeは`application/json
 | playersの各要素 | 型と意味 |
 |---|---|
 | nodeId | プレイヤーノードID |
-| mode | `manual`または`auto` |
-| ready | サーバーが受理済みの準備完了状態。autoでは常にfalse |
-| fifoLength | 正本FIFOの件数を表す非負整数。確認表示中も正本の件数を返す |
-| score | 現在スコアの整数。0〜2147483647 |
-| rankingEligible | Preparingでは未確定を表すnull。Playing・Finishedでは当該ゲームのランキング資格を表す真偽値 |
-| rank | Finishedのランキング対象者は最終順位を表す1〜8の整数。Preparing・Playing、およびFinishedのランキング対象外はnull |
-| topPercent | Finishedで上位%が付いた対象者は、上位何%かを表す1〜100の整数。Preparing・Playing、Finishedのランキング対象外、手動の終了のときはnull |
+| mode | `manual`（受付）または`auto`（ボット固定） |
+| station | 筐体の段階の文字列。`stopped`（停止中）・`idle`（待機）・`select`（モード選択）・`playing`（ラウンド）・`finished`（結果） |
+| round | 行っているラウンドの種別。`playing`と`finished`では`normal`または`tutorial`（`finished`は常に`normal`）、それ以外はnull |
+| countdownSeconds | ラウンドが始まるまでの秒数を表す0〜3の整数。`playing`のカウントダウン中は3・2・1、それ以外は0。MCUの`status.countdown`と同じ値 |
+| remainingSeconds | 通常ラウンドの残り秒数を表す0〜durationSecondsの整数。通常ラウンドの`playing`で、MCUの`status.remaining`と同じ計算に従い、カウントダウン中はdurationSeconds。それ以外は0 |
+| windowSeconds | その段階が時間切れで待機へ戻るまでの秒数を表す0〜60の整数。`select`は20〜0、`finished`は30〜0、練習の`playing`は無操作の残り60〜0、それ以外は0。MCUの`status.window`と同じ値 |
+| fifoLength | 実際のFIFOの件数を表す非負整数。練習ラウンドと確認表示中も実際のFIFOの件数を返し、練習用キューは含めない |
+| score | 現在のラウンドの得点を表す整数。0〜2147483647。通常ラウンドの`playing`では現在の得点、`finished`では確定した得点、それ以外と練習ラウンドでは0 |
+| topPercent | `finished`で上位%が付いたプレイヤーは、上位何%かを表す1〜100の整数。それ以外はnull |
 
-`rankingEligible`はStartで設定した資格とゲーム中の失効を反映し、Finishedでは確定した結果を保持する。Finishedでのモード・割当変更から再計算しない。Reset後はPreparingの`null`へ戻す。
+一斉ゲームで返していた`ready`（準備完了）、`rankingEligible`、`rank`は、準備完了の廃止とラウンドが1人で行われること（順位を付けない）により、返さない。
 
-`rank`は`app`がFinishedへの遷移時に確定した順位をそのまま返す。順位の決め方は[ゲームのルール](../rules.md#最終順位)に従い、同点の対象者は同順位とする。`rankingEligible`と同じく、Finishedでのモード・割当変更から再計算しない。Reset後はPreparingの`null`へ戻す。Playing中は途中の順位を返さず、常にnullとする。Finishedでは、この値はプレイヤーの`summary`の`rank`と同じであり、`rank`が整数であることと`rankingEligible`が`true`であることは同値となる。
-
-`topPercent`は`app`がFinishedへの遷移時に確定した上位%をそのまま返す。求め方（母集団、切り上げ）は[ゲームのルール](../rules.md#上位)と[サーバー仕様3.5.6](./server.md#356-上位の計算)に従い、`web`は計算しない。`rank`と同じく、Finishedでのモード・割当変更から再計算せず、Reset後はnullへ戻す。プレイヤーの`summary`の`topPercent`は50以下の値だけを送り、51以上の人には値を伏せて`bottomHalf=true`だけを送るが、この値は51〜100も含めて全員分を返す。そのため、`summary`の`topPercent`が整数のとき、この値は`summary`と同じである。`records.available`がfalseの起動では、この起動中に終わったゲームだけを母集団として求めた値を返す。その場合も`summary`の`topPercent`はnull、`bottomHalf`はfalseになる。
+`topPercent`は`app`が通常ラウンドの結果を確定したときの値をそのまま返す。求め方（母集団、切り上げ）は[ゲームのルール](../rules.md#上位)と[サーバー仕様3.5.6](./server.md#356-上位の計算)に従い、`web`は計算しない。結果の段階（`station`が`finished`）の間は、モード・割当の変更や再同期で再計算せず、結果の段階を出るとnullへ戻る。プレイヤーの`summary`の`topPercent`は50以下の値だけを送り、51以上の人には値を伏せて`bottomHalf=true`だけを送るが、この値は51〜100も含めて全員分を返す。そのため、`summary`の`topPercent`が整数のとき、この値は`summary`と同じである。`records.available`がfalseの起動では、この起動中に終わったラウンドだけを母集団として求めた値を返す。その場合も`summary`の`topPercent`はnull、`bottomHalf`はfalseになる。
 
 | botsの各要素 | 型と意味 |
 |---|---|
@@ -145,43 +147,48 @@ JSONはUTF-8とし、APIが生成する応答のContent-Typeは`application/json
 | connected | 当該機器の有効なシリアル接続があるかの真偽値 |
 | assignment | 正式な割当の`{"kind":"player","nodeId":"P1"}`形式、またはnull。kindは機器種別と一致する |
 
-`preview`がある場合は対象の`deviceId`と確認用の`nodeId`を含める。機器種別は`devices`から取得する。未割当基板への一時的なP1設定もここへ返し、`devices[].assignment`を変更しない。SnapshotのFIFO・スコア・準備完了状態へ確認用の値を混ぜない。
+`preview`がある場合は対象の`deviceId`と確認用の`nodeId`を含める。機器種別は`devices`から取得する。未割当基板への一時的なP1設定もここへ返し、`devices[].assignment`を変更しない。SnapshotのFIFO・スコアへ確認用の値を混ぜない。
 
 `records`はベストスコアと記録ファイルの状態を表す。`records`の各項目も省略しない。集計の対象・同点・時間帯の規則は[サーバー仕様3.5.5](./server.md#355-ベストスコアの集計)と[ゲームのルール](../rules.md#ベストスコア)に従う。
 
 | recordsの項目 | 型と意味 |
 |---|---|
-| gameBest | Finishedのゲームでの、ランキング対象者の最高点を表すベストスコア。手動の終了でも返す。Preparing・Playingと、対象者のいないゲームではnull |
+| recentRounds | 直近のラウンドの配列。この起動中に結果を確定した通常ラウンドを、新しい順に最大10件含める。打ち切ったラウンドと練習は含まない。なければ`[]` |
 | hourlyBests | 1時間ごとのベストスコアの配列。対象の結果がある時間帯をすべて、新しい時間帯から順に含める。なければ`[]` |
 | allTimeBest | 通算のベストスコア。対象の結果がなければnull |
 | available | 起動時に記録ファイルを使えたかの真偽値 |
 | unavailableReason | availableがfalseのとき、記録ファイルを使えなかった理由の文字列。trueのときはnull |
 | saveFailed | 直近のゲーム記録の保存に失敗したかの真偽値。次の保存に成功するとfalseに戻る。起動後にまだ保存していない場合と、availableがfalseの場合はfalse |
 
+| recentRoundsの各要素 | 型と意味 |
+|---|---|
+| nodeId | そのラウンドを遊んだプレイヤーノードID |
+| score | そのラウンドの得点。0〜2147483647 |
+| topPercent | そのラウンドの結果を確定したときの上位%を表す1〜100の整数。`records.available`がfalseの起動では、この起動中に終わったラウンドだけを母集団とした値 |
+| finishedAt | そのラウンドのゲーム時間が終わった時刻 |
+
 | ベストスコアの項目 | 型と意味 |
 |---|---|
 | hourStart | hourlyBestsの要素だけに含める。時間帯の始まりの正時 |
 | score | 最高点の整数。0〜2147483647 |
-| nodeIds | その点を出したプレイヤーノードIDの配列。同点の対象者を全員、番号順に含める。1件以上 |
-| finishedAt | その点を出したゲームが終わった時刻 |
+| nodeIds | その点を出したプレイヤーノードIDの配列。旧来の一斉ゲームの同点の対象者を全員、番号順に含める。1件以上 |
+| finishedAt | その点を出したラウンドまたはゲームが終わった時刻 |
 
 時刻は日本時間の`+09:00`を付けたRFC3339形式の、秒までの文字列とする（例: `2026-10-28T13:05:12+09:00`）。秒未満は切り捨てる。
 
-`available`がfalseのとき、`hourlyBests`・`allTimeBest`はこの起動中に終わったゲームだけの集計となる。管理画面は、その旨と`unavailableReason`を表示する。`unavailableReason`はログと同じ内容の説明であり、画面の分岐に文面を使用しない。
+`available`がfalseのとき、`recentRounds`・`hourlyBests`・`allTimeBest`はこの起動中に終わったラウンドだけの集計となる。管理画面は、その旨と`unavailableReason`を表示する。`unavailableReason`はログと同じ内容の説明であり、画面の分岐に文面を使用しない。
 
 ### 3.3. 開始不可理由
 
-`startBlockers`には該当する条件を次の順で各1件返す。
+`startBlockers`には該当する条件を各1件返す。
 
 | code | 意味・追加項目 |
 |---|---|
-| not_preparing | Preparingではない |
-| pid_exhausted | 次ゲームの最大生成数1000件分の未発行PIDがない。Resetで採番を0に戻すため、通常は発生しない |
-| players_not_ready | manualの未準備プレイヤーがある。nodeIdsに対象IDを番号順で列挙 |
+| not_stopped | 停止中ではない（運転中である） |
 
-各要素は`code`を必須とし、`nodeIds`は`players_not_ready`の場合だけ含める。該当する理由はすべて返し、理由が空であることと`canStart=true`を一致させる。manualが0台なら準備完了条件を満たす。
+各要素は`code`を必須とし、追加の項目は持たない。該当する理由はすべて返し、理由が空であることと`canStart=true`を一致させる。一斉ゲームにあった`players_not_ready`（準備完了）と`pid_exhausted`（PIDの不足）は、準備完了の廃止と、PIDを周回させる採番（[サーバー仕様3.2](./server.md#32-論理ノード)）により返さない。
 
-管理画面はmanualノードの準備状況と開始不可理由を表示し、`canStart=true`の場合だけ開始操作を有効にする。Snapshot取得後の状態変更もあるため、Startの要求時には`app`が受理条件を再検証する。
+管理画面は`canStart=true`の場合だけ運転開始の操作を有効にする。Snapshot取得後の状態変更もあるため、Startの要求時には`app`が受理条件を再検証する。
 
 ## 4. 管理操作
 
@@ -196,10 +203,10 @@ JSONはUTF-8とし、APIが生成する応答のContent-Typeは`application/json
 | type | dataの例 | appへの対応 |
 |---|---|---|
 | start | `{}` | Start |
-| finish | `{}` | Finish |
-| reset | `{}` | Reset |
+| stop | `{}` | Stop |
 | set_node_mode | `{"nodeId":"P1","mode":"manual"}` | SetNodeEnabled |
 | set_all_node_modes | `{"mode":"manual"}` | SetAllNodesEnabled |
+| return_to_bot | `{"nodeId":"P3"}` | ReturnToBot |
 | set_bot_rate | `{"nodeId":"B1","ratePps":1.5}` | SetBotRate |
 | set_device_assignment | `{"deviceId":"AABBCCDDEEFF","target":{"kind":"player","nodeId":"P1"}}` | SetDeviceAssignment |
 | swap_device_assignments | `{"firstDeviceId":"AABBCCDDEEFF","secondDeviceId":"112233445566"}` | SwapDeviceAssignments |
@@ -208,7 +215,7 @@ JSONはUTF-8とし、APIが生成する応答のContent-Typeは`application/json
 
 各操作の例は独立したものとし、swap・replaceの2台は同じ機器種別を想定する。表に示した各引数は必須とし、トップレベル・data・targetに未知のフィールドがある場合も拒否する。操作名、列挙値、ノードID、型、必須項目の不正は`400 invalid_request`とする。
 
-`set_node_mode`はプレイヤーだけを対象とし、`manual`をSetNodeEnabledの有効、`auto`を無効へ対応付ける。`set_all_node_modes`は全プレイヤー（P1〜P8）を対象とし、`mode`は`manual`または`auto`で、`manual`をSetAllNodesEnabledの有効、`auto`を無効へ対応付ける。`set_bot_rate`はBotだけを対象とし、ratePpsは有限の正数とする。0・負数・文字列を受け付けない。
+`set_node_mode`はプレイヤーだけを対象とし、`manual`をSetNodeEnabledの有効、`auto`を無効へ対応付ける。`set_all_node_modes`は全プレイヤー（P1〜P8）を対象とし、`mode`は`manual`または`auto`で、`manual`をSetAllNodesEnabledの有効、`auto`を無効へ対応付ける。`return_to_bot`はプレイヤーだけを対象とし、`nodeId`は`P1`〜`P8`とする。そのプレイヤーのラウンド・モード選択・結果を打ち切って待機へ戻す。操作モードは変えない（手動なら受付を続ける）。`set_bot_rate`はBotだけを対象とし、ratePpsは有限の正数とする。0・負数・文字列を受け付けない。一斉ゲームの`finish`と`reset`は廃止した。要求すると未知の操作として`400 invalid_request`になる。
 
 `set_device_assignment`の解除は`target:null`、`set_device_preview`の停止は`deviceId:null`を指定する。nullを許すのはこの2項目だけとし、省略で代用しない。それ以外のDevice IDは空でない文字列とする。swap・replaceでは異なる2台を指定する。同一Device IDの指定は`400 invalid_request`とする。
 
@@ -217,7 +224,7 @@ JSONはUTF-8とし、APIが生成する応答のContent-Typeは`application/json
 {"type":"set_device_preview","data":{"deviceId":null}}
 ```
 
-`target`のkindとnodeIdの組み合わせは2節の範囲に従う。既知機器の種別との不一致、割当の競合、フェーズ、接続状態、準備完了などの条件は、[サーバー仕様4.2](./server.md#42-管理クライアントからの入力)に従って`app`が処理時点で検証する。複数クライアントからの要求も`app`の受け付け順で処理する。
+`target`のkindとnodeIdの組み合わせは2節の範囲に従う。既知機器の種別との不一致、割当の競合、運転状態、担当ノードの操作モード、接続状態などの条件は、[サーバー仕様4.2](./server.md#42-管理クライアントからの入力)に従って`app`が処理時点で検証する。複数クライアントからの要求も`app`の受け付け順で処理する。
 
 ### 4.2. 成功応答
 
@@ -247,9 +254,9 @@ APIが生成するエラー応答は次の共通形式とする。状態取得�
 {
   "ok": false,
   "error": {
-    "code": "players_not_ready",
-    "message": "準備が完了していないプレイヤーがいます。",
-    "details": {"nodeIds": ["P1"]}
+    "code": "phase_conflict",
+    "message": "運転中のため開始できません。",
+    "details": {}
   }
 }
 ```
@@ -261,19 +268,17 @@ APIが生成するエラー応答は次の共通形式とする。状態取得�
 | 400 | invalid_request | JSON、未知の操作・フィールド、引数の型・範囲・必須項目などの不正 |
 | 404 | not_found | 未知のDevice IDまたはエンドポイント |
 | 405 | method_not_allowed | 既知のエンドポイントに対する未対応メソッド。Allowヘッダーで対応メソッドを返す |
-| 409 | phase_conflict | 現在のフェーズでは受理できない操作 |
-| 409 | pid_exhausted | Startに必要な未発行PIDが不足。Resetで採番を0に戻すため、通常は発生しない |
-| 409 | players_not_ready | manualの未準備プレイヤーがある。details.nodeIdsに対象IDを番号順で列挙 |
+| 409 | phase_conflict | 現在の運転状態では受理できない操作。運転中のstart、停止中のstop・return_to_bot |
 | 409 | assignment_conflict | 通常割当の対象が他UIDに使用されているなど、対応が競合 |
 | 409 | device_disconnected | 操作に必要な機器が接続・識別済みでない |
 | 409 | device_kind_mismatch | 機器と割当先の種別、または交換する機器同士の種別が不一致 |
 | 409 | device_not_assigned | swap・replaceの交換元など、割当済みである必要がある機器が未割当 |
-| 409 | manual_mode_conflict | manualのプレイヤーに対する確認表示の開始 |
+| 409 | manual_mode_conflict | manualのプレイヤーに対する確認表示の開始、運転中に担当が変わるプレイヤーがmanual（割当・交換・付け替え） |
 | 415 | unsupported_media_type | POSTのContent-Typeがapplication/jsonでない |
 | 500 | internal_error | デバイス対応表の保存失敗、その他の内部エラー |
 | 503 | unavailable | アプリ停止中など、要求を受け付けられない状態。管理操作では6節に従い結果不明として扱う |
 
-Startで複数の条件を満たさない場合の409は、3.3の順で最初に該当する理由を返す。`not_preparing`はHTTPエラーの`phase_conflict`へ対応付け、残りの2種類は同じcodeを使用する。その他の操作で複数の拒否理由がある場合は、該当する理由の一つを返す。
+Startの拒否理由は`not_stopped`だけで、HTTPエラーの`phase_conflict`へ対応付ける。複数の拒否理由がある操作では、該当する理由の一つを返す。codeの名前は、一斉ゲームの時代の`phase_conflict`のまま残す。変えると、管理画面の文言表とテストへの変更が広がるためである。
 
 形式が不正な要求や、未知のDevice ID、操作の受理条件を満たさない要求では、要求された管理操作を適用しない。割当・解除・交換・付け替えでは、保存成功後に変更を確定して成功応答を返す。置換前の保存失敗・置換自体の失敗では`500 internal_error`を返し、その操作に伴う対応表・自動仮割当の対象外情報・操作モード・準備完了状態・確認表示を変更しない。ゲームの通常の時間進行はサーバー仕様に従って継続する。置換後の親ディレクトリ同期失敗では保存結果を不明とし、成功応答を返さずサーバーを停止する。クライアントは内部エラー・切断・タイムアウト時の結果不明として扱い、6節に従って自動再送せず、再起動後の状態を取得する。存在していて切断中のDevice IDは404にせず、対象操作が接続を必要とする場合に409で拒否する。
 
@@ -291,4 +296,4 @@ Startで複数の条件を満たさない場合の409は、3.3の順で最初に
 
 HTTP要求のクライアント側タイムアウトは5秒とする。初回の状態取得が成功するまでは管理操作を無効にする。状態取得に失敗した場合は前回値を保持したまま通信途絶を明示し、次の取得成功まで管理操作を無効にする。取得したスコア・残り時間を表示し、画面側で独自の加点やカウントダウンを行わない。
 
-管理操作は通信切断・タイムアウト・HTTPエラーのいずれでも自動再送しない。切断・タイムアウト・内部エラー・`503 unavailable`では操作結果が不明な場合があり、既に`app`へ到達した操作が取り消されたとはみなさない。`503 unavailable`は、`app`が操作を受け取ったあとに停止した場合にも返るため、操作が適用されなかったことを表さない。結果不明を表示して状態を再取得し、必要な再操作は管理者が判断する。特にswapの再送は割当を元に戻し、resetの再送は再度初期化するため、GETと同じ再試行処理を使用しない。
+管理操作は通信切断・タイムアウト・HTTPエラーのいずれでも自動再送しない。切断・タイムアウト・内部エラー・`503 unavailable`では操作結果が不明な場合があり、既に`app`へ到達した操作が取り消されたとはみなさない。`503 unavailable`は、`app`が操作を受け取ったあとに停止した場合にも返るため、操作が適用されなかったことを表さない。結果不明を表示して状態を再取得し、必要な再操作は管理者が判断する。特にswapの再送は割当を元に戻し、stopの再送は運転を止め、return_to_botの再送は次に始まったラウンドを打ち切るため、GETと同じ再試行処理を使用しない。
