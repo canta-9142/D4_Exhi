@@ -69,6 +69,7 @@ void publish_display_snapshot(uint32_t elapsedMs) {
                                  pswPressedMask, phase, mode, synced, awaitingStatus, readyHoldMs, readyPending};
 #ifndef PLAYER_PACKET_DEMO
   snapshot.preview = serverLink.preview();
+  snapshot.chooseRound = serverLink.choose_pending();
   snapshot.summary = serverLink.summary();
   const bool finished = !snapshot.preview && snapshot.phase == GamePhase::Finished;
   const bool resultReady = finished && finished_state(snapshot) == FinishedState::Ready;

@@ -23,6 +23,10 @@ constexpr int GAIN_START_Y = GAIN_LANE_Y + GAIN_LANE_HEIGHT - GAIN_TEXT_HEIGHT;
 constexpr int BUTTON_FRAME_Y = 241, BUTTON_FRAME_WIDTH = 119, BUTTON_FRAME_HEIGHT = 79;
 constexpr int button_frame_x(int index) { return index * 120 + 1; }
 
+// 見出しの隅に出す、段階の残り秒数（モード選択・結果）。10秒以下は注意色。結果②のヘッダーの絵（x=200〜）と重ねない。
+constexpr int HEADER_WINDOW_X = 144, HEADER_WINDOW_Y = 20, HEADER_WINDOW_WIDTH = 56, HEADER_WINDOW_HEIGHT = 24;
+constexpr int WINDOW_WARNING_SECONDS = 10;
+
 // 待機の右の情報欄。状態の下から枠の上端までに、長押しの案内と2秒で満ちるバーを出す。
 constexpr int IDLE_GUIDE_Y = 113, IDLE_GUIDE_HEIGHT = 127;
 constexpr int IDLE_BAR_X = 364, IDLE_BAR_Y = 152, IDLE_BAR_WIDTH = 112, IDLE_BAR_HEIGHT = 14;

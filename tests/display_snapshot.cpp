@@ -169,6 +169,77 @@ int main() {
   standbyAuto.mode = ControlMode::Auto; // ボット固定は準備完了の表示にしない。
   assert(display_screen(standbyAuto) == DisplayScreen::Idle && lobby_state(standbyAuto) == LobbyState::Auto);
 
+  // モード選択: 左から2番目の枠にTUTORIAL、3番目の枠にNORMAL。見出しの隅に残り秒数を出す。
+  auto select = idle;
+  select.phase = GamePhase::Select;
+  select.status = {0, 0, false, true};
+  select.status.window = 20;
+  assert(display_screen(select) == DisplayScreen::Select && lobby_screen(select) && !idle_guide(select));
+  assert(lobby_state(select) == LobbyState::Manual && header_window(select) == 20);
+  assert(!displayed_cards(select)[0].active); // モード選択ではパケットを流さない。
+  auto selectEnter = display_changes(idle, select, false);
+  assert(selectEnter.full && selectEnter.lobbyBody && selectEnter.headerWindow && selectEnter.cards.none());
+  assert(selectEnter.buttons == 0 && !selectEnter.idleGuide && !selectEnter.idleArrows);
+  auto selectArea = display_damage(selectEnter, false);
+  assert(selectArea.containsPixel(0, 0) && selectArea.containsPixel(479, 319));
+  // 残り秒数は1秒ごとに、見出しの隅だけを描き直す。
+  auto selectTick = select;
+  selectTick.status.window = 19;
+  auto sd = display_changes(select, selectTick, false);
+  assert(sd.headerWindow && !sd.lobbyBody && !sd.lobbyHeader && !sd.full && !sd.label);
+  auto tickArea = display_damage(sd, false);
+  assert(tickArea.containsPixel(HEADER_WINDOW_X, HEADER_WINDOW_Y) && !tickArea.containsPixel(0, 81) && !tickArea.containsPixel(24, 56));
+  assert(!tickArea.containsPixel(360, 0) && !tickArea.containsPixel(24, 60)); // 自ノードの札とモード表示の行には触れない。
+  assert(HEADER_WINDOW_X + HEADER_WINDOW_WIDTH <= TOP_ART_X && HEADER_WINDOW_Y + HEADER_WINDOW_HEIGHT < 80);
+  assert(HEADER_WINDOW_Y + HEADER_WINDOW_HEIGHT <= RESULT_MODE_Y); // モード表示の行とも重ねない。
+  selectTick.status.window = WINDOW_WARNING_SECONDS; // 10秒以下は注意色。色も秒数から決まるので、秒数の変化で描き直す。
+  assert(display_changes(select, selectTick, false).headerWindow && header_window(selectTick) == 10);
+  selectTick.status.window = 0; // 時間制限がない（一斉ゲーム方式）。残り秒数は出さない。
+  assert(header_window(selectTick) == -1 && display_changes(select, selectTick, false).headerWindow);
+  assert(!display_changes(selectTick, selectTick, false).any());
+  auto selectKnown = select;
+  selectKnown.status.known = false;
+  assert(lobby_state(selectKnown) == LobbyState::Waiting && header_window(selectKnown) == -1);
+  sd = display_changes(select, selectKnown, false);
+  assert(sd.lobbyBody && sd.headerWindow && sd.lobbyHeader && !sd.full);
+  selectKnown = select;
+  selectKnown.synced = false;
+  assert(lobby_state(selectKnown) == LobbyState::Waiting && header_window(selectKnown) == -1);
+  // 押下・長押しの進捗は、モード選択の画面を描き直さない（選択は押下の立ち上がりでchooseを送る）。
+  auto selectPressed = select;
+  selectPressed.pressedMask = 6;
+  selectPressed.readyHoldMs = 1200;
+  assert(!display_changes(select, selectPressed, false).any());
+  // 選んだ枠を強調し、確認待ちの間は本文を確認中の表示にする。選び直しで強調する枠も描き直す。
+  auto chosen = select;
+  chosen.chooseRound = RoundKind::Tutorial;
+  assert(lobby_state(chosen) == LobbyState::Confirming);
+  sd = display_changes(select, chosen, false);
+  assert(sd.lobbyBody && !sd.headerWindow && !sd.full);
+  auto chosenNormal = chosen;
+  chosenNormal.chooseRound = RoundKind::Normal;
+  assert(display_changes(chosen, chosenNormal, false).lobbyBody);
+  assert(display_changes(chosenNormal, select, false).lobbyBody);
+  chosenNormal.readyPending = true; // モード選択の確認待ちはchooseだけで決まる。readyは関係しない。
+  assert(!display_changes(chosen, chosen, false).any());
+  auto readyOnly = select;
+  readyOnly.readyPending = true;
+  assert(lobby_state(readyOnly) == LobbyState::Manual && !display_changes(select, readyOnly, false).any());
+  auto selectAuto = select;
+  selectAuto.mode = ControlMode::Auto;
+  assert(lobby_state(selectAuto) == LobbyState::Auto && display_screen(selectAuto) == DisplayScreen::Select);
+  sd = display_changes(select, selectAuto, false);
+  assert(sd.lobbyBody && sd.lobbyHeader && !sd.full);
+  // 選択を終えてPlayingに移ると、パケットの画面へ全描画で戻る（練習・通常とも）。
+  auto roundStart = chosen;
+  roundStart.phase = GamePhase::Playing;
+  roundStart.chooseRound = RoundKind::None;
+  assert(display_screen(roundStart) == DisplayScreen::Playing && display_changes(chosen, roundStart, false).full);
+  auto timeout = chosen;
+  timeout.phase = GamePhase::Idle;
+  timeout.chooseRound = RoundKind::None;
+  assert(display_screen(timeout) == DisplayScreen::Idle && display_changes(chosen, timeout, false).full);
+
   auto result = displayed;
   result.phase = GamePhase::Finished;
   result.summary = {INT32_MAX, 1, true, true, 1, true};

@@ -31,6 +31,7 @@ struct DisplaySnapshot {
   uint16_t finishedProgress = 1000;
   bool previewLit = true;
   bool countdownGo = false;
+  RoundKind chooseRound = RoundKind::None; // chooseを送り、phase(Playing)を待っている選択
   ResultPage resultPage = ResultPage::Score;
   uint16_t topProgress = 1000;
   TopArtFrame topArt{}; // ②のヘッダーのドット絵
@@ -50,7 +51,7 @@ inline bool countdown_enabled(const DisplaySnapshot& s) {
 
 // Closedは停止中（phase=Preparing）の休止中の表示。Idleはボットとしてパケットが流れる待機。
 // Standbyは一斉ゲーム方式で、モード選択を終えた準備完了の待機。
-enum class DisplayScreen : uint8_t { Playing, Closed, Finished, Preview, Countdown, Idle, Standby };
+enum class DisplayScreen : uint8_t { Playing, Closed, Finished, Preview, Countdown, Idle, Standby, Select };
 
 // 待機・停止中・モード選択で、操作を受け付けられる状態か。取得前は接続・同期の表示を優先する。
 enum class LobbyState : uint8_t { Waiting, Auto, Manual, Confirming, Ready };
@@ -59,7 +60,8 @@ inline LobbyState lobby_state(const DisplaySnapshot& s) {
   if (s.selfId == NodeId::None || !s.synced || s.awaitingStatus || !s.status.known) return LobbyState::Waiting;
   if (s.mode == ControlMode::Auto) return LobbyState::Auto;
   if (s.phase == GamePhase::Idle && s.status.ready) return LobbyState::Ready;
-  if (s.readyPending) return LobbyState::Confirming;
+  // 確認待ちは、モード選択ではchoose、それ以外ではreadyの送信後。
+  if (s.phase == GamePhase::Select ? s.chooseRound != RoundKind::None : s.readyPending) return LobbyState::Confirming;
   return LobbyState::Manual;
 }
 
@@ -69,6 +71,7 @@ inline DisplayScreen display_screen(const DisplaySnapshot& s) {
   switch (s.phase) {
     case GamePhase::Preparing: return DisplayScreen::Closed;
     case GamePhase::Idle: return lobby_state(s) == LobbyState::Ready ? DisplayScreen::Standby : DisplayScreen::Idle;
+    case GamePhase::Select: return DisplayScreen::Select;
     case GamePhase::Finished: return DisplayScreen::Finished;
     default: return DisplayScreen::Playing;
   }
@@ -76,7 +79,7 @@ inline DisplayScreen display_screen(const DisplaySnapshot& s) {
 // 本文の全体を描き直す画面（案内の文字が中心で、パケットは流れない）。
 inline bool lobby_screen(const DisplaySnapshot& s) {
   const DisplayScreen screen = display_screen(s);
-  return screen == DisplayScreen::Closed || screen == DisplayScreen::Standby;
+  return screen == DisplayScreen::Closed || screen == DisplayScreen::Standby || screen == DisplayScreen::Select;
 }
 // 待機で、両端の長押しの案内（右の情報欄の文と、両端の枠の矢印）を出すか。
 inline bool idle_guide(const DisplaySnapshot& s) {
@@ -148,6 +151,12 @@ inline int32_t displayed_final_score(const DisplaySnapshot& s) {
   return static_cast<int32_t>(uint64_t(s.summary.score) * (1000000000 - left * left * left) / 1000000000);
 }
 
+// 見出しの隅に出す段階の残り秒数。モード選択で、操作を受け付けられる状態のとき。出さないときは-1。
+inline int header_window(const DisplaySnapshot& s) {
+  const bool shown = display_screen(s) == DisplayScreen::Select && lobby_state(s) != LobbyState::Waiting;
+  return shown && s.status.window >= 1 ? s.status.window : -1;
+}
+
 inline const PacketAnimation::Snapshot& displayed_cards(const DisplaySnapshot& s) {
   static const PacketAnimation::Snapshot empty{};
   const bool cardPhase = s.phase == GamePhase::Playing || s.phase == GamePhase::Idle;
@@ -175,7 +184,7 @@ struct DisplayChanges {
   uint8_t buttons = 0;
   bool self = false, label = false, score = false, remaining = false, ready = false, rank = false, gains = false;
   bool leftColumn = false, rightMargin = false; // 炎・マスコット・コンボの演出を描く左の列とカード欄の右の余白
-  bool full = false, lobbyHeader = false, lobbyBody = false;
+  bool full = false, lobbyHeader = false, lobbyBody = false, headerWindow = false;
   bool idleGuide = false, idleBar = false, idleArrows = false; // 待機の右の情報欄の案内・バーと、両端の枠の矢印
   bool resultHeader = false, resultBody = false, resultScore = false, resultRank = false, resultAccent = false;
   bool previewBody = false, countdownBody = false;
@@ -183,7 +192,7 @@ struct DisplayChanges {
   uint8_t topCell = 0; // 点滅で描き直すマスの番号（1〜50）。0は描き直さない。
   bool topArt = false; // ②のヘッダーのドット絵の範囲
   bool any() const {
-    return resultHeader || resultBody || resultScore || resultRank || resultAccent || topBody || topCurve || topCell || topArt || previewBody || countdownBody || full || lobbyHeader || lobbyBody || idleGuide || idleBar || idleArrows || cards.any() || buttons || self || label || score || remaining || ready || rank || gains || leftColumn || rightMargin;
+    return resultHeader || resultBody || resultScore || resultRank || resultAccent || topBody || topCurve || topCell || topArt || previewBody || countdownBody || full || lobbyHeader || lobbyBody || headerWindow || idleGuide || idleBar || idleArrows || cards.any() || buttons || self || label || score || remaining || ready || rank || gains || leftColumn || rightMargin;
   }
 };
 
@@ -237,9 +246,13 @@ inline DisplayChanges display_changes(const DisplaySnapshot& previous, const Dis
     changes.label = false;
     // 準備完了の待機は、選んだ種別（status.round）も本文に出す。
     // 本文が変わるのは、取得中かどうか。操作モードや長押しの状態は、停止中と準備完了の本文に出さない。
-    changes.lobbyBody = first || (lobby_state(previous) == LobbyState::Waiting) != (state == LobbyState::Waiting) ||
+    // モード選択は、操作を受け付ける状態（選択・確認待ち・自動）と、選んだ種別が本文に出る。
+    const bool select = display_screen(next) == DisplayScreen::Select;
+    changes.lobbyBody = first || (select ? lobby_state(previous) != state : (lobby_state(previous) == LobbyState::Waiting) != (state == LobbyState::Waiting)) ||
                         (state == LobbyState::Waiting && changes.lobbyHeader) ||
-                        (display_screen(next) == DisplayScreen::Standby && previous.status.round != next.status.round);
+                        (display_screen(next) == DisplayScreen::Standby && previous.status.round != next.status.round) ||
+                        (select && previous.chooseRound != next.chooseRound);
+    changes.headerWindow = first || header_window(previous) != header_window(next);
     return changes;
   }
   const auto& oldCards = displayed_cards(previous);
@@ -296,6 +309,7 @@ inline FrameDamage display_damage(const DisplayChanges& changes, bool first) {
   if (changes.topArt) damage.markRect(TOP_ART_X, TOP_ART_Y, TOP_ART_WIDTH, TOP_ART_HEIGHT);
   if (changes.lobbyBody) damage.markRect(0, 81, 480, 239);
   if (changes.lobbyHeader) damage.markRect(24, 48, 320, 24);
+  if (changes.headerWindow) damage.markRect(HEADER_WINDOW_X, HEADER_WINDOW_Y, HEADER_WINDOW_WIDTH, HEADER_WINDOW_HEIGHT);
   if (changes.idleGuide) damage.markRect(INFO_X, IDLE_GUIDE_Y, INFO_WIDTH, IDLE_GUIDE_HEIGHT);
   else if (changes.idleBar) damage.markRect(IDLE_BAR_X, IDLE_BAR_Y, IDLE_BAR_WIDTH, IDLE_BAR_HEIGHT);
   if (changes.idleArrows) {

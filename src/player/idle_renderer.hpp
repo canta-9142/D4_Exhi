@@ -29,13 +29,8 @@ inline void draw_idle_guide(FrameBuffer& frame, const DisplaySnapshot& s) {
                    INFO_X + 5, IDLE_BAR_Y + IDLE_BAR_HEIGHT + 8);
 }
 
-// 下向きの矢印（実際のボタンを指す）。押している間は白、押していなければ暗い灰色。
-inline void draw_down_arrow(FrameBuffer& frame, int x, int top, int length, uint16_t color) {
-  frame.fillRect(x - 2, top, 4, length - 16, color);
-  frame.fillTriangle(x - 12, top + length - 16, x + 12, top + length - 16, x, top + length, color);
-}
-
 // 両端の枠に、長押しするボタンを指す矢印を描く。ボタンの代わりに、案内の間だけ描く。
+// 押している間は白、押していなければ暗い灰色。
 inline void draw_idle_arrows(FrameBuffer& frame, const DisplaySnapshot& s) {
   for (unsigned side = 0; side < 2; ++side) {
     const int index = side ? 3 : 0;
