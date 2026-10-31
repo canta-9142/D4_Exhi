@@ -9,6 +9,7 @@
 
 ```sh
 nix develop -c go -C server run ./cmd/server
+nix develop -c go -C server run ./cmd/server -mode simultaneous
 nix develop -c go -C server run ./cmd/server -log-level debug
 nix develop -c go -C server run ./cmd/server -devices-file data/devices.json
 nix develop -c go -C server run ./cmd/server -records-file data/records.sqlite3
@@ -20,6 +21,8 @@ nix develop -c go -C server vet ./...
 ```
 
 `main`はログ設定を読み込み、標準出力へのログ、Transport、`app`を初期化する。
+`-mode`は運転方式で、`endless`（連続運転、既定）か`simultaneous`（一斉ゲーム方式、[サーバー仕様3.7](../spec/server.md)）の
+どちらかの語だけを受け付け、`app.Options.Mode`へ渡す。起動のログに方式を出す。方式は起動中に変えない。
 デバイス対応表はHTTPの待ち受けより前に読み込む。記録ファイルは待ち受けの後、要求の受付より前に開く。
 指定ポートごとにUSB CDC接続を管理するgoroutineを起動する。
 HTTPは`-http-addr`（既定`:8080`）で待ち受け、管理APIと並行してserialを処理する。
@@ -30,7 +33,7 @@ USB CDCの接続先ホストはLinuxを前提とする。`-list-serial-ports`は
 `/dev/ttyACM*`・`/dev/ttyUSB*`の候補を昇順で表示して終了し、ポートは開かない。
 候補なしの場合は何も表示しない。VID/PIDによる機器種別判定や自動接続は行わず、
 接続対象を繰り返し指定可能な`-serial-port`で選ぶ。同じパスの重複指定と空の指定は拒否する。
-ポート未指定でも起動でき、その場合はMCU未接続のPreparingで待機する。
+ポート未指定でも起動でき、その場合はMCU未接続の停止中（一斉ゲーム方式ではPreparing）で待機する。
 
 指定したポートが起動時に存在しない場合や、接続終了・オープン失敗時は1秒後に再試行する。
 USBの抜き差しで`ttyACM`等の番号が変わる環境では、`/dev/serial/by-id/...`などの
@@ -38,6 +41,10 @@ USBの抜き差しで`ttyACM`等の番号が変わる環境では、`/dev/serial
 受信形式と有効なHELLOからプレイヤー／LEDを識別し、再接続でもゲームや割当の正本を維持する。
 
 `web`の`/api/state`・`/api/commands`は`app`へ接続済み。管理画面から状態取得と管理操作を行える。
+ただし`web`は連続運転に未対応で、受け付けるコマンドは一斉ゲーム方式のもの（`start`・`finish`・`reset`・
+`set_node_mode`・`set_all_node_modes`・`set_bot_rate`と機器の操作）だけである。連続運転では`start`と手動・自動の切替は
+使えるが、`stop`・`return_to_bot`はなく、Snapshotの`operation`・各プレイヤーの段階・直近のラウンドもJSONに出ない
+（`phase`は空文字になる）。連続運転を止めるにはサーバーを再起動する。
 
 ### Linuxのポート設定と検証範囲
 
@@ -61,33 +68,42 @@ Linuxの疑似TTYでraw設定、改行を変換しない送受信、別名での
 | 呼び出し | 用途 |
 |---|---|
 | `Execute(ctx, Command)` | 管理操作。拒否理由はerrorで返す |
+| `ExecuteWithResult(ctx, Command)` | `Execute`と同じ管理操作に加え、操作の結果を返す。結果を持つのは`SetAllNodesEnabled`の`Skipped`（手動にできなかったノード）だけ |
 | `State(ctx)` | ゲームとデバイスの独立したSnapshotを取得 |
 | `Connected(ctx, SessionID)` | 新規シリアルセッションの登録と識別開始 |
 | `Disconnected(ctx, SessionID)` | 切断通知。旧セッションの通知は無視 |
 | `MessageReceived(ctx, SessionID, IncomingMessage)` | 検証済みのMCUメッセージを処理 |
 
-`Execute`は従来の操作に加え、`SwapDeviceAssignments`、`ReplaceDeviceAssignment`、
+運転の操作は、連続運転では`Start`・`Stop`・`ReturnToBot`、一斉ゲーム方式では`Start`・`Finish`・`Reset`で、
+他方の方式の操作は`phase_conflict`で拒否する。`SetNodeEnabled`・`SetAllNodesEnabled`は、連続運転ではいつでも、
+一斉ゲーム方式ではPlaying以外で受け付ける。
+`Execute`はこれらに加え、`SwapDeviceAssignments`、`ReplaceDeviceAssignment`、
 `SetDevicePreview`を受け付ける。割当先は`Command.Kind`と`Command.Node`で指定し、
 プレイヤーP1とLED制御P1を区別する。交換操作は`DeviceID`と`OtherDeviceID`を使い、
 予備基板への交換では前者が交換元、後者が交換先となる。
 `SetDeviceAssignment`のNode=0は解除、`SetDevicePreview`の空DeviceIDは確認終了を表す。
 
 状態変更は`Run`のgoroutineだけで行う。要求はチャネルで受け付け、処理開始時の時刻を使う。
-`State`は時間を進めない。その他の要求と100ms周期のTickは、未処理の生成・転送を
-期限順に処理してから要求を適用する。ゲーム終了時刻ちょうどの生成・転送は実行しない。
+`State`は時間を進めない。その他の要求と100ms周期のTickは、未処理の段階の期限・生成・転送を
+期限順に処理してから要求を適用する（「期限の処理順」）。一斉ゲーム方式の終了時刻ちょうどの生成・転送は実行しない。
 
 呼び出し元はcontextで待機を中断できる。受理後のキャンセルは、操作の取り消しを保証しない。
 終了済みの`app`への要求は`ErrStopped`を返す。
-Snapshotの経過時間・残り時間は`time.Duration`であり、`RemainingSeconds`は
-MCUの`status.remaining`と同じ切り上げ済み残り秒数を返す。HTTPでの時間表現への変換は`web`が行う。
-Snapshotにはノードごとの`Ready`・確定順位`Rank`、`CanStart`・`StartBlockers`、機器種別付きの対応表、
-現在確認表示中の機器と確認用ノードID、ベストスコアと記録ファイルの状態`Records`も含む。
-開始条件の判定はStartとStateで共通化する。
+Snapshotの経過時間・残り時間は`time.Duration`である。`Mode`は運転方式、`Operation`は連続運転の
+`stopped`・`running`、`Phase`は一斉ゲーム方式のフェーズ（連続運転では空）とする。`Elapsed`は連続運転では
+運転開始からの時間、一斉ゲーム方式ではゲームの確定済み経過時間である。全体の`Remaining`・`RemainingSeconds`・
+`CountdownSeconds`は一斉ゲーム方式の値で、連続運転では0とする。
+プレイヤーの`NodeSnapshot`には、MCUへ送る`phase`・`status`と同じ値の`Station`・`Round`・`CountdownSeconds`・
+`RemainingSeconds`・`WindowSeconds`、ラウンドの`Score`、確定した`TopPercent`（1〜100。summaryと違い51以上も持つ）、
+一斉ゲーム方式の`Ready`・確定順位`Rank`を入れる。全体には`CanStart`・`StartBlockers`、機器種別付きの対応表、
+現在確認表示中の機器と確認用ノードID、ベストスコアと記録ファイルの状態`Records`（起動後の通常ラウンドを新しい順に
+10件までの`RecentRounds`を含む）も含む。開始条件の判定はStartとStateで共通化する。
 
 管理操作の拒否は`*app.Rejection`で返し、`errors.As`で`Code`・`Nodes`を取得できる。
-開始不可理由は`StartBlocker`の配列で、`not_preparing`、`pid_exhausted`、
-`players_not_ready`の順に列挙する。未準備のNodesは番号順でまとめる。
-Startの拒否では先頭の理由を使用し、`not_preparing`は`phase_conflict`へ対応付ける。
+開始不可理由は`StartBlocker`の配列で、連続運転では運転中の`not_stopped`だけ、一斉ゲーム方式では
+`not_preparing`、`players_not_ready`の順に列挙する。未準備のNodesは番号順でまとめる。
+PIDは周回させるので、`pid_exhausted`は開始不可理由に出ない（コードの定義は残る）。
+Startの拒否では先頭の理由を使用し、`not_stopped`・`not_preparing`は`phase_conflict`へ対応付ける。
 無効な引数はmainと同じ`CodeInvalid`（`invalid`）で返し、Web側で`invalid_request`へ変換する。
 終了済みの`app`は`errors.Is(err, app.ErrStopped)`で判定し、Web側で`503 unavailable`へ対応付ける。
 
@@ -197,7 +213,7 @@ Read開始前に識別世代を固定し、解析した入力にもその世代�
 含まれていた場合も、同じ世代を使う1秒周期の`identify`再送で再取得する。
 再識別前に受信済みの古いバイト列は、改行の境界を維持しながら破棄する。
 新しい識別世代を、配信待ちの古いHELLOへ付け直さない。
-この世代はFIFO同期の`sync`とは独立し、ゲームResetや通常の再同期では更新しない。
+この世代はFIFO同期の`sync`とは独立し、運転の開始・停止（一斉ゲーム方式のReset）や通常の再同期では更新しない。
 受信側での解析と`app`でのHELLO受理の間に再送されても、識別状態を巻き戻さない。
 `Feed`と`CheckTimeout`は受信側の同じgoroutineから直列に呼ぶ。
 `WaitHello`は別goroutineの`app.Options.Send`からも呼べる。要求された世代を記録して直ちに戻り、
@@ -211,33 +227,45 @@ ReceiverはシリアルI/Oや`app`への通知を行わない。`Feed`・`CheckT
 終端状態として保持し、物理切断・`Disconnected`の通知はTransportで行う。
 再接続時は新しいReceiverを使い、旧接続の部分行を引き継がない。
 
-## 準備完了と表示通知
+## 長押し・モード選択と表示通知
 
-Preparingのmanualプレイヤーから現在の同期世代のREADYを受けた場合だけ、準備完了を確定する。
-割当済みの有効なセッションには受理・拒否・重複のいずれでもSTATUSを返す。
-READYはSENDの要求IDを消費しない。全manualプレイヤーの準備完了後も管理者のStartを待ち、
-manualが0台なら全自動で開始できる。Playing中の管理操作によるモード変更は拒否する。
+READY（両端の2秒長押し）は、現在の同期世代のものだけを`game.ready`へ渡す。連続運転では、運転中のmanualで、
+待機・結果・練習ラウンド（カウントダウン中を含む）の筐体をモード選択へ移す。一斉ゲーム方式では、Preparingの
+未選択のmanualの待機だけをモード選択へ移す。CHOOSEは同じ照合の後、モード選択の筐体だけを受理する。
+連続運転ではそのままラウンドを始め、一斉ゲーム方式では選んだ種別を持って待機へ戻し、準備完了にする。
+どちらも割当済みの有効なセッションには、受理・拒否・同期世代の不一致のいずれでもSTATUSを返す（`forceStatus`）。
+READY・CHOOSEはSENDの要求IDを消費しない。不正な`sync`・`round`はセッションを閉じる。
 
-STATUSにはスコア・切り上げた残り秒数・準備完了状態を毎回含める。
-初期同期・再同期・フェーズ変更・READY応答では必ず送り、通常は表示値が変化した場合だけ送る。
-入力イベントの時間進行と操作を確定してから送信するため、遅延Tickの途中経過を蓄積しない。
-ゲームResetでは`phase` → 空FIFOの`reset` → 初期値の`status`の順になる。
+段階が変わると`game`は`change{kind:"station"}`を通知し、`app`は`phase`を送る。練習用キューと実際のFIFOを
+入れ替える段階の変化（練習の入りと出）では、続けて新しい同期世代の`reset`を送る。STATUSと結果のSUMMARYは、
+入力イベントの最後の`flushPlayerUpdates`でまとめて送る。`phase`を送ったセッションは`forceStatus`が立つので、
+値が同じでもSTATUSを送る。それ以外では、スコア・残り秒数・カウントダウン・段階の残り時間・コンボ・`bots`の
+いずれかが前回と変わったか、未送信の獲得点があるときだけ送る。遅延Tickの途中経過は蓄積しない。
+
+運転の開始・停止（一斉ゲーム方式のStart・Reset）では`phase` → 空FIFOの`reset` → 初期値の`status`の順になる。
+手動・自動の切替では`config` → 実際のFIFOの`reset` → `phase` → `status`で再設定する。
+自動への切替はラウンド・モード選択・結果を打ち切るが、打ち切り自体は通知せず、この再設定で待機を伝える。
+「ボットに戻す」では`config`を送らず、`phase(Idle)`（練習からなら実際のFIFOの`reset`）→ `status`とする。
 確認表示からの復旧では、`config(preview=false)`から現在の`phase`・`status`までを送信する。
 Startや別機器への確認切替は、この復旧通知の登録後に行う。
 
-Finishedへの遷移時に、対象者だけのスコア比較で順位を確定する。同点は同順位とし、
-100・100・80なら1・1・3となる。最終スコア・資格・順位はモード変更や基板交換でも保持する。
-通常表示の割当済みMCUには`phase(Finished)` → `status` → `summary`を送る。
-Finished中の再同期・再設定でも、現在の同期世代の`summary`をSTATUSの後に送る。
-拒否したSENDなどによるRESETも、`reset` → `phase` → `status` → `summary`で結果を再取得させる。
-対象外はeligible=false・rank=null、確認中や未割当にはSUMMARYを送らない。
+通常ラウンドの90秒が終わると、`game.expire`が結果へ移し、`change{kind:"finished", node}`、続けて段階の通知を出す。
+`app`は前者で記録の保存・集計・上位%・ベストスコア・CHEERを済ませてから、`phase(Finished)` → `status` → `summary`を送る。
+summaryは`eligible=true`・`rank=null`で、上位%とベストスコアはその1人分である。結果の段階で`reset`を送った
+セッションは`phasePending`が立ち、`reset` → `phase` → `status` → 新しい同期世代の`summary`で結果を再取得させる。
+結果の段階でも筐体のFIFOは自動転送するので、転送で先頭が抜けるたびにこの4通が送られる。
+一斉ゲーム方式のFinishedでは、対象者だけのスコア比較で順位を確定する。同点は同順位とし、100・100・80なら1・1・3となる。
+最終スコア・資格・順位はモード変更や基板交換でも保持し、対象外にはeligible=false・rank=nullを送る。
+練習していたノードにはSUMMARYを送らない。確認中や未割当にもSUMMARYを送らない。
 
 ## デバイス運用と実機確認
 
-機器の初回識別時はPreparing・Finishedに限り、機器種別ごとの空きIDへ昇順で仮割当する。
+機器の初回識別時は、一斉ゲーム方式のPlaying以外（連続運転では停止中・運転中を問わない）で、機器種別ごとの空きIDへ昇順で仮割当する。
 空き待ちの機器はUID順で再試行する。未接続の機器の割当も予約として保持する。
-管理操作で解除されたUIDは自動仮割当の対象から外し、Reset・再接続でもこの扱いを維持する。
+管理操作で解除されたUIDは自動仮割当の対象から外し、運転の開始・停止・再接続でもこの扱いを維持する。
 交換時は対応表を一括確定してから通信し、ノードのFIFO・得点・ランキング結果は移動しない。
+連続運転の運転中は、担当の機器が変わるプレイヤーノードがすべて自動のときだけ割当の変更・交換・付け替えを受け付け、
+手動のノードが含まれれば`manual_mode_conflict`で拒否する（`assignExplicitly`）。LEDの割当は常に受け付ける。
 未割当になる機器には両種別とも`identify`を送り、旧設定と確認表示を解除する。
 
 確認表示は全体で1台とし、正本状態とは独立して管理する。プレイヤーには
@@ -245,14 +273,15 @@ Finished中の再同期・再設定でも、現在の同期世代の`summary`を
 ダミーパケットは生成・送信しない。未割当機器にはP1を一時設定するが、
 正式な対応表を変更せず、ゲーム操作や通常通知の対応先にも使用しない。
 LEDには`CONFIG NODE true`だけを送り、点滅はMCU内で行う。
-Start・Reset・割当／モード変更・HELLO／RESYNC・切断に合わせ、確認を終了・復旧する。
+運転の開始・停止（一斉ゲーム方式ではStart・Reset）・割当／モード変更・HELLO／RESYNC・切断に合わせ、確認を終了・復旧する。
+確認表示を始められないのは一斉ゲーム方式のPlayingだけで、連続運転では運転中でも自動のノードを確認できる。
 
 確認終了時は通常の設定から再同期し、FinishedのプレイヤーにはSUMMARYまで復旧する。
-未割当の確認対象には`identify`を送る。確認中のプレイヤーをResetする場合は、
-`config(preview=false)`を先に送り、その後は通常の`phase(Preparing)`・空FIFO・STATUSで復旧する。
+未割当の確認対象には`identify`を送る。確認中のプレイヤーで運転を開始・停止（一斉ゲーム方式ではStart・Reset）する場合は、
+`config(preview=false)`を先に送り、その後は通常の`phase`・空FIFO・STATUSで復旧する。
 
 LEDの通常設定は`CONFIG NODE false` → Bot用なら現在件数の`BUFFER`とする。
-ゲームResetでは、確認中の割当済みLEDだけに`CONFIG NODE false` → Bot用なら`BUFFER 0`を送る。
+運転の開始・停止（一斉ゲーム方式のStart・Reset）では、確認中の割当済みLEDだけに`CONFIG NODE false` → Bot用なら`BUFFER 0`を送る。
 通常表示のLEDには`CLEAR` → Bot用なら`BUFFER 0`を送り、CONFIGを再送しない。
 確認中の未割当LEDには`identify`を送り、復旧命令を重複させない。
 パケット移動は担当リンク表に対応する`LIGHT`へ、BotのFIFO使用量変更は`BUFFER`へ変換する。
@@ -272,7 +301,84 @@ LEDの通常設定は`CONFIG NODE false` → Bot用なら現在件数の`BUFFER`
 ゲームの転送処理は状態を確定し、通知する出来事を戻り値で返す。
 手動SENDではRESULTを先に送信し、その後で返された通知を処理する。
 serial接続・受信パーサー・HTTP API・対応表とゲーム記録の保存は実装済みで、疑似TTYとHTTPで検証する。
-実機検証と管理画面の本実装は未実施・未実装である。
+連続運転の管理画面（`web`）は未対応である（「起動と検証」）。実機での結合確認は未実施である（「テストと結合確認」）。
+
+### 運転状態と筐体の段階
+
+連続運転と一斉ゲーム方式は、同じ`game`の上で動かす。`game.mode`が方式、`running`が連続運転の運転中、
+`phase`が一斉ゲーム方式のフェーズである。プレイヤーノードごとに次の状態を持つ。時刻はすべてゲームの時計
+（`game.elapsed`と同じく、連続運転では運転開始からの時間）で、0は「なし」を表す。
+
+| 項目 | 内容 |
+|---|---|
+| `station` | `stopped`・`idle`・`select`・`playing`・`finished`。通信の`phase`へは`wirePhase`で`Preparing`・`Idle`・`Select`・`Playing`・`Finished`に対応付ける |
+| `round` | `normal`・`tutorial`・空 |
+| `roundStart` | カウントダウンの終わり。通常ラウンドのゲーム時間の起点、練習では`send`を受け付け始める時刻 |
+| `roundEnd` | 通常ラウンドのゲーム時間の終わり（`roundStart`＋90秒） |
+| `deadline` | 段階の期限。モード選択の20秒、通常ラウンドの終わり、結果の30秒、練習の無操作の60秒 |
+| `lastPractice` | 最後に受理した練習の`send`の時刻 |
+| `practice`・`practicePID` | 練習用キューと、次に試す練習用のPID |
+| `score`・`gains`・`combo` | ラウンドの得点、未送信の獲得点（16件まで）、コンボ |
+| `topPercent`・`bests` | 結果で確定した上位%とベストスコア |
+| `ready`・`eligible`・`rank` | 一斉ゲーム方式の準備完了・資格・順位 |
+
+段階の移り変わりは次の関数で行う。`enter`はラウンドと結果を捨てて待機かモード選択へ移す共通の処理で、
+モード選択なら20秒の期限を置く。`abort`は運転中で待機でない筐体を記録なしで待機へ戻す。
+
+| 契機 | 関数 | 移り先 |
+|---|---|---|
+| 運転開始・停止 | `start`・`stop` | 全員を待機・停止中へ。`clear`でFIFO・ラウンド・PIDの採番を初期化する（操作モードとBotの生成レートは保つ） |
+| 長押し | `ready` | モード選択 |
+| モード選択 | `choose` | ラウンド。`roundStart`＝現在＋3秒。通常は`deadline`＝`roundEnd`、練習は`deadline`＝`roundStart`＋60秒で、練習用キューを3件にする |
+| 期限 | `expire` | 通常ラウンドなら結果（`deadline`＝現在＋30秒、未送信の獲得点を捨てる）、それ以外（選択・結果・練習）は待機 |
+| 練習の`send` | `practiceSend` | 練習のまま。`deadline`＝現在＋60秒 |
+| ボットに戻す | `returnToBot` → `abort` | 待機（通知あり） |
+| 自動への切替・切断 | `setManual(false)` → `abort` | 待機（通知なし。自動への切替は`syncDevice`、切断は再接続時の同期で伝える） |
+| FIFOの上限 | `abortOverflowed` → `abort` | 待機（通知あり） |
+
+練習の期限を`roundStart`から数えるので、カウントダウンの3秒は無操作の60秒に含まない。
+`status.window`は練習では`min(ceil(deadline - max(現在, roundStart)), 60)`、モード選択と結果では`ceil(deadline - 現在)`とする。
+
+### 期限の処理順
+
+`advance`は、未処理の期限のうち最も早いものから1件ずつ処理する。同じ時刻の期限は、段階の期限（P1〜P8）、
+パケットの生成（P1〜P8）、Botの転送（B1〜B3）、自動のプレイヤーの転送（P1〜P8）の順とし、それぞれノードIDの
+昇順とする。比較は「より早い」だけで選ぶので、この順が同点の規則になる。Tickが遅れても各期限の時刻で処理するので、
+同じTickで終わる2つの通常ラウンドは、それぞれのゲーム時間の終わりの時刻で、ノードIDの順に記録・集計される。
+運転中の時計に上限はない（`endless`）。一斉ゲーム方式は90秒で止め、その時刻ちょうどの生成・転送は実行しない。
+
+### 転送と得点
+
+自動で転送するのは、手動かつ通常ラウンド中のプレイヤー以外のすべてのノードである（`automatic`）。待機・モード選択・
+結果・練習の筐体はボットとして実際のFIFOを転送する。通常ラウンドのカウントダウンの開始で自動転送を止め、
+カウントダウン中もFIFOには届く。ラウンドが終わる・打ち切られると、その時刻から自動転送を再開する
+（`rescheduleIf`。前後で自動かどうかが変わったときだけ予定を立て直す）。
+
+点は、通常ラウンドのゲーム時間中のプレイヤーにだけ加える（`countsPoints`）。パケットがいつ生成されたかは問わない。
+他のノード（待機・カウントダウン中・練習・結果・Bot）に入る点は捨てる。手動の`send`は、カウントダウンの後で、
+ラウンドの種別が一致するときだけ受理する（`accepting`）。
+
+### PIDとFIFOの上限
+
+PIDは0〜65535を周回させ、ネットワーク上のパケットが使っているPIDを飛ばして採番する（`allocatePID`）。
+使用中のPIDは65536ビットの表で持ち、到着・ロスで外す。パケットは高々数千件なので、空きは常にある。
+運転開始・停止で表を空にし、採番を`firstPID`（既定0）へ戻す。テストは`firstPID`を65530付近にして周回を確かめる。
+旧世代の要求は同期世代とセッションで退けるので、PIDの再利用で古い`send`が通ることはない。
+
+手動の通常ラウンドのプレイヤーのFIFOが1000件に達したら、そのパケットの通知を済ませてからラウンドを打ち切る。
+自動のノードは転送し続けるので上限を設けない。
+
+### 練習ラウンド
+
+練習用キューはノードごとに3件を保つ。宛先は自分以外のプレイヤーから、実際のネットワークとは別の乱数
+（`practiceRandom`）で選び、練習が実際のネットワークを変えないようにする。PIDはラウンドごとに0から数え、
+キューにあるPIDを飛ばす。練習の`send`は同期世代・要求ID・先頭のPID・隣接関係を通常と同じく検証し、受理すると
+`result(ok=true)`の後に補充した1件を`push`する。FIFO・LED・得点・コンボ・記録には何もしない。
+練習中のノードには実際のFIFOの変化を送らず、`status`に`bots`（B1〜B3の実際のFIFO使用量）を付ける。
+`bots`の変化は`statusKey`に含まれるので、変わったときだけ`status`を送り直す。
+
+一斉ゲーム方式では、選択済みの練習のノードもゲームの間は練習用キューで遊び、ゲームの終わりに
+`phase(Finished)` → `status`（`round=tutorial`）→ 実際のFIFOの`reset`で戻す。記録・順位の対象にしない。
 
 ## デバイス対応表の保存・復元
 
@@ -291,7 +397,7 @@ serial接続・受信パーサー・HTTP API・対応表とゲーム記録の保
 保存するのはUID・機器種別・割当先・自動仮割当の対象外フラグだけとする。
 割当済みまたは対象外の機器をUID順で保存し、未割当かつ対象外でない機器は保存しない。
 復元機器は未接続で公開し、割当先を予約する。接続後はUIDと機器種別を照合して通常の同期を行う。
-ゲームはPreparing・全プレイヤーauto・未準備で開始し、確認表示や同期世代は復元しない。
+ゲームは停止中（一斉ゲーム方式ではPreparing）・全プレイヤーauto・未準備で開始し、確認表示や同期世代は復元しない。
 
 割当・解除・交換・付け替えと自動仮割当は、候補全体の保存成功後に一括確定する。
 同じ割当への要求ではMCUを再設定せず、保存内容も同一ならファイルを書き込まない。
@@ -322,7 +428,7 @@ Windowsでの`go test`とarm64 Linux向けのクロスビルドでCコンパイ�
 |---|---|
 | `records.Open(path)` | ファイルを開き、版を確認して、スキーマの作成・移行と全件の検証をしてからWALへ切り替える |
 | `(*Store).Load()` | 全ゲームを保存順に読み込み、全件を検証 |
-| `(*Store).SaveGame(GameRecord)` | 1ゲーム分を1トランザクションで書き込む |
+| `(*Store).SaveGame(GameRecord)` | 1件（通常ラウンド1回か一斉ゲーム1回）を1トランザクションで書き込む |
 | `(*Store).Close()` | 接続を閉じる |
 | `records.OpenExclusive(path)` | 既存のファイルだけを`Open`と同じく開き、`Close`まで排他ロックを保つ。他の接続が開いていれば`ErrInUse` |
 | `(*Store).SaveGames([]GameRecord)` | 複数のゲームを1トランザクションで書き込む |
@@ -340,15 +446,25 @@ Windowsでの`go test`とarm64 Linux向けのクロスビルドでCコンパイ�
 検証に成功した場合だけ確定してから`journal_mode=WAL`へ切り替える。
 未対応の版、他のスキーマ、不正な記録を持つファイルは、移行もWALへの切替も行わずに変更しない。
 表は`STRICT`とし、列の型・範囲・時間切れでの経過時間をCHECK制約でも検証する。
+スキーマは版2で、版1からの移行は`games`に`kind`（`game`・`round`、既定`game`）を足すだけの1手順である。
+版1の手順は書き換えず、版1の記録はすべて一斉ゲーム（`game`）になる。`kind`はGoの`app.RecordKind`
+（`RecordGame`・`RecordRound`）に対応する。読込・保存の検証（`check`）は、1〜8件の結果、ノードの重複なし・昇順、
+資格と順位の組合せを確かめる。通常ラウンドは結果1件（`eligible=1`、`rank=1`。規則上の順位ではない）である。
+版2のファイルを版1のサーバーで開くと未対応の版になり、記録を使えない起動になる（ファイルは変えない）。
 
 `main`は`Open`・`Load`の失敗では起動を中止せず、ログへ記録して`Options.RecordsUnavailable`に理由を渡す。
 この場合は`Options.SaveGame`を設定せず、ファイルを閉じる。成功時は読み込んだ記録を`Options.Records`へ、
 `(*Store).SaveGame`を`Options.SaveGame`へ渡し、`serve`の終了後に`Close`する。
 
-`game.finish`は終了理由を記録し、`change{kind:"finished"}`を通知する。
-`app`はこの通知で`GameRecord`を作り、保存を呼び、集計を更新する。`phase(Finished)`の通知より前に保存するため、
+通常ラウンドの90秒が終わると、`game.expire`が`change{kind:"finished", node}`を通知する。
+`app.recordRound`は`roundRecord`で記録（`kind=round`、結果1件、`finished_at`＝運転開始の時刻＋`roundEnd`、
+`reason=timeout`）を作って保存し、集計に加え、そのノードの上位%とベストスコアを確定して、直近のラウンドの一覧の
+先頭に加え、CHEERを送る。Tickが遅れても`finished_at`はゲーム時間の終わりの時刻になる。打ち切ったラウンドと
+練習は記録しない。一斉ゲーム方式では`game.finish`が終了理由を記録し、`change{kind:"finished"}`（ノードなし）を
+通知して、`recordGame`が8人分の記録を作る。どちらも`phase(Finished)`の通知より前に保存するため、
 同じイベント中の自動仮割当が保存不明で停止しても、ゲーム記録の保存は済んでいる。
-集計は起動時に過去の記録を保存順に1件ずつ加え、以後は終了ごとに1件加える。
+集計は起動時に過去の記録を保存順に1件ずつ加え、以後は終了ごとに1件加える。旧来の一斉ゲームの記録とラウンドの記録は、
+同じ母集団（90秒を最後まで行った記録の、対象者のスコア）に入る。
 同点では置き換えないため、先に保存したゲームが残る。`State`は集計結果を複製して返す。
 `web`は`app.JST`で時刻を+09:00のRFC3339へ変換する。
 
@@ -376,6 +492,7 @@ nix develop -c go -C server run ./cmd/records restore -from data/records.sqlite3
 サーバーの接続が開いている間は、ここで`busy_timeout`の1000ms待った後に`SQLITE_BUSY`になる（LinuxとWindowsのテストで確認）。
 取ったロックは`Close`まで解かないので、その間はサーバーの`records.Open`も失敗する。
 
+`seed`は点数ごとに、ノードAの通常ラウンドを1件ずつ（`kind=round`、結果1件）加える。
 `seed`の`-count`は`-mean`（既定1400）・`-sd`（既定250）・`-min`（既定600）・`-max`（既定2200）の正規分布から点数を作る。
 `-rand-seed`を省くと現在時刻から決め、表示したシードを指定すると同じ点数を作り直せる。
 確認の前に追加後の帯ごとの件数、最高点（通算のベストスコアになる）、終了時刻の範囲を表示するので、分布が気に入らなければ確認の入力で中止して作り直す。
@@ -388,6 +505,33 @@ nix develop -c go -C server run ./cmd/records restore -from data/records.sqlite3
 `restore`は記録ファイルを`OpenExclusive`で開き、残った`-wal`を本来のファイルへ適用させてから、`ReplaceAll`で中身を入れ替える。
 バックアップは一時ディレクトリへ複製してから`records.Open`で検証して読む。バックアップ自体を開くと、古い版の移行やWALへの切替で変更してしまうためである。
 バックアップの`-wal`は複製に含められないので、あれば中止する。`clear`が作るバックアップは`VACUUM INTO`の出力で、`-wal`を持たない。
+
+## テストと結合確認
+
+`go -C server test -race ./...`で、次の範囲を自動で確かめる（nixがある環境では`nix develop -c`を前に付ける）。
+
+| 範囲 | 主なテスト |
+|---|---|
+| 連続運転の段階と期限 | `internal/app/endless_test.go`。運転の開始・停止の送信順とLED（`CLEAR`・`BUFFER 0`）、READY・CHOOSEの受理条件、選択20秒・結果30秒・練習の無操作60秒の時間切れ、通常ラウンドのゲーム時間だけの得点と結果、結果からの再挑戦、隣り合う2人のずれたラウンド、同じTickで終わる2つのラウンドの記録順、打ち切り（ボットに戻す・自動・切断・停止）で記録しないこと、FIFOの上限、PIDの周回（65530付近から）、練習用キュー、`bots`、運転中の割当の制限、一括の自動への切替 |
+| 一斉ゲーム方式 | `internal/app/simultaneous_test.go`、`workflow_test.go`ほか |
+| 記録 | `internal/records/records_test.go`（版1から版2への移行、検証）、`internal/app/endless_test.go`の旧来の8人分の記録とラウンドの記録の同じ母集団 |
+| 保守コマンド | `cmd/records/main_test.go`（16帯の境界とラベル、ラウンドのseed） |
+| 一括切替 | `internal/app/workflow_test.go`（未接続の`Skipped`）、`internal/web/command_test.go`（応答の`skipped`） |
+| 疑似TTYとmain | `cmd/server/main_linux_test.go`（識別と終了処理）、`cmd/server/endless_linux_test.go`（1筐体の連続運転: 停止中→手動→運転開始→長押し→選択→練習→送信→長押しで選択→自動への切替で待機） |
+
+`app`のテストは時計を差し替えて90秒のラウンドを一瞬で進めるが、`main`を通す疑似TTYのテストは実時間で動くので、
+カウントダウン（3秒）の後の練習の送信までにとどめ、通常ラウンドの90秒・結果の30秒は`app`のテストに任せる。
+
+実機を使わずにプレイヤー基板の側を確かめるには、`tests/endless_cdc.py`（サーバーの代わりに1筐体を動かす）を使う
+（[プレイヤーノードの実装詳細](./player.md)の「テスト」）。サーバーと実機を合わせて確かめるのは、次の項目である。
+
+| 項目 | 確かめ方 |
+|---|---|
+| 2人が隣り合ってずれた時刻に通常ラウンドを遊ぶ | 2台を手動にして運転を開始し、時刻をずらして長押し・選択する。点・結果・記録（`records histogram`）が別々になること |
+| ラウンド中のUSBの抜き差し | 通常ラウンド・練習中にUSBを抜き、再接続後に自動・待機へ戻り、記録が増えないこと |
+| 運転停止 | 管理画面に停止がないので、現状はサーバーの再起動で代える（再起動後は停止中）。全筐体が休止中になり、LEDが消えること |
+| 長時間の運転 | 2時間以上回し、筐体が再同期を繰り返さないこと（PIDの重複は筐体の再同期として現れる） |
+| 一括切替の表示 | 一部の筐体を外して「全員を手動」を押し、未接続の筐体が自動のまま残り、管理画面にその旨が出ること |
 
 ## 運用の注意
 
