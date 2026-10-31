@@ -28,6 +28,10 @@ var validCommands = []struct {
 		app.Command{Operation: app.SetNodeEnabled, Node: 1, Enabled: true}},
 	{"auto", `{"type":"set_node_mode","data":{"mode":"auto","nodeId":"P8"}}`,
 		app.Command{Operation: app.SetNodeEnabled, Node: 8}},
+	{"all manual", `{"type":"set_all_node_modes","data":{"mode":"manual"}}`,
+		app.Command{Operation: app.SetAllNodesEnabled, Enabled: true}},
+	{"all auto", ` {"data":{"mode":"auto"},"type":"set_all_node_modes"} `,
+		app.Command{Operation: app.SetAllNodesEnabled}},
 	{"fractional rate", `{"type":"set_bot_rate","data":{"nodeId":"B1","ratePps":1.5}}`,
 		app.Command{Operation: app.SetBotRate, Node: 9, Rate: 1.5}},
 	{"integer rate", `{"type":"set_bot_rate","data":{"nodeId":"B3","ratePps":2}}`,
@@ -114,6 +118,20 @@ var invalidCommands = []struct{ name, body string }{
 	{"null mode", `{"type":"set_node_mode","data":{"nodeId":"P1","mode":null}}`},
 	{"boolean mode", `{"type":"set_node_mode","data":{"nodeId":"P1","mode":true}}`},
 
+	// set_all_node_modes
+	{"all modes with empty data", `{"type":"set_all_node_modes","data":{}}`},
+	{"all modes with null data", `{"type":"set_all_node_modes","data":null}`},
+	{"all modes with array data", `{"type":"set_all_node_modes","data":[]}`},
+	{"all modes with nodeId", `{"type":"set_all_node_modes","data":{"nodeId":"P1","mode":"manual"}}`},
+	{"all modes with unknown field", `{"type":"set_all_node_modes","data":{"mode":"auto","force":true}}`},
+	{"all modes capitalized key", `{"type":"set_all_node_modes","data":{"Mode":"auto"}}`},
+	{"all modes capitalized value", `{"type":"set_all_node_modes","data":{"mode":"Auto"}}`},
+	{"all modes unknown value", `{"type":"set_all_node_modes","data":{"mode":"enabled"}}`},
+	{"all modes empty value", `{"type":"set_all_node_modes","data":{"mode":""}}`},
+	{"all modes null value", `{"type":"set_all_node_modes","data":{"mode":null}}`},
+	{"all modes boolean value", `{"type":"set_all_node_modes","data":{"mode":true}}`},
+	{"all modes capitalized type", `{"type":"Set_All_Node_Modes","data":{"mode":"auto"}}`},
+
 	// set_bot_rate
 	{"rate for player", `{"type":"set_bot_rate","data":{"nodeId":"P1","ratePps":1}}`},
 	{"rate for B0", `{"type":"set_bot_rate","data":{"nodeId":"B0","ratePps":1}}`},
@@ -199,8 +217,10 @@ func TestDecodeCommandInvalid(t *testing.T) {
 	}
 }
 
-// commandApp records the commands passed to Execute and returns err.
+// commandApp records the commands passed to ExecuteWithResult and returns
+// result and err.
 type commandApp struct {
+	result   app.Result
 	err      error
 	commands []app.Command
 	ctx      context.Context
@@ -208,10 +228,10 @@ type commandApp struct {
 
 func (a *commandApp) State(context.Context) (app.Snapshot, error) { return app.Snapshot{}, nil }
 
-func (a *commandApp) Execute(ctx context.Context, c app.Command) error {
+func (a *commandApp) ExecuteWithResult(ctx context.Context, c app.Command) (app.Result, error) {
 	a.commands = append(a.commands, c)
 	a.ctx = ctx
-	return a.err
+	return a.result, a.err
 }
 
 // postCommand sends body to POST /api/commands. An empty contentType leaves
@@ -247,7 +267,12 @@ func TestCommandExecutes(t *testing.T) {
 	for _, tc := range validCommands {
 		t.Run(tc.name, func(t *testing.T) {
 			a := &commandApp{}
-			checkOK(t, postCommand(t, New(a, nil), "application/json", tc.body))
+			w := postCommand(t, New(a, nil), "application/json", tc.body)
+			if tc.want.Operation == app.SetAllNodesEnabled {
+				checkSkipped(t, w, "[]")
+			} else {
+				checkOK(t, w)
+			}
 			if len(a.commands) != 1 || a.commands[0] != tc.want {
 				t.Errorf("Execute got %+v, want [%+v]", a.commands, tc.want)
 			}
@@ -255,6 +280,61 @@ func TestCommandExecutes(t *testing.T) {
 				t.Errorf("Execute was not called with the request context")
 			}
 		})
+	}
+}
+
+// checkSkipped verifies the success response of set_all_node_modes (web.md
+// 4.2): skipped is always written, as [] when empty.
+func checkSkipped(t *testing.T, w *httptest.ResponseRecorder, want string) {
+	t.Helper()
+	body := `{"ok":true,"skipped":` + want + "}\n"
+	if w.Code != http.StatusOK || w.Body.String() != body {
+		t.Fatalf("got %d %s, want 200 %s", w.Code, w.Body, body)
+	}
+	if got := w.Header().Get("Content-Type"); got != "application/json" {
+		t.Errorf("Content-Type = %q", got)
+	}
+	if got := w.Header().Get("Cache-Control"); got != "no-store" {
+		t.Errorf("Cache-Control = %q", got)
+	}
+}
+
+func TestCommandAllNodeModesResponse(t *testing.T) {
+	manual := `{"type":"set_all_node_modes","data":{"mode":"manual"}}`
+	auto := `{"type":"set_all_node_modes","data":{"mode":"auto"}}`
+	for _, tc := range []struct {
+		name    string
+		body    string
+		skipped []app.NodeID
+		want    string
+	}{
+		{"nothing skipped", manual, nil, `[]`},
+		{"empty list", manual, []app.NodeID{}, `[]`},
+		{"one", manual, []app.NodeID{3}, `["P3"]`},
+		{"ascending as returned", manual, []app.NodeID{3, 6}, `["P3","P6"]`},
+		{"sorted when out of order", manual, []app.NodeID{8, 1, 3}, `["P1","P3","P8"]`},
+		{"all players", manual, []app.NodeID{1, 2, 3, 4, 5, 6, 7, 8}, `["P1","P2","P3","P4","P5","P6","P7","P8"]`},
+		{"auto", auto, nil, `[]`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a := &commandApp{result: app.Result{Skipped: tc.skipped}}
+			checkSkipped(t, postCommand(t, New(a, nil), "application/json", tc.body), tc.want)
+			if len(a.commands) != 1 || a.commands[0].Operation != app.SetAllNodesEnabled {
+				t.Errorf("commands = %+v", a.commands)
+			}
+		})
+	}
+	// A node that is not a player breaks what app promises; the client must
+	// not be told it succeeded.
+	for _, node := range []app.NodeID{0, 9, 12} {
+		a := &commandApp{result: app.Result{Skipped: []app.NodeID{node}}}
+		checkError(t, postCommand(t, New(a, nil), "application/json", manual),
+			http.StatusInternalServerError, codeInternalError)
+	}
+	// Only this operation carries skipped.
+	a := &commandApp{result: app.Result{Skipped: []app.NodeID{1}}}
+	for _, body := range []string{`{"type":"start","data":{}}`, `{"type":"set_node_mode","data":{"nodeId":"P1","mode":"manual"}}`} {
+		checkOK(t, postCommand(t, New(a, nil), "application/json", body))
 	}
 }
 
@@ -418,7 +498,14 @@ func TestCommandWithApp(t *testing.T) {
 	// Every player starts in auto mode, so Start is accepted once.
 	checkOK(t, postCommand(t, h, "application/json", start))
 	checkError(t, postCommand(t, h, "application/json", start), http.StatusConflict, codePhaseConflict)
+	// The mode cannot change while Playing, in bulk either.
+	checkError(t, postCommand(t, h, "application/json", `{"type":"set_all_node_modes","data":{"mode":"auto"}}`),
+		http.StatusConflict, codePhaseConflict)
 	checkOK(t, postCommand(t, h, "application/json", `{"type":"reset","data":{}}`))
+	// Without MCUs no player can become manual: none is rejected, all are skipped.
+	checkSkipped(t, postCommand(t, h, "application/json", `{"type":"set_all_node_modes","data":{"mode":"manual"}}`),
+		`["P1","P2","P3","P4","P5","P6","P7","P8"]`)
+	checkSkipped(t, postCommand(t, h, "application/json", `{"type":"set_all_node_modes","data":{"mode":"auto"}}`), `[]`)
 	checkError(t, postCommand(t, h, "application/json", `{"type":"set_device_preview","data":{"deviceId":"AABBCCDDEEFF"}}`),
 		http.StatusNotFound, codeNotFound)
 	checkError(t, postCommand(t, h, "application/json", `{"type":"set_node_mode","data":{"nodeId":"P1","mode":"manual"}}`),

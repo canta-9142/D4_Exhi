@@ -12,8 +12,8 @@ import { updateDialog } from "./dialogs.js";
 import { setText } from "./dom.js";
 import { renderInspector } from "./inspector.js";
 import {
-  EXCEPTION_REASON, SAVE_FAILED_TEXT, commandPhrases, connectionLabels, fetchedText, pendingText, rejectedText,
-  successText, unknownReason, unknownText,
+  EXCEPTION_REASON, SAVE_FAILED_TEXT, commandPhrases, connectionLabels, fetchedText, isStringList, pendingText,
+  rejectedText, successText, unknownReason, unknownText,
 } from "./labels.js";
 import { renderMap } from "./map.js";
 import { Poller } from "./poller.js";
@@ -159,8 +159,12 @@ const unknownStatuses = [500, 503];
 // showResult shows the outcome of a POST until the next operation. Only the
 // code and the status decide the outcome; the message is never shown.
 function showResult(command, phrases, result) {
+  // A response without the skipped list of web.md 4.2 is not the API's.
+  if (result.kind === "success" && command.type === "set_all_node_modes" && !isStringList(result.body.skipped)) {
+    result = { kind: "unknown", reason: "bad_response", status: result.status };
+  }
   if (result.kind === "success") {
-    showNotice("success", successText(phrases));
+    showNotice("success", successText(phrases, result.body));
   } else if (result.kind === "error" && !unknownStatuses.includes(result.status)) {
     showNotice("rejected", rejectedText(command, phrases, result));
   } else {

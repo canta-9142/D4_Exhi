@@ -61,6 +61,15 @@ async function act(control) {
         await send({ type: "set_node_mode", data: { nodeId: control.dataset.node, mode: control.dataset.mode } }, snapshot);
       }
       return;
+    case "set-all-modes": {
+      // Only the switch to auto asks first: it clears the ready flags.
+      const mode = control.dataset.mode;
+      if (mode === "auto" && !await confirm("all-auto", {}, snapshot, control)) {
+        return;
+      }
+      await send({ type: "set_all_node_modes", data: { mode } }, snapshot);
+      return;
+    }
     case "set-rate":
       return setRate(control, snapshot);
     case "preview-stop":

@@ -89,7 +89,9 @@ export function fetchedText(connection, fetchedAt) {
 
 // commandPhrases returns the wording of command for its result: name for
 // pending and unknown results, success, and failure as the start of a
-// rejection. devices is the snapshot the command was made from.
+// rejection. success is a string, or a function of the response body when
+// the wording depends on it. devices is the snapshot the command was made
+// from.
 export function commandPhrases(command, devices = []) {
   const d = command.data ?? {};
   const make = (name, success, failure) => ({ name, success, failure });
@@ -104,6 +106,11 @@ export function commandPhrases(command, devices = []) {
       const node = nodeLabel(d.nodeId), mode = modeLabel(d.mode);
       return make(`${node}の${mode}への切り替え`, `${node}を${mode}にしました`, `${node}を${mode}にできませんでした`);
     }
+    case "set_all_node_modes":
+      if (d.mode === "manual") {
+        return make("全員の手動への切り替え", (body) => allManualText(body.skipped), "全員を手動にできませんでした");
+      }
+      return make("全員の自動への切り替え", "全員を自動にしました", "全員を自動にできませんでした");
     case "set_bot_rate": {
       const node = nodeLabel(d.nodeId);
       return make(`${node}の処理速度の変更`, `${node}の処理速度を ${d.ratePps} pps にしました`,
@@ -144,8 +151,18 @@ export function pendingText(phrases) {
   return `${phrases.name}を送信しています…`;
 }
 
-export function successText(phrases) {
-  return `✓ ${phrases.success}`;
+// successText is the success of a POST. body is the response body.
+export function successText(phrases, body) {
+  return `✓ ${typeof phrases.success === "function" ? phrases.success(body) : phrases.success}`;
+}
+
+// allManualText is "6 人を手動にしました（未接続のため自動のまま: C、F）" for the
+// skipped players of set_all_node_modes (admin-ui.md 11.1.1). The count
+// includes the players that were manual already.
+function allManualText(skipped) {
+  const count = Math.max(PLAYER_IDS.length - skipped.length, 0);
+  const left = skipped.length > 0 ? `（未接続のため自動のまま: ${skipped.map(displayName).join("、")}）` : "";
+  return `${count} 人を手動にしました${left}`;
 }
 
 // errorTexts holds the wording of every code of web.md 5 (admin-ui.md 11.3
@@ -189,7 +206,7 @@ function rewording(command, code) {
       if (type === "finish") {
         return "ゲーム中ではないため終了できません";
       }
-      if (type === "set_node_mode" || assignmentTypes.includes(type)) {
+      if (type === "set_node_mode" || type === "set_all_node_modes" || assignmentTypes.includes(type)) {
         return "ゲーム中は変更できません。準備中か終了後に操作してください";
       }
       if (type === "set_device_preview") {
@@ -203,7 +220,7 @@ function rewording(command, code) {
   }
 }
 
-function isStringList(v) {
+export function isStringList(v) {
   return Array.isArray(v) && v.every((e) => typeof e === "string");
 }
 
@@ -359,6 +376,8 @@ export function dialogText(kind, context, snapshot) {
       };
     case "reset":
       return { ...resetText(snapshot.game.phase, preview), confirm: "リセットする", danger: true };
+    case "all-auto":
+      return allAutoText(snapshot.players);
     case "swap":
       return swapText(context, snapshot.devices, preview);
     case "replace":
@@ -394,6 +413,18 @@ function resetText(phase, preview) {
     text.paragraphs.push(previewEndNote(preview.deviceId));
   }
   return text;
+}
+
+function allAutoText(players) {
+  const manual = players.filter((p) => p.mode === "manual").length;
+  return {
+    title: "全員を自動にしますか？",
+    paragraphs: [manual > 0
+      ? `手動の ${manual} 人が自動操作に切り替わり、準備完了が解除されます。`
+      : "すでに全員が自動です。"],
+    confirm: "全員を自動にする",
+    danger: false,
+  };
 }
 
 function findDevice(devices, deviceId) {

@@ -20,7 +20,9 @@ import (
 type fakeApp struct{}
 
 func (fakeApp) State(context.Context) (app.Snapshot, error) { return app.Snapshot{}, nil }
-func (fakeApp) Execute(context.Context, app.Command) error  { return nil }
+func (fakeApp) ExecuteWithResult(context.Context, app.Command) (app.Result, error) {
+	return app.Result{}, nil
+}
 
 func serve(t *testing.T, h http.Handler, method, path string) *httptest.ResponseRecorder {
 	t.Helper()

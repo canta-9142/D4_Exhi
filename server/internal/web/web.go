@@ -23,7 +23,7 @@ import (
 // App is the part of app.App that web depends on.
 type App interface {
 	State(ctx context.Context) (app.Snapshot, error)
-	Execute(ctx context.Context, c app.Command) error
+	ExecuteWithResult(ctx context.Context, c app.Command) (app.Result, error)
 }
 
 //go:embed static

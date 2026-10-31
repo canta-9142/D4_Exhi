@@ -41,6 +41,13 @@ type okBody struct {
 	OK bool `json:"ok"`
 }
 
+// skippedBody is the success response of set_all_node_modes (web.md 4.2).
+// Skipped is never null.
+type skippedBody struct {
+	OK      bool     `json:"ok"`
+	Skipped []string `json:"skipped"`
+}
+
 // handleCommand serves POST /api/commands (web.md 4). A request that is not
 // a valid command never reaches app.
 func (h *handler) handleCommand(w http.ResponseWriter, r *http.Request) {
@@ -54,11 +61,11 @@ func (h *handler) handleCommand(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, codeInvalidRequest, errorMessages[codeInvalidRequest], nil)
 		return
 	}
-	err = h.app.Execute(r.Context(), command)
+	result, err := h.app.ExecuteWithResult(r.Context(), command)
 	var rejection *app.Rejection
 	switch {
 	case err == nil:
-		writeJSON(w, http.StatusOK, okBody{OK: true})
+		h.writeSuccess(w, command, result)
 	case errors.As(err, &rejection):
 		h.writeRejection(w, command, rejection)
 	case errors.Is(err, app.ErrStopped):
@@ -67,6 +74,28 @@ func (h *handler) handleCommand(w http.ResponseWriter, r *http.Request) {
 		h.logger.Error("app execute failed", "operation", command.Operation, "error", err)
 		writeError(w, http.StatusInternalServerError, codeInternalError, errorMessages[codeInternalError], nil)
 	}
+}
+
+// writeSuccess answers a command app applied. Only set_all_node_modes adds
+// anything to {"ok":true}.
+func (h *handler) writeSuccess(w http.ResponseWriter, command app.Command, result app.Result) {
+	if command.Operation != app.SetAllNodesEnabled {
+		writeJSON(w, http.StatusOK, okBody{OK: true})
+		return
+	}
+	skipped := make([]string, 0, len(result.Skipped))
+	for _, id := range sortedIDs(result.Skipped) {
+		name, err := playerName(id)
+		if err != nil {
+			// The command was applied, but the client cannot be told which
+			// players stayed automatic, so this is not reported as a success.
+			h.logger.Error("invalid skipped node", "node", id, "error", err)
+			writeError(w, http.StatusInternalServerError, codeInternalError, errorMessages[codeInternalError], nil)
+			return
+		}
+		skipped = append(skipped, name)
+	}
+	writeJSON(w, http.StatusOK, skippedBody{OK: true, Skipped: skipped})
 }
 
 // writeRejection answers a command app did not apply. The app message is
@@ -173,14 +202,22 @@ func decodeData(typ string, data json.RawMessage) (app.Command, error) {
 		if err != nil {
 			return app.Command{}, err
 		}
-		mode, err := decodeString(fields["mode"])
+		manual, err := decodeMode(fields["mode"])
 		if err != nil {
-			return app.Command{}, fmt.Errorf("mode: %w", err)
+			return app.Command{}, err
 		}
-		if mode != "manual" && mode != "auto" {
-			return app.Command{}, fmt.Errorf("unknown mode %q", mode)
+		return app.Command{Operation: app.SetNodeEnabled, Node: node, Enabled: manual}, nil
+
+	case "set_all_node_modes":
+		fields, err := decodeObject(data, "mode")
+		if err != nil {
+			return app.Command{}, err
 		}
-		return app.Command{Operation: app.SetNodeEnabled, Node: node, Enabled: mode == "manual"}, nil
+		manual, err := decodeMode(fields["mode"])
+		if err != nil {
+			return app.Command{}, err
+		}
+		return app.Command{Operation: app.SetAllNodesEnabled, Enabled: manual}, nil
 
 	case "set_bot_rate":
 		fields, err := decodeObject(data, "nodeId", "ratePps")
@@ -238,6 +275,19 @@ func decodeData(typ string, data json.RawMessage) (app.Command, error) {
 		return command, nil
 	}
 	return app.Command{}, errors.New("unknown type")
+}
+
+// decodeMode reads the mode of set_node_mode and set_all_node_modes and
+// reports whether it is manual.
+func decodeMode(raw json.RawMessage) (bool, error) {
+	mode, err := decodeString(raw)
+	if err != nil {
+		return false, fmt.Errorf("mode: %w", err)
+	}
+	if mode != "manual" && mode != "auto" {
+		return false, fmt.Errorf("unknown mode %q", mode)
+	}
+	return mode == "manual", nil
 }
 
 // decodeTarget reads {"kind","nodeId"} of set_device_assignment.

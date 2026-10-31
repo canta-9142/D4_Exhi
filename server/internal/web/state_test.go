@@ -33,7 +33,9 @@ func (a *stateApp) State(ctx context.Context) (app.Snapshot, error) {
 	return a.snapshot, a.err
 }
 
-func (a *stateApp) Execute(context.Context, app.Command) error { return nil }
+func (a *stateApp) ExecuteWithResult(context.Context, app.Command) (app.Result, error) {
+	return app.Result{}, nil
+}
 
 // baseSnapshot is a Preparing game with every node in auto mode and no
 // devices.

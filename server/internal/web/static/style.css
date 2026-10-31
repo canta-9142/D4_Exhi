@@ -254,6 +254,8 @@ body[data-countdown="true"] .unit { color: var(--caution); }
 .panel-head { display: flex; align-items: baseline; gap: 12px; padding: 6px 12px 2px; }
 .panel-head h2 { margin: 0; font-size: 15px; font-weight: 700; white-space: nowrap; }
 .panel-head .meta { color: var(--ink-2); font-size: 12px; }
+.panel-head .head-actions { display: flex; gap: 6px; margin-left: auto; align-self: center; }
+.panel-head .head-actions .btn { height: 24px; padding: 0 10px; font-size: 12px; }
 .panel-head .meta.warn { color: var(--caution); font-weight: 700; }
 .panel-head .meta.bad { color: var(--halt); font-weight: 700; }
 .scroll { overflow: auto; min-height: 0; }

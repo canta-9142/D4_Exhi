@@ -25,6 +25,8 @@ const ui = {
   reset: document.getElementById("reset"),
   finish: document.getElementById("finish"),
   playersMeta: document.getElementById("players-meta"),
+  allManual: document.getElementById("all-manual"),
+  allAuto: document.getElementById("all-auto"),
   rankHead: document.getElementById("rank-head"),
   players: document.getElementById("players"),
   bots: document.getElementById("bots"),
@@ -110,6 +112,9 @@ export function renderPlayers(snapshot) {
     meta += "、上位%はこの起動中のゲームだけで計算";
   }
   setText(ui.playersMeta, meta);
+  // The bulk switches are accepted in the same phases as the row buttons
+  // (admin-ui.md 8.3).
+  ui.allManual.disabled = ui.allAuto.disabled = phase === "Playing";
 
   placeChildren(ui.players, players.map((player) => {
     let row = playerRows.get(player.nodeId);

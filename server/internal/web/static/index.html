@@ -56,7 +56,13 @@
   <div class="main">
     <div class="col col-nodes">
       <section class="panel section" aria-labelledby="players-title">
-        <div class="panel-head"><h2 id="players-title">プレイヤー</h2><span id="players-meta" class="meta"></span></div>
+        <div class="panel-head">
+          <h2 id="players-title">プレイヤー</h2><span id="players-meta" class="meta"></span>
+          <span class="head-actions">
+            <button id="all-manual" class="btn" type="button" data-action="set-all-modes" data-mode="manual">全員を手動</button>
+            <button id="all-auto" class="btn" type="button" data-action="set-all-modes" data-mode="auto">全員を自動…</button>
+          </span>
+        </div>
         <div class="scroll">
           <table class="players">
             <thead>
