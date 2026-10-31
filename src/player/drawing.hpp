@@ -57,13 +57,13 @@ void startup_animation() {
 
 void draw_button(int x, int y, NodeId id, bool pressed) {
   const auto& visual = nodeVisuals[static_cast<int>(id)];
-  const uint16_t background = pressed ? TFT_BLACK : visual.color;
+  const uint16_t background = button_background(id, pressed);
   const uint16_t foreground = id == NodeId::None ? TFT_WHITE : pressed ? visual.color : TFT_BLACK;
   frame.fillRect(x + 1, y + 1, 119, 79, background);
   frame.setFont(&fonts::Font0);
   frame.setTextColor(foreground, background);
-  frame.setTextSize(6);
-  frame.drawChar(visual.name, x + 42, y + 16);
+  frame.setTextSize(BUTTON_LETTER_SIZE);
+  frame.drawChar(visual.name, x + BUTTON_LETTER_DX, y + BUTTON_LETTER_DY);
 }
 
 void draw_neighbor_buttons(NodeId id, uint8_t pressedMask, uint8_t changedMask) {
@@ -385,6 +385,7 @@ void render_snapshot(const DisplaySnapshot& snapshot, const DisplayChanges& chan
   if (display_screen(snapshot) == DisplayScreen::Practice) {
     if (changes.ready) draw_practice_label(frame);
     if (changes.remaining) draw_practice_time(frame, snapshot);
+    draw_practice_hints(frame, snapshot, changes);
     return;
   }
   if (display_screen(snapshot) == DisplayScreen::Idle) {

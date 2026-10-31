@@ -14,6 +14,7 @@
 #include "ready_hold.hpp"
 #include "top_percent.hpp"
 #include "top_percent_art.hpp"
+#include "tutorial_hint.hpp"
 
 struct DisplaySnapshot {
   PacketAnimation::Snapshot cards;
@@ -38,6 +39,7 @@ struct DisplaySnapshot {
   GainAnimation::Snapshot gains{};
   bool rankFlash = false; // 順位が上がった後、情報欄の数字を緑で描く間
   EffectsFrame effects{};
+  TutorialHint hint{}; // 練習のヒントの帯。ゲーム側が練習用キューの先頭の宛先から判定する。練習の外では空。
 };
 
 static_assert(std::is_trivially_copyable<DisplaySnapshot>::value, "FreeRTOS queues copy snapshots as bytes");
@@ -191,6 +193,16 @@ inline const PacketAnimation::Snapshot& displayed_cards(const DisplaySnapshot& s
   return cardPhase && s.synced && s.selfId != NodeId::None ? s.cards : empty;
 }
 
+// 練習のヒントの帯とBotの混雑は、練習の画面でだけ出す。
+inline const TutorialHint& displayed_hint(const DisplaySnapshot& s) {
+  static const TutorialHint empty{};
+  return display_screen(s) == DisplayScreen::Practice ? s.hint : empty;
+}
+// Botのボタン（slot 0が左から2番目）のバーに出す使用量。出さないときは-1。
+inline int displayed_bot_load(const DisplaySnapshot& s, int slot) {
+  return display_screen(s) == DisplayScreen::Practice ? bot_load(s.status, s.selfId, slot) : -1;
+}
+
 inline bool same_card_pixels(const PacketCard& previous, const PacketCard& next) {
   if (previous.active != next.active) return false;
   if (!next.active) return true;
@@ -217,11 +229,13 @@ struct DisplayChanges {
   bool resultHeader = false, resultBody = false, resultScore = false, resultRank = false, resultAccent = false;
   bool resultAgain = false; // 両端の枠の「もう一度遊ぶ」の案内（矢印・長押しのバー）
   bool previewBody = false, countdownBody = false;
+  // 練習のヒントの帯と、Botの混雑のバー・FULLの札を描き直すボタン（bit iが左からi番目のボタン。1と2だけ）。
+  uint8_t hintBands = 0, botBars = 0;
   bool topBody = false, topCurve = false; // topCurveはベルカーブとマスの両方を描き直す。
   uint8_t topCell = 0; // 点滅で描き直すマスの番号（1〜50）。0は描き直さない。
   bool topArt = false; // ②のヘッダーのドット絵の範囲
   bool any() const {
-    return resultHeader || resultBody || resultScore || resultRank || resultAccent || resultAgain || topBody || topCurve || topCell || topArt || previewBody || countdownBody || full || lobbyHeader || lobbyBody || headerWindow || idleGuide || idleBar || idleArrows || cards.any() || buttons || self || label || score || remaining || ready || rank || gains || leftColumn || rightMargin;
+    return hintBands || botBars || resultHeader || resultBody || resultScore || resultRank || resultAccent || resultAgain || topBody || topCurve || topCell || topArt || previewBody || countdownBody || full || lobbyHeader || lobbyBody || headerWindow || idleGuide || idleBar || idleArrows || cards.any() || buttons || self || label || score || remaining || ready || rank || gains || leftColumn || rightMargin;
   }
 };
 
@@ -316,6 +330,14 @@ inline DisplayChanges display_changes(const DisplaySnapshot& previous, const Dis
     changes.ready = first;
     changes.remaining = first || practice_time(previous.status) != practice_time(next.status) ||
                         practice_time_warn(previous.status) != practice_time_warn(next.status);
+    // 帯は判定結果（先頭パケットの宛先）が変わったとき、バーは使用量が変わったときだけ描き直す。
+    // ボタンを描き直すと塗りで帯とバーが消えるので、そのボタンの帯とバーも描き直す。
+    for (int slot = 0; slot < HINT_BUTTONS; ++slot) {
+      const uint8_t bit = 1u << (HINT_FIRST_BUTTON + slot);
+      const bool redrawn = first || (changes.buttons & bit);
+      if (redrawn || displayed_hint(previous).bands[slot] != displayed_hint(next).bands[slot]) changes.hintBands |= bit;
+      if (redrawn || displayed_bot_load(previous, slot) != displayed_bot_load(next, slot)) changes.botBars |= bit;
+    }
     return changes;
   }
   const bool validity = first || previous.status.known != next.status.known;
@@ -374,6 +396,13 @@ inline FrameDamage display_damage(const DisplayChanges& changes, bool first) {
   if (changes.self) damage.markRect(361, 1, 119, 79);
   for (unsigned i = 0; i < 4; ++i)
     if (changes.buttons & (1u << i)) damage.markRect(i * 120 + 1, 241, 119, 79);
+  for (int i = HINT_FIRST_BUTTON; i < HINT_FIRST_BUTTON + HINT_BUTTONS; ++i) {
+    if (changes.hintBands & (1u << i)) damage.markRect(hint_band_x(i), HINT_BAND_Y, HINT_BAND_WIDTH, HINT_CELL_HEIGHT);
+    if (changes.botBars & (1u << i)) {
+      damage.markRect(button_frame_x(i), BOT_BAR_Y, BUTTON_FRAME_WIDTH, BOT_BAR_HEIGHT);
+      damage.markRect(bot_full_x(i), BOT_FULL_Y, BOT_FULL_WIDTH, BOT_FULL_HEIGHT);
+    }
+  }
   if (changes.label) damage.markRect(INFO_X, 81, INFO_WIDTH, INFO_HEADER_HEIGHT);
   if (changes.gains) damage.markRect(INFO_X, GAIN_LANE_Y, INFO_WIDTH, GAIN_LANE_HEIGHT);
   if (changes.score) damage.markRect(366, INFO_SCORE_Y, 72, 24);

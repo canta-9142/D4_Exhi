@@ -95,6 +95,11 @@ void publish_display_snapshot(uint32_t elapsedMs) {
 #else
   (void)elapsedMs;
 #endif
+  // 練習のヒントの帯。練習中のキューは練習用キューだが、実際のFIFOと区別せず先頭の宛先から判定する。空なら光らせない。
+  if (practice_round(snapshot)) {
+    const Packet* head = packetQueue.at(0);
+    snapshot.hint = tutorial_hint(selfId, head ? head->destination : NodeId::None);
+  }
   xQueueOverwrite(displayQueue, &snapshot);
 }
 

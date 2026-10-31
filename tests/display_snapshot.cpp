@@ -277,10 +277,26 @@ int main() {
   tutorialWait.status.countdown = 0;
   tutorialWait.countdownGo = true;
   assert(display_screen(tutorialWait) == DisplayScreen::Countdown);
+  // ゲーム側は練習の間だけ、練習用キューの先頭の宛先から帯を判定する。自ノードA、宛先D（参考画像の1）。
+  tutorial.hint = tutorial_hint(NodeId::P1, NodeId::P4);
+  assert(tutorial.hint.bands[0].cells[3] == HintCell::Lit && tutorial.hint.bands[1].cells[3] == HintCell::Unlinked);
   auto toPractice = display_changes(normalRound, tutorial, false);
   assert(toPractice.full && toPractice.ready && toPractice.remaining && toPractice.self && toPractice.label);
   assert(!toPractice.score && !toPractice.rank && !toPractice.gains && !toPractice.leftColumn && !toPractice.rightMargin);
   assert(toPractice.buttons == 0x0f && toPractice.cards.all());
+  assert(toPractice.hintBands == 0x06 && toPractice.botBars == 0x06); // 練習に入ると、Botの2つのボタンに帯とバーを描く。
+  assert(displayed_hint(tutorial) == tutorial.hint);
+  // 練習の外では、帯とバーを出さない（通常のPlaying・カウントダウン・結果）。
+  auto hintOutside = normalRound;
+  hintOutside.hint = tutorial.hint;
+  hintOutside.status.botsKnown = true;
+  hintOutside.status.bots[0] = 4;
+  assert(displayed_hint(hintOutside) == TutorialHint{} && displayed_bot_load(hintOutside, 0) == -1);
+  assert(!display_changes(normalRound, hintOutside, false).any());
+  assert(display_changes(tutorial, normalRound, false).hintBands == 0); // 出るときは全描画で通常の画面に戻す。
+  hintOutside = tutorial;
+  hintOutside.status.countdown = 2;
+  assert(displayed_hint(hintOutside) == TutorialHint{} && displayed_bot_load(hintOutside, 1) == -1);
   assert(display_changes(tutorial, normalRound, false).full); // 練習を出ると通常の画面へ全描画で戻る。
   assert(!display_changes(tutorial, tutorial, false).any());
   // 時間欄: 連続運転ではwindowが10以下になるまで--。注意色で残り秒数を出す。
@@ -311,16 +327,12 @@ int main() {
   assert(practice_time(timed.status) == 37 && !practice_time_warn(timed.status));
   timed.status.remaining = 120;
   assert(practice_time(timed.status) == 120);
-  // 得点・獲得点・コンボ・順位・Botの使用量が来ても、練習の画面は描き直さない。
+  // 得点・獲得点・コンボ・順位が来ても、練習の画面は描き直さない。
   timed = tutorial;
   timed.status.score = 1234;
   timed.status.rank = 3;
   timed.status.combo = 25;
   timed.status.ready = true;
-  timed.status.botsKnown = true;
-  timed.status.bots[0] = 1;
-  timed.status.bots[1] = 4;
-  timed.status.bots[2] = 0;
   timed.rankFlash = true;
   timed.gains[0] = {15, 0, true};
   assert(!display_changes(tutorial, timed, false).any());
@@ -329,6 +341,14 @@ int main() {
   timed.pressedMask = 6;
   auto buttonDiff = display_changes(tutorial, timed, false);
   assert(buttonDiff.buttons == 6 && buttonDiff.cards.none() && !buttonDiff.remaining);
+  // Botのボタンを描き直すと塗りで帯とバーが消えるので、そのボタンの帯とバーも描き直す。両端のボタンには帯がない。
+  assert(buttonDiff.hintBands == 6 && buttonDiff.botBars == 6);
+  timed.pressedMask = 4;
+  buttonDiff = display_changes(tutorial, timed, false);
+  assert(buttonDiff.buttons == 4 && buttonDiff.hintBands == 4 && buttonDiff.botBars == 4);
+  timed.pressedMask = 9;
+  buttonDiff = display_changes(tutorial, timed, false);
+  assert(buttonDiff.buttons == 9 && buttonDiff.hintBands == 0 && buttonDiff.botBars == 0);
   timed = tutorial;
   timed.cards[0].y = 30;
   assert(display_changes(tutorial, timed, false).cards.any());
@@ -336,6 +356,66 @@ int main() {
   timed.selfId = NodeId::P3;
   buttonDiff = display_changes(tutorial, timed, false);
   assert(buttonDiff.self && buttonDiff.buttons == 0x0f && buttonDiff.label && !buttonDiff.full);
+  assert(buttonDiff.hintBands == 0x06 && buttonDiff.botBars == 0x06);
+
+  // 練習のヒントの帯: 判定結果（先頭パケットの宛先）が変わったときだけ、帯の範囲を描き直す。
+  timed = tutorial;
+  timed.cards[0].packet.id = 99; // 宛先が同じパケットに替わっても、帯は同じなので描き直さない。
+  assert(display_changes(tutorial, timed, false).hintBands == 0);
+  timed = tutorial;
+  timed.hint = tutorial_hint(NodeId::P1, NodeId::P7); // D→G。Iの帯もKの帯も変わる。
+  auto hintDiff = display_changes(tutorial, timed, false);
+  assert(hintDiff.hintBands == 0x06 && !hintDiff.botBars && !hintDiff.buttons && hintDiff.cards.none());
+  assert(!hintDiff.remaining && !hintDiff.ready && !hintDiff.label && !hintDiff.full);
+  auto hintArea = display_damage(hintDiff, false);
+  assert(hintArea.containsPixel(hint_band_x(1), HINT_BAND_Y) &&
+         hintArea.containsPixel(hint_band_x(2) + HINT_BAND_WIDTH - 1, HINT_BAND_Y + HINT_CELL_HEIGHT - 1));
+  assert(!hintArea.containsPixel(button_letter_x(1) + 15, BUTTON_LETTER_Y + 20)); // ボタンの文字は描き直さない。
+  assert(!hintArea.containsPixel(10, HINT_BAND_Y) && !hintArea.containsPixel(470, HINT_BAND_Y) && !hintArea.containsPixel(180, 100));
+  timed.hint = tutorial_hint(NodeId::P1, NodeId::P2); // D→B（隣接）。Iの帯のDが消えるだけで、Kの帯は変わらない。
+  assert(display_changes(tutorial, timed, false).hintBands == 0x02);
+  auto emptyFifo = timed;
+  emptyFifo.hint = tutorial_hint(NodeId::P1, NodeId::None); // FIFOが空でも光らないので、隣接宛てと同じ帯。
+  assert(!display_changes(timed, emptyFifo, false).any());
+  assert(display_changes(emptyFifo, tutorial, false).hintBands == 0x02);
+
+  // Botの混雑: botsが変わったときだけ、バーとFULLの札を描き直す。botsが来るまでは出さない。
+  assert(displayed_bot_load(tutorial, 0) == -1 && displayed_bot_load(tutorial, 1) == -1);
+  auto loaded = tutorial;
+  loaded.status.botsKnown = true;
+  loaded.status.bots[0] = 1; // I（B1）
+  loaded.status.bots[1] = 3; // J（B2）。自ノードAの下部にはない。
+  loaded.status.bots[2] = 0; // K（B3）
+  auto barDiff = display_changes(tutorial, loaded, false);
+  assert(barDiff.botBars == 0x06 && !barDiff.hintBands && !barDiff.buttons && !barDiff.remaining && barDiff.cards.none());
+  assert(displayed_bot_load(loaded, 0) == 1 && displayed_bot_load(loaded, 1) == 0);
+  assert(bot_load_color(displayed_bot_load(loaded, 0)) == BOT_LOAD_BLUE && !bot_load_full(displayed_bot_load(loaded, 0)));
+  auto busy = loaded;
+  busy.status.bots[1] = 4; // 下部にないBotの変化では描き直さない。
+  assert(!display_changes(loaded, busy, false).any());
+  busy = loaded;
+  busy.status.bots[2] = 4; // Kが満杯。左から3番目のボタンだけ、赤のバーとFULL。
+  barDiff = display_changes(loaded, busy, false);
+  assert(barDiff.botBars == 0x04 && !barDiff.hintBands);
+  assert(bot_load_color(displayed_bot_load(busy, 1)) == BOT_LOAD_RED && bot_load_full(displayed_bot_load(busy, 1)));
+  auto barArea = display_damage(barDiff, false);
+  assert(barArea.containsPixel(button_frame_x(2), BOT_BAR_Y) && barArea.containsPixel(button_frame_x(2) + BUTTON_FRAME_WIDTH - 1, BOT_BAR_Y));
+  assert(barArea.containsPixel(bot_full_x(2), BOT_FULL_Y) && barArea.containsPixel(bot_full_x(2) + BOT_FULL_WIDTH - 1, BOT_FULL_Y + BOT_FULL_HEIGHT - 1));
+  assert(!barArea.containsPixel(button_letter_x(2) + 15, BUTTON_LETTER_Y + 8) && !barArea.containsPixel(130, 300));
+  // 帯と混雑は独立。宛先が変わってもバーは描き直さず、使用量が変わっても帯は描き直さない。
+  auto both = busy;
+  both.hint = tutorial_hint(NodeId::P1, NodeId::P7);
+  barDiff = display_changes(busy, both, false);
+  assert(barDiff.hintBands == 0x06 && barDiff.botBars == 0);
+  both.status.window = 59; // 毎秒の通知（同じbots）では描き直さない。
+  assert(display_changes(busy, both, false).botBars == 0);
+  auto lost = busy;
+  lost.status.botsKnown = false; // botsのない通知ではバーを消す。
+  assert(display_changes(busy, lost, false).botBars == 0x06 && displayed_bot_load(lost, 1) == -1);
+  // 自ノードが変わると、下部のBotも変わる（C: J・K）。
+  auto otherSelf = busy;
+  otherSelf.selfId = NodeId::P3;
+  assert(displayed_bot_load(otherSelf, 0) == 3 && displayed_bot_load(otherSelf, 1) == 4);
   // 札は左上、キュー位置の数字3より上。左の列の演出は出さない。
   assert(PRACTICE_TAG_X >= LEFT_COLUMN_X && PRACTICE_TAG_X + PRACTICE_TAG_WIDTH <= ANIMATION_X);
   assert(PRACTICE_TAG_Y >= 0 && PRACTICE_TAG_Y + PRACTICE_TAG_HEIGHT <= 28);
@@ -986,5 +1066,5 @@ int main() {
   plan = plan_transfer(timing, blocks, 3);
   assert(!plan.feasible && std::isfinite(plan.startDelayFromScanUs));
   assert(!plan_transfer(timing, blocks, 0).feasible);
-  std::puts("PASS: rank and gains in the info column, playing effects only on the normal Playing screen with left-column and right-margin damage, state-driven damage, old/new card rows, clipping, no-op frames, countdown screen, top percent page with header art damage, three-page pager and best scores, sparse transfer timing");
+  std::puts("PASS: rank and gains in the info column, playing effects only on the normal Playing screen with left-column and right-margin damage, state-driven damage, old/new card rows, clipping, no-op frames, countdown screen, practice hint bands and bot load bars, top percent page with header art damage, three-page pager and best scores, sparse transfer timing");
 }

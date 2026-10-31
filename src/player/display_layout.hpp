@@ -1,6 +1,8 @@
 #ifndef DISPLAY_LAYOUT_HPP_
 #define DISPLAY_LAYOUT_HPP_
 
+#include <cstdint>
+
 constexpr int ANIMATION_X = 120;
 constexpr int ANIMATION_Y = 0;
 constexpr int ANIMATION_WIDTH = 200;
@@ -22,6 +24,36 @@ constexpr int GAIN_START_Y = GAIN_LANE_Y + GAIN_LANE_HEIGHT - GAIN_TEXT_HEIGHT;
 // 下部の4つのボタン枠（左から順にx=0,120,240,360。枠線の内側）。
 constexpr int BUTTON_FRAME_Y = 241, BUTTON_FRAME_WIDTH = 119, BUTTON_FRAME_HEIGHT = 79;
 constexpr int button_frame_x(int index) { return index * 120 + 1; }
+// ボタンの文字（ノードの表示名）。区画の左上（x=i*120、y=240）から(42, 16)に、Font0の文字サイズ6で描く。
+// 字形は5×7ドットなので、画素では30×42（下部のボタンではy=256〜297）。
+constexpr int BUTTON_LETTER_DX = 42, BUTTON_LETTER_DY = 16, BUTTON_LETTER_SIZE = 6;
+constexpr int BUTTON_LETTER_WIDTH = 5 * BUTTON_LETTER_SIZE, BUTTON_LETTER_HEIGHT = 7 * BUTTON_LETTER_SIZE;
+constexpr int button_letter_x(int index) { return index * 120 + BUTTON_LETTER_DX; }
+constexpr int BUTTON_LETTER_Y = 240 + BUTTON_LETTER_DY;
+
+// 練習のヒントの帯。Botのボタン（左から2番目・3番目）の上端、混雑のバーのすぐ下に、A〜Hの8枠を横に並べる。
+// 枠は13×11で1画素の隙間を空け、帯の幅は111。帯の下端（y=254）とボタンの文字の上端（y=256）の間に1行空ける。
+constexpr int HINT_FIRST_BUTTON = 1, HINT_BUTTONS = 2, HINT_CELLS = 8;
+constexpr int HINT_CELL_WIDTH = 13, HINT_CELL_HEIGHT = 11, HINT_CELL_PITCH = 14;
+constexpr int HINT_BAND_DX = 4, HINT_BAND_Y = 244;
+constexpr int HINT_BAND_WIDTH = (HINT_CELLS - 1) * HINT_CELL_PITCH + HINT_CELL_WIDTH;
+constexpr int hint_band_x(int button) { return button_frame_x(button) + HINT_BAND_DX; }
+constexpr int hint_cell_x(int button, int cell) { return hint_band_x(button) + cell * HINT_CELL_PITCH; }
+// 枠の中の名前（Font0の文字サイズ1、字形5×7）。光る枠の太枠（2画素）に掛からない位置。
+constexpr int HINT_LIT_BORDER = 2, HINT_TEXT_DX = 4, HINT_TEXT_DY = 2;
+// 光る枠の太枠と文字、つながる枠の文字の色。つながる枠はノードの色をHINT_LINKED_PERCENTの明るさにして塗る。
+// つながらない枠の線と文字は、ボタンの地の色をHINT_FAINT_PERCENTの明るさにした色。地が黒（押下中）ならHINT_FAINT_ON_BLACK。
+constexpr uint16_t HINT_LIT_INK = 0x0000, HINT_LINKED_INK = 0xFFFF, HINT_FAINT_ON_BLACK = 0x4208;
+constexpr int HINT_LINKED_PERCENT = 50, HINT_FAINT_PERCENT = 60;
+
+// 練習のBotの混雑（status.bots）。Botのボタンの上端の細いバーと、満杯（4件）のときに文字の下に出すFULLの札。
+constexpr int BOT_BAR_Y = BUTTON_FRAME_Y, BOT_BAR_HEIGHT = 3; // 幅はボタン枠と同じ（BUTTON_FRAME_WIDTH）。
+constexpr int BOT_FULL_DX = 33, BOT_FULL_Y = 302, BOT_FULL_WIDTH = 52, BOT_FULL_HEIGHT = 16, BOT_FULL_TEXT_SIZE = 2;
+constexpr int bot_full_x(int button) { return button_frame_x(button) + BOT_FULL_DX; }
+// シグナルタワー（LED制御のBUFFER）と同じ色。0〜1が青、2が緑、3が黄、4が赤。FULLの札は赤の地に白の文字。
+constexpr uint16_t BOT_LOAD_BLUE = 0x001F, BOT_LOAD_GREEN = 0x07E0, BOT_LOAD_YELLOW = 0xFFE0, BOT_LOAD_RED = 0xF800;
+constexpr uint16_t BOT_FULL_INK = 0xFFFF;
+constexpr uint8_t BOT_LOAD_MAX = 4;
 
 // 練習ラウンド。左上（キュー位置の数字3の上）のTUTORIALの札。READYの位置にPRACTICE、残り時間の位置にTIMEを出す。
 constexpr int PRACTICE_TAG_X = 4, PRACTICE_TAG_Y = 2, PRACTICE_TAG_WIDTH = 112, PRACTICE_TAG_HEIGHT = 22;
