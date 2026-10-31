@@ -39,6 +39,7 @@ func TestRejectionCodes(t *testing.T) {
 		nodes   []NodeID
 	}{
 		{"mode change while Playing", playing, Command{Operation: SetNodeEnabled, Node: 1, Enabled: true}, CodePhaseConflict, nil},
+		{"bulk mode change while Playing", playing, Command{Operation: SetAllNodesEnabled, Enabled: true}, CodePhaseConflict, nil},
 		{"mode change for bot", nil, Command{Operation: SetNodeEnabled, Node: 9}, CodeInvalid, nil},
 		{"manual without MCU", nil, Command{Operation: SetNodeEnabled, Node: 2, Enabled: true}, CodeDeviceDisconnected, nil},
 		{"bot rate for player", nil, Command{Operation: SetBotRate, Node: 1, Rate: 1}, CodeInvalid, nil},

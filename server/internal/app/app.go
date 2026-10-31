@@ -211,8 +211,17 @@ func (a *App) submit(ctx context.Context, advance bool, apply func(time.Time) er
 	}
 }
 
+// Execute runs command and reports only whether it was accepted.
 func (a *App) Execute(ctx context.Context, command Command) error {
-	return a.submit(ctx, true, func(now time.Time) error {
+	_, err := a.ExecuteWithResult(ctx, command)
+	return err
+}
+
+// ExecuteWithResult runs command like Execute and also returns what the
+// operation produced. Only SetAllNodesEnabled has a result.
+func (a *App) ExecuteWithResult(ctx context.Context, command Command) (Result, error) {
+	var result Result
+	err := a.submit(ctx, true, func(now time.Time) error {
 		switch command.Operation {
 		case Start:
 			if err := a.game.startError(); err != nil {
@@ -235,14 +244,21 @@ func (a *App) Execute(ctx context.Context, command Command) error {
 			if command.Enabled && id == "" {
 				return reject(CodeDeviceDisconnected, "player MCU is not connected and identified")
 			}
-			if a.game.nodes[command.Node].manual != command.Enabled {
-				if command.Enabled && a.preview != nil && a.preview.uid == a.sessions[id].uid {
-					a.clearPreview()
+			a.applyNodeEnabled(command.Node, command.Enabled, id)
+		case SetAllNodesEnabled:
+			if a.game.phase == Playing {
+				return reject(CodePhaseConflict, "operation mode cannot change while Playing")
+			}
+			// A node without an identified MCU cannot become manual; it stays
+			// automatic and is reported instead of rejecting the others.
+			for node := NodeID(1); node <= PlayerCount; node++ {
+				id := a.nodeSession(PlayerDevice, node)
+				if command.Enabled && id == "" {
+					a.applyNodeEnabled(node, false, id)
+					result.Skipped = append(result.Skipped, node)
+					continue
 				}
-				a.game.setManual(command.Node, command.Enabled)
-				if id != "" {
-					a.syncDevice(id, true)
-				}
+				a.applyNodeEnabled(node, command.Enabled, id)
 			}
 		case SetBotRate:
 			if !command.Node.bot() || command.Rate <= 0 || math.IsNaN(command.Rate) || math.IsInf(command.Rate, 0) {
@@ -261,6 +277,26 @@ func (a *App) Execute(ctx context.Context, command Command) error {
 		}
 		return nil
 	})
+	if err != nil {
+		return Result{}, err
+	}
+	return result, nil
+}
+
+// applyNodeEnabled sets the operation mode of a player node whose connected
+// and identified MCU is session id ("" when there is none), and brings that
+// MCU in line. Setting the current mode changes nothing.
+func (a *App) applyNodeEnabled(node NodeID, enabled bool, id SessionID) {
+	if a.game.nodes[node].manual == enabled {
+		return
+	}
+	if enabled && a.preview != nil && a.preview.uid == a.sessions[id].uid {
+		a.clearPreview()
+	}
+	a.game.setManual(node, enabled)
+	if id != "" {
+		a.syncDevice(id, true)
+	}
 }
 
 func (a *App) State(ctx context.Context) (Snapshot, error) {

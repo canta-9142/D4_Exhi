@@ -23,6 +23,7 @@ const (
 	Finish                  Operation = "Finish"
 	Reset                   Operation = "Reset"
 	SetNodeEnabled          Operation = "SetNodeEnabled"
+	SetAllNodesEnabled      Operation = "SetAllNodesEnabled"
 	SetBotRate              Operation = "SetBotRate"
 	SetDeviceAssignment     Operation = "SetDeviceAssignment"
 	SwapDeviceAssignments   Operation = "SwapDeviceAssignments"
@@ -39,6 +40,14 @@ type Command struct {
 	DeviceID      string
 	OtherDeviceID string
 	Kind          DeviceKind
+}
+
+// Result is what ExecuteWithResult returns for an accepted command.
+type Result struct {
+	// Skipped lists, in ascending order, the player nodes that
+	// SetAllNodesEnabled could not make manual because their MCU is not
+	// connected and identified. They stay automatic.
+	Skipped []NodeID
 }
 
 // IncomingMessage has already passed serial's JSON/required-field validation.

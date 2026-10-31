@@ -722,3 +722,175 @@ func TestPreviewSwitchCompletesOldRecoveryFirst(t *testing.T) {
 		}
 	}
 }
+
+// bulkHarness has players on P1, P3 and P6 and none on the other nodes.
+func bulkHarness(t *testing.T) *harness {
+	h := newHarness(t)
+	h.connect("p1", testUID, 1)
+	h.connect("p3", "3333330000C3", 3)
+	h.connect("p6", "6666660000C6", 6)
+	return h
+}
+
+func (h *harness) executeAll(enabled bool) Result {
+	h.t.Helper()
+	result, err := h.a.ExecuteWithResult(h.ctx, Command{Operation: SetAllNodesEnabled, Enabled: enabled})
+	h.must(err)
+	return result
+}
+
+func (h *harness) modes() [PlayerCount]bool {
+	var modes [PlayerCount]bool
+	for i, n := range h.state().Nodes[:PlayerCount] {
+		modes[i] = n.Enabled
+	}
+	return modes
+}
+
+func (h *harness) typesFor(id SessionID) []string {
+	var types []string
+	for _, sent := range h.messages() {
+		if sent.session == id {
+			types = append(types, sent.message.Type)
+		}
+	}
+	return types
+}
+
+func TestSetAllNodesEnabledManualSkipsNodesWithoutMCU(t *testing.T) {
+	h := bulkHarness(t)
+	h.clear()
+	result := h.executeAll(true)
+	if want := []NodeID{2, 4, 5, 7, 8}; !reflect.DeepEqual(result.Skipped, want) {
+		t.Fatalf("Skipped=%v, want %v", result.Skipped, want)
+	}
+	want := [PlayerCount]bool{true, false, true, false, false, true, false, false}
+	if got := h.modes(); got != want {
+		t.Fatalf("modes=%v, want %v", got, want)
+	}
+	for _, id := range []SessionID{"p1", "p3", "p6"} {
+		if got := h.typesFor(id); !reflect.DeepEqual(got, []string{"config", "reset", "phase", "status"}) {
+			t.Fatalf("%s received %v", id, got)
+		}
+	}
+	// config, reset and phase go out node by node in ascending order.
+	var order []SessionID
+	for _, sent := range h.messages() {
+		if sent.message.Type == "config" {
+			order = append(order, sent.session)
+			if sent.message.Data.(ConfigData).Mode != "manual" {
+				t.Fatalf("%s was configured as %v", sent.session, sent.message.Data)
+			}
+		}
+	}
+	if !reflect.DeepEqual(order, []SessionID{"p1", "p3", "p6"}) {
+		t.Fatalf("config order=%v", order)
+	}
+}
+
+func TestSetAllNodesEnabledAutoSwitchesEveryone(t *testing.T) {
+	h := bulkHarness(t)
+	h.executeAll(true)
+	h.clear()
+	result := h.executeAll(false)
+	if len(result.Skipped) != 0 {
+		t.Fatalf("auto skipped %v", result.Skipped)
+	}
+	if got := h.modes(); got != [PlayerCount]bool{} {
+		t.Fatalf("modes=%v", got)
+	}
+	for _, id := range []SessionID{"p1", "p3", "p6"} {
+		if got := h.typesFor(id); !reflect.DeepEqual(got, []string{"config", "reset", "phase", "status"}) {
+			t.Fatalf("%s received %v", id, got)
+		}
+	}
+	// Nothing changes, so nothing is sent.
+	h.clear()
+	h.executeAll(false)
+	if got := h.messages(); len(got) != 0 {
+		t.Fatalf("repeated auto sent %v", messageTypes(got))
+	}
+}
+
+func TestSetAllNodesEnabledReadyIsClearedOrKeptLikeSetNodeEnabled(t *testing.T) {
+	h := bulkHarness(t)
+	h.executeAll(true)
+	h.ready("p1")
+	h.ready("p3")
+	if s := h.state(); !s.Nodes[0].Ready || !s.Nodes[2].Ready {
+		t.Fatal("ready was not set")
+	}
+	h.clear()
+	h.executeAll(true)
+	if s := h.state(); !s.Nodes[0].Ready || !s.Nodes[2].Ready {
+		t.Fatal("setting the same mode cleared ready")
+	}
+	if got := h.messages(); len(got) != 0 {
+		t.Fatalf("setting the same mode sent %v", messageTypes(got))
+	}
+	// A node that becomes manual is not ready; one that was manual stays so.
+	h.execute(Command{Operation: SetNodeEnabled, Node: 6, Enabled: false})
+	h.executeAll(true)
+	if s := h.state(); !s.Nodes[0].Ready || !s.Nodes[2].Ready || s.Nodes[5].Ready {
+		t.Fatalf("ready after mixed bulk: %v %v %v", s.Nodes[0].Ready, s.Nodes[2].Ready, s.Nodes[5].Ready)
+	}
+	h.executeAll(false)
+	if s := h.state(); s.Nodes[0].Ready || s.Nodes[2].Ready {
+		t.Fatal("auto kept ready")
+	}
+	if s := h.state(); s.CanStart != true {
+		t.Fatalf("all-auto game cannot start: %+v", s.StartBlockers)
+	}
+}
+
+func TestSetAllNodesEnabledOnlyPreparingAndFinished(t *testing.T) {
+	h := bulkHarness(t)
+	h.execute(Command{Operation: SetNodeEnabled, Node: 1, Enabled: true})
+	h.start()
+	h.tick(time.Second)
+	before := h.modes()
+	h.clear()
+	for _, enabled := range []bool{true, false} {
+		_, err := h.a.ExecuteWithResult(h.ctx, Command{Operation: SetAllNodesEnabled, Enabled: enabled})
+		expectCode(t, err, CodePhaseConflict)
+		expectCode(t, h.a.Execute(h.ctx, Command{Operation: SetAllNodesEnabled, Enabled: enabled}), CodePhaseConflict)
+	}
+	if h.modes() != before || len(h.messages()) != 0 {
+		t.Fatalf("rejected command changed state: modes=%v messages=%v", h.modes(), messageTypes(h.messages()))
+	}
+	h.execute(Command{Operation: Finish})
+	h.clear()
+	result := h.executeAll(true)
+	if want := []NodeID{2, 4, 5, 7, 8}; !reflect.DeepEqual(result.Skipped, want) {
+		t.Fatalf("Skipped=%v, want %v", result.Skipped, want)
+	}
+	// Node 1 was already manual; the others are sent the summary after status.
+	if got := h.typesFor("p1"); len(got) != 0 {
+		t.Fatalf("p1 received %v", got)
+	}
+	for _, id := range []SessionID{"p3", "p6"} {
+		if got := h.typesFor(id); !reflect.DeepEqual(got, []string{"config", "reset", "phase", "status", "summary"}) {
+			t.Fatalf("%s received %v", id, got)
+		}
+	}
+}
+
+func TestSetAllNodesEnabledEndsPreviewOfNodeMadeManual(t *testing.T) {
+	h := bulkHarness(t)
+	h.execute(Command{Operation: SetDevicePreview, DeviceID: testUID})
+	if h.state().Preview == nil {
+		t.Fatal("preview did not start")
+	}
+	h.executeAll(true)
+	if h.state().Preview != nil {
+		t.Fatal("preview of a node made manual continued")
+	}
+}
+
+func TestExecuteRunsSetAllNodesEnabled(t *testing.T) {
+	h := bulkHarness(t)
+	h.execute(Command{Operation: SetAllNodesEnabled, Enabled: true})
+	if got, want := h.modes(), [PlayerCount]bool{true, false, true, false, false, true, false, false}; got != want {
+		t.Fatalf("modes=%v, want %v", got, want)
+	}
+}
