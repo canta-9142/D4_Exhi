@@ -452,33 +452,25 @@ func confirm(input io.Reader, output io.Writer, phrase string) error {
 	return nil
 }
 
-// The score bands of histogram: below bandLow, every bandWidth points, and
-// bandHigh or more.
+// The score bands of histogram: every bandWidth points from 0, and bandHigh
+// or more. Scores are never negative.
 const (
-	bandLow   = 1000
 	bandWidth = 100
-	bandHigh  = 2000
-	bandCount = (bandHigh-bandLow)/bandWidth + 2
+	bandHigh  = 1500
+	bandCount = bandHigh/bandWidth + 1
 	barWidth  = 40
 )
 
 // band is the index of the band that contains score.
 func band(score int) int {
-	if score < bandLow {
-		return 0
-	}
-	return min((score-bandLow)/bandWidth+1, bandCount-1)
+	return min(score/bandWidth, bandCount-1)
 }
 
 func bandLabel(i int) string {
-	switch i {
-	case 0:
-		return fmt.Sprintf("~%d", bandLow-1)
-	case bandCount - 1:
+	if i == bandCount-1 {
 		return fmt.Sprintf("%d~", bandHigh)
 	}
-	from := bandLow + (i-1)*bandWidth
-	return fmt.Sprintf("%d-%d", from, from+bandWidth-1)
+	return fmt.Sprintf("%d-%d", i*bandWidth, (i+1)*bandWidth-1)
 }
 
 // population is the scores of the top percent (server.md 3.5.6): those of

@@ -91,7 +91,10 @@ func bandCounts(t *testing.T, output string) map[string]string {
 }
 
 func TestBand(t *testing.T) {
-	for score, want := range map[int]int{0: 0, 999: 0, 1000: 1, 1099: 1, 1100: 2, 1999: 10, 2000: 11, 2099: 11, 100000: 11} {
+	if bandCount != 16 {
+		t.Fatalf("bandCount = %d, want 16", bandCount)
+	}
+	for score, want := range map[int]int{0: 0, 99: 0, 100: 1, 199: 1, 200: 2, 1000: 10, 1399: 13, 1400: 14, 1499: 14, 1500: 15, 1999: 15, 100000: 15} {
 		if got := band(score); got != want {
 			t.Errorf("band(%d) = %d, want %d", score, got, want)
 		}
@@ -100,7 +103,7 @@ func TestBand(t *testing.T) {
 	for i := range labels {
 		labels[i] = bandLabel(i)
 	}
-	want := []string{"~999", "1000-1099", "1100-1199", "1200-1299", "1300-1399", "1400-1499", "1500-1599", "1600-1699", "1700-1799", "1800-1899", "1900-1999", "2000~"}
+	want := []string{"0-99", "100-199", "200-299", "300-399", "400-499", "500-599", "600-699", "700-799", "800-899", "900-999", "1000-1099", "1100-1199", "1200-1299", "1300-1399", "1400-1499", "1500~"}
 	if !reflect.DeepEqual(labels, want) {
 		t.Fatalf("labels %v, want %v", labels, want)
 	}
@@ -123,7 +126,7 @@ func TestHistogramCountsThePopulationOfTheTopPercent(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := bandCounts(t, output)
-	want := map[string]string{"~999": "2", "1000-1099": "2", "1900-1999": "1", "2000~": "1", "total": "6"}
+	want := map[string]string{"0-99": "1", "900-999": "1", "1000-1099": "2", "1500~": "2", "total": "6"}
 	for label, count := range got {
 		if w := want[label]; count != w && !(w == "" && count == "0") {
 			t.Errorf("%s: %s, want %s", label, count, w)
