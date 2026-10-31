@@ -41,6 +41,9 @@ func TestRun(t *testing.T) {
 		{"empty serial port", []string{"-serial-port", " "}, true},
 		{"duplicate serial port", []string{"-serial-port", "/dev/ttyACM0", "-serial-port", "/dev/./ttyACM0"}, true},
 		{"list ports", []string{"-list-serial-ports"}, false},
+		{"endless", []string{"-http-addr", testAddr, "-mode", "endless"}, false},
+		{"simultaneous", []string{"-http-addr", testAddr, "-mode", "simultaneous"}, false},
+		{"unknown mode", []string{"-mode", "Endless"}, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
@@ -108,11 +111,11 @@ func TestRunSavesFinishedGames(t *testing.T) {
 	var output syncBuffer
 	done := make(chan error, 1)
 	go func() {
-		done <- run(ctx, []string{"-http-addr", testAddr, "-devices-file", filepath.Join(dir, "devices.json"), "-records-file", path}, &output)
+		done <- run(ctx, []string{"-http-addr", testAddr, "-mode", "simultaneous", "-devices-file", filepath.Join(dir, "devices.json"), "-records-file", path}, &output)
 	}()
 	addr := listenAddr(t, &output)
-	// Without manual players the game starts at once; Finish ends it during
-	// the countdown.
+	// Without manual players the simultaneous game starts at once; Finish
+	// ends it during the countdown.
 	postCommand(t, addr, `{"type":"start","data":{}}`)
 	postCommand(t, addr, `{"type":"finish","data":{}}`)
 	if records := getRecords(t, addr); !records.Available || records.SaveFailed {

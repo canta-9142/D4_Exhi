@@ -44,6 +44,15 @@ func run(ctx context.Context, args []string, output io.Writer) error {
 	devicesFile := flags.String("devices-file", "data/devices.json", "device assignment JSON file")
 	recordsFile := flags.String("records-file", "data/records.sqlite3", "game record SQLite file")
 	listPorts := flags.Bool("list-serial-ports", false, "list USB serial port candidates and exit")
+	// The game mode is fixed for the run (server.md 3.7).
+	mode := app.Endless
+	flags.Func("mode", "game mode: endless (default) or simultaneous", func(value string) error {
+		if value != string(app.Endless) && value != string(app.Simultaneous) {
+			return fmt.Errorf("game mode must be endless or simultaneous")
+		}
+		mode = app.GameMode(value)
+		return nil
+	})
 	var ports []string
 	flags.Func("serial-port", "USB CDC port path (repeat for multiple ports)", func(value string) error {
 		if strings.TrimSpace(value) == "" {
@@ -102,8 +111,9 @@ func run(ctx context.Context, args []string, output io.Writer) error {
 	transport := serial.New(logger)
 	options := app.Options{
 		Logger: logger, Send: transport.Send, Close: transport.Close, Devices: devices,
-		SaveDevices: store.Save,
+		SaveDevices: store.Save, Mode: mode,
 	}
+	logger.Info("game mode", "mode", mode)
 	// Records open after Listen, so that a failed startup creates no file, and
 	// before serve accepts any request. Unlike device assignments they are not
 	// needed to run a game: keep the exhibit going without saving, and leave
@@ -148,7 +158,7 @@ func serve(ctx context.Context, application *app.App, listener net.Listener, log
 		MaxHeaderBytes:    64 << 10,
 		ErrorLog:          slog.NewLogLogger(logger.Handler(), slog.LevelWarn),
 	}
-	logger.Info("server starting", "phase", app.Preparing, "http_addr", listener.Addr().String(), "serial_ports", ports)
+	logger.Info("server starting", "http_addr", listener.Addr().String(), "serial_ports", ports)
 
 	// app outlives ctx until HTTP has shut down, so in-flight requests can
 	// still reach it.
