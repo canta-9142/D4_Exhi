@@ -31,7 +31,7 @@ var errorMessages = map[errorCode]string{
 	codeInvalidRequest:       "要求の形式が正しくありません。",
 	codeNotFound:             "対象が見つかりません。",
 	codeMethodNotAllowed:     "このメソッドには対応していません。",
-	codePhaseConflict:        "現在のフェーズではこの操作を行えません。",
+	codePhaseConflict:        "現在の運転状態ではこの操作を行えません。",
 	codePIDExhausted:         "次のゲームに必要なパケットIDが不足しています。サーバーを再起動してください。",
 	codePlayersNotReady:      "準備が完了していないプレイヤーがいます。",
 	codeAssignmentConflict:   "割当先が他の機器と競合しています。",

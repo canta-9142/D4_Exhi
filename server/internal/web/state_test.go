@@ -37,22 +37,45 @@ func (a *stateApp) ExecuteWithResult(context.Context, app.Command) (app.Result, 
 	return app.Result{}, nil
 }
 
-// baseSnapshot is a Preparing game with every node in auto mode and no
-// devices.
+// baseSnapshot is a simultaneous game in Preparing with every node in auto
+// mode and no devices.
 func baseSnapshot() app.Snapshot {
 	s := app.Snapshot{
+		Mode: app.Simultaneous, Operation: app.OperationRunning,
 		Phase: app.Preparing, Remaining: app.GameDuration, RemainingSeconds: gameSeconds,
 		CanStart: true, StartBlockers: []app.StartBlocker{}, Devices: []app.DeviceSnapshot{},
-		Records: app.RecordsSnapshot{HourlyBests: []app.HourlyBest{}, Available: true},
+		Records: app.RecordsSnapshot{
+			RecentRounds: []app.RecentRound{}, HourlyBests: []app.HourlyBest{}, Available: true,
+		},
 	}
 	for id := app.NodeID(1); id <= app.NodeCount; id++ {
-		n := app.NodeSnapshot{ID: id, Kind: "player"}
+		n := app.NodeSnapshot{ID: id, Kind: "player", Station: app.StationIdle}
 		if id > app.PlayerCount {
-			n.Kind, n.Rate = "bot", 1
+			n.Kind, n.Station, n.Rate = "bot", "", 1
 		}
 		s.Nodes = append(s.Nodes, n)
 	}
 	return s
+}
+
+// endlessSnapshot is endless operation, running, with every player idle and
+// in auto mode.
+func endlessSnapshot() app.Snapshot {
+	s := baseSnapshot()
+	s.Mode, s.Phase, s.Remaining, s.RemainingSeconds = app.Endless, "", 0, 0
+	s.CanStart, s.StartBlockers = false, []app.StartBlocker{{Code: app.CodeNotStopped}}
+	return s
+}
+
+// playerJSON is a player of a Snapshot with the given stage and values,
+// written as web.md 3.2 has it. A round of "null" is written as null.
+func playerJSON(nodeID, mode, station, round string, countdown, remaining, window, fifo, score int) string {
+	if round != "null" {
+		round = `"` + round + `"`
+	}
+	return fmt.Sprintf(`{"nodeId":%q,"mode":%q,"station":%q,"round":%s,"countdownSeconds":%d,"remainingSeconds":%d,`+
+		`"windowSeconds":%d,"fifoLength":%d,"score":%d,"ready":false,"rankingEligible":null,"rank":null,"topPercent":null}`,
+		nodeID, mode, station, round, countdown, remaining, window, fifo, score)
 }
 
 // stateBody is the decoded body of a successful GET /api/state, keeping each
@@ -93,8 +116,76 @@ func compact(t *testing.T, s string) string {
 	return b.String()
 }
 
-// The web.md 3.1 example, with every player and bot included.
+// The web.md 3.1 example, with every player and bot included: P1 plays a
+// normal round with 62 seconds left, and one round ended in the 13:00 hour.
 func TestStateExample(t *testing.T) {
+	s := endlessSnapshot()
+	s.Elapsed = 734100 * time.Millisecond
+	s.Nodes[0] = app.NodeSnapshot{
+		ID: 1, Kind: "player", Enabled: true, Station: app.StationPlaying, Round: app.RoundNormal,
+		RemainingSeconds: 62, FIFOUsage: 3, Score: 118,
+	}
+	s.Devices = []app.DeviceSnapshot{
+		{ID: "001122334455", Kind: app.LEDDevice, Connected: true, Session: "s1"},
+		{ID: "AABBCCDDEEFF", Kind: app.PlayerDevice, Connected: true, Session: "s2", Node: 1, AssignmentKind: app.PlayerDevice},
+	}
+	s.Preview = &app.PreviewSnapshot{DeviceID: "001122334455", Kind: app.LEDDevice, Node: 1}
+	finishedAt := time.Date(2026, 10, 28, 13, 5, 12, 0, app.JST)
+	best := app.BestScore{Score: 812, Nodes: []app.NodeID{3}, FinishedAt: finishedAt}
+	s.Records.RecentRounds = []app.RecentRound{{Node: 3, Score: 812, TopPercent: 1, FinishedAt: finishedAt}}
+	s.Records.HourlyBests = []app.HourlyBest{{HourStart: time.Date(2026, 10, 28, 13, 0, 0, 0, app.JST), BestScore: best}}
+	s.Records.AllTimeBest = &best
+
+	w, _ := getState(t, s)
+	players := []string{playerJSON("P1", "manual", "playing", "normal", 0, 62, 0, 3, 118)}
+	for n := 2; n <= 8; n++ {
+		players = append(players, playerJSON(fmt.Sprintf("P%d", n), "auto", "idle", "null", 0, 0, 0, 0, 0))
+	}
+	want := compact(t, `{
+  "game": {
+    "mode": "endless",
+    "operation": "running",
+    "phase": null,
+    "durationSeconds": 90,
+    "elapsedMs": 734100,
+    "remainingSeconds": 0,
+    "countdownSeconds": 0,
+    "canStart": false,
+    "startBlockers": [{"code": "not_stopped"}]
+  },
+  "players": [`+strings.Join(players, ",")+`],
+  "bots": [
+    {"nodeId": "B1", "fifoLength": 0, "ratePps": 1},
+    {"nodeId": "B2", "fifoLength": 0, "ratePps": 1},
+    {"nodeId": "B3", "fifoLength": 0, "ratePps": 1}
+  ],
+  "devices": [
+    {"deviceId": "001122334455", "kind": "led", "connected": true, "assignment": null},
+    {"deviceId": "AABBCCDDEEFF", "kind": "player", "connected": true, "assignment": {"kind": "player", "nodeId": "P1"}}
+  ],
+  "preview": {"deviceId": "001122334455", "nodeId": "P1"},
+  "records": {
+    "recentRounds": [
+      {"nodeId": "P3", "score": 812, "topPercent": 1, "finishedAt": "2026-10-28T13:05:12+09:00"}
+    ],
+    "gameBest": null,
+    "hourlyBests": [
+      {"hourStart": "2026-10-28T13:00:00+09:00", "score": 812, "nodeIds": ["P3"], "finishedAt": "2026-10-28T13:05:12+09:00"}
+    ],
+    "allTimeBest": {"score": 812, "nodeIds": ["P3"], "finishedAt": "2026-10-28T13:05:12+09:00"},
+    "available": true,
+    "unavailableReason": null,
+    "saveFailed": false
+  }
+}`) + "\n"
+	if got := w.Body.String(); got != want {
+		t.Errorf("body\n got %s\nwant %s", got, want)
+	}
+}
+
+// The simultaneous game's Snapshot of web.md 3.4 in Preparing, with every
+// player and bot included.
+func TestStateSimultaneousExample(t *testing.T) {
 	s := baseSnapshot()
 	s.CanStart = false
 	s.StartBlockers = []app.StartBlocker{{Code: app.CodePlayersNotReady, Nodes: []app.NodeID{1}}}
@@ -109,8 +200,14 @@ func TestStateExample(t *testing.T) {
 	s.Records.AllTimeBest = &best
 
 	w, _ := getState(t, s)
+	players := []string{playerJSON("P1", "manual", "idle", "null", 0, 0, 0, 0, 0)}
+	for n := 2; n <= 8; n++ {
+		players = append(players, playerJSON(fmt.Sprintf("P%d", n), "auto", "idle", "null", 0, 0, 0, 0, 0))
+	}
 	want := compact(t, `{
   "game": {
+    "mode": "simultaneous",
+    "operation": "running",
     "phase": "Preparing",
     "durationSeconds": 90,
     "elapsedMs": 0,
@@ -121,16 +218,7 @@ func TestStateExample(t *testing.T) {
       {"code": "players_not_ready", "nodeIds": ["P1"]}
     ]
   },
-  "players": [
-    {"nodeId": "P1", "mode": "manual", "ready": false, "fifoLength": 0, "score": 0, "rankingEligible": null, "rank": null, "topPercent": null},
-    {"nodeId": "P2", "mode": "auto", "ready": false, "fifoLength": 0, "score": 0, "rankingEligible": null, "rank": null, "topPercent": null},
-    {"nodeId": "P3", "mode": "auto", "ready": false, "fifoLength": 0, "score": 0, "rankingEligible": null, "rank": null, "topPercent": null},
-    {"nodeId": "P4", "mode": "auto", "ready": false, "fifoLength": 0, "score": 0, "rankingEligible": null, "rank": null, "topPercent": null},
-    {"nodeId": "P5", "mode": "auto", "ready": false, "fifoLength": 0, "score": 0, "rankingEligible": null, "rank": null, "topPercent": null},
-    {"nodeId": "P6", "mode": "auto", "ready": false, "fifoLength": 0, "score": 0, "rankingEligible": null, "rank": null, "topPercent": null},
-    {"nodeId": "P7", "mode": "auto", "ready": false, "fifoLength": 0, "score": 0, "rankingEligible": null, "rank": null, "topPercent": null},
-    {"nodeId": "P8", "mode": "auto", "ready": false, "fifoLength": 0, "score": 0, "rankingEligible": null, "rank": null, "topPercent": null}
-  ],
+  "players": [`+strings.Join(players, ",")+`],
   "bots": [
     {"nodeId": "B1", "fifoLength": 0, "ratePps": 1},
     {"nodeId": "B2", "fifoLength": 0, "ratePps": 1},
@@ -142,6 +230,7 @@ func TestStateExample(t *testing.T) {
   ],
   "preview": {"deviceId": "001122334455", "nodeId": "P1"},
   "records": {
+    "recentRounds": [],
     "gameBest": null,
     "hourlyBests": [
       {"hourStart": "2026-10-28T13:00:00+09:00", "score": 812, "nodeIds": ["P3"], "finishedAt": "2026-10-28T13:05:12+09:00"}
@@ -162,15 +251,19 @@ func TestStatePlaying(t *testing.T) {
 	s := baseSnapshot()
 	s.Phase, s.Elapsed, s.RemainingSeconds = app.Playing, 30*time.Second, gameSeconds-30
 	s.CanStart, s.StartBlockers = false, []app.StartBlocker{{Code: app.CodeNotPreparing}}
-	s.Nodes[2] = app.NodeSnapshot{ID: 3, Kind: "player", Enabled: true, Ready: true, FIFOUsage: 5, Score: 2147483647, RankingEligible: true}
+	s.Nodes[2] = app.NodeSnapshot{
+		ID: 3, Kind: "player", Enabled: true, Ready: true, FIFOUsage: 5, Score: 2147483647, RankingEligible: true,
+		Station: app.StationPlaying, Round: app.RoundNormal, CountdownSeconds: 3, RemainingSeconds: 60,
+	}
 	s.Nodes[9] = app.NodeSnapshot{ID: 10, Kind: "bot", FIFOUsage: 4, Rate: 2.5}
 
 	w, body := getState(t, s)
-	wantGame := `{"phase":"Playing","durationSeconds":90,"elapsedMs":30000,"remainingSeconds":60,"countdownSeconds":0,"canStart":false,"startBlockers":[{"code":"not_preparing"}]}`
+	wantGame := `{"mode":"simultaneous","operation":"running","phase":"Playing","durationSeconds":90,"elapsedMs":30000,"remainingSeconds":60,"countdownSeconds":0,"canStart":false,"startBlockers":[{"code":"not_preparing"}]}`
 	if got := compact(t, string(mustField(t, w, "game"))); got != wantGame {
 		t.Errorf("game = %s, want %s", got, wantGame)
 	}
-	wantP3 := `{"nodeId":"P3","mode":"manual","ready":true,"fifoLength":5,"score":2147483647,"rankingEligible":true,"rank":null,"topPercent":null}`
+	wantP3 := `{"nodeId":"P3","mode":"manual","station":"playing","round":"normal","countdownSeconds":3,"remainingSeconds":60,` +
+		`"windowSeconds":0,"fifoLength":5,"score":2147483647,"ready":true,"rankingEligible":true,"rank":null,"topPercent":null}`
 	if got := compact(t, string(mustField(t, w, "players", 2))); got != wantP3 {
 		t.Errorf("players[2] = %s, want %s", got, wantP3)
 	}
@@ -206,8 +299,8 @@ func TestStateEmpty(t *testing.T) {
 		name string
 		s    app.Snapshot
 	}{
-		{"nil slices", app.Snapshot{Phase: app.Preparing, CanStart: true}},
-		{"empty slices", app.Snapshot{Phase: app.Preparing, CanStart: true,
+		{"nil slices", app.Snapshot{Mode: app.Endless, CanStart: true}},
+		{"empty slices", app.Snapshot{Mode: app.Endless, CanStart: true,
 			Nodes: []app.NodeSnapshot{}, Devices: []app.DeviceSnapshot{}, StartBlockers: []app.StartBlocker{}}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -224,7 +317,7 @@ func TestStateEmpty(t *testing.T) {
 			if err := json.Unmarshal(mustField(t, w, "records"), &records); err != nil {
 				t.Fatal(err)
 			}
-			for key, want := range map[string]string{"gameBest": "null", "hourlyBests": "[]", "allTimeBest": "null"} {
+			for key, want := range map[string]string{"recentRounds": "[]", "gameBest": "null", "hourlyBests": "[]", "allTimeBest": "null"} {
 				if got := string(records[key]); got != want {
 					t.Errorf("records.%s = %s, want %s", key, got, want)
 				}
@@ -248,6 +341,7 @@ func TestStateRecords(t *testing.T) {
 	}
 	w, _ := getState(t, s)
 	want := compact(t, `{
+  "recentRounds": [],
   "gameBest": {"score": 250, "nodeIds": ["P8"], "finishedAt": "2026-10-28T14:00:00+09:00"},
   "hourlyBests": [
     {"hourStart": "2026-10-28T14:00:00+09:00", "score": 250, "nodeIds": ["P8"], "finishedAt": "2026-10-28T14:00:00+09:00"},
@@ -268,7 +362,7 @@ func TestStateRecords(t *testing.T) {
 	s = baseSnapshot()
 	s.Records = app.RecordsSnapshot{Available: false, UnavailableReason: "open: file is not a database"}
 	w, _ = getState(t, s)
-	want = `{"gameBest":null,"hourlyBests":[],"allTimeBest":null,"available":false,"unavailableReason":"open: file is not a database","saveFailed":false}`
+	want = `{"recentRounds":[],"gameBest":null,"hourlyBests":[],"allTimeBest":null,"available":false,"unavailableReason":"open: file is not a database","saveFailed":false}`
 	if got := compact(t, string(mustField(t, w, "records"))); got != want {
 		t.Errorf("unavailable records\n got %s\nwant %s", got, want)
 	}
@@ -636,5 +730,159 @@ func TestStateErrors(t *testing.T) {
 				t.Errorf("State called %d times, want 1", a.calls)
 			}
 		})
+	}
+}
+
+// In endless operation each player has its own stage, which is passed through
+// as app gives it; the simultaneous game's eligibility is null whatever app
+// holds, and the game has no phase (web.md 3.2, 3.4).
+func TestStateEndlessPlayers(t *testing.T) {
+	topPercent := func(n int) *int { return &n }
+	s := endlessSnapshot()
+	set := func(i int, n app.NodeSnapshot) {
+		n.ID, n.Kind, n.Enabled = app.NodeID(i+1), "player", true
+		s.Nodes[i] = n
+	}
+	set(0, app.NodeSnapshot{Station: app.StationIdle})
+	set(1, app.NodeSnapshot{Station: app.StationSelect, WindowSeconds: 17})
+	set(2, app.NodeSnapshot{Station: app.StationPlaying, Round: app.RoundNormal, CountdownSeconds: 3, RemainingSeconds: gameSeconds})
+	set(3, app.NodeSnapshot{Station: app.StationPlaying, Round: app.RoundNormal, RemainingSeconds: 62, Score: 118, FIFOUsage: 3})
+	set(4, app.NodeSnapshot{Station: app.StationPlaying, Round: app.RoundTutorial, WindowSeconds: 8, FIFOUsage: 2})
+	set(5, app.NodeSnapshot{Station: app.StationFinished, Round: app.RoundNormal, WindowSeconds: 25, Score: 640, TopPercent: topPercent(12)})
+	// A value app holds for the simultaneous game is not written in endless operation.
+	set(6, app.NodeSnapshot{Station: app.StationFinished, Round: app.RoundNormal, WindowSeconds: 30, Score: 90, TopPercent: topPercent(100),
+		RankingEligible: true})
+	set(7, app.NodeSnapshot{Station: app.StationIdle})
+	s.Nodes[7].Enabled = false
+
+	_, body := getState(t, s)
+	want := []string{
+		`{"nodeId":"P1","mode":"manual","station":"idle","round":null,"countdownSeconds":0,"remainingSeconds":0,"windowSeconds":0,"fifoLength":0,"score":0,"ready":false,"rankingEligible":null,"rank":null,"topPercent":null}`,
+		`{"nodeId":"P2","mode":"manual","station":"select","round":null,"countdownSeconds":0,"remainingSeconds":0,"windowSeconds":17,"fifoLength":0,"score":0,"ready":false,"rankingEligible":null,"rank":null,"topPercent":null}`,
+		`{"nodeId":"P3","mode":"manual","station":"playing","round":"normal","countdownSeconds":3,"remainingSeconds":90,"windowSeconds":0,"fifoLength":0,"score":0,"ready":false,"rankingEligible":null,"rank":null,"topPercent":null}`,
+		`{"nodeId":"P4","mode":"manual","station":"playing","round":"normal","countdownSeconds":0,"remainingSeconds":62,"windowSeconds":0,"fifoLength":3,"score":118,"ready":false,"rankingEligible":null,"rank":null,"topPercent":null}`,
+		`{"nodeId":"P5","mode":"manual","station":"playing","round":"tutorial","countdownSeconds":0,"remainingSeconds":0,"windowSeconds":8,"fifoLength":2,"score":0,"ready":false,"rankingEligible":null,"rank":null,"topPercent":null}`,
+		`{"nodeId":"P6","mode":"manual","station":"finished","round":"normal","countdownSeconds":0,"remainingSeconds":0,"windowSeconds":25,"fifoLength":0,"score":640,"ready":false,"rankingEligible":null,"rank":null,"topPercent":12}`,
+		`{"nodeId":"P7","mode":"manual","station":"finished","round":"normal","countdownSeconds":0,"remainingSeconds":0,"windowSeconds":30,"fifoLength":0,"score":90,"ready":false,"rankingEligible":null,"rank":null,"topPercent":100}`,
+		`{"nodeId":"P8","mode":"auto","station":"idle","round":null,"countdownSeconds":0,"remainingSeconds":0,"windowSeconds":0,"fifoLength":0,"score":0,"ready":false,"rankingEligible":null,"rank":null,"topPercent":null}`,
+	}
+	if len(body.Players) != len(want) {
+		t.Fatalf("got %d players, want %d", len(body.Players), len(want))
+	}
+	for i, p := range body.Players {
+		var wantFields map[string]json.RawMessage
+		if err := json.Unmarshal([]byte(want[i]), &wantFields); err != nil {
+			t.Fatal(err)
+		}
+		for key, value := range wantFields {
+			if string(p[key]) != string(value) {
+				t.Errorf("players[%d].%s = %s, want %s", i, key, p[key], value)
+			}
+		}
+		if len(p) != len(wantFields) {
+			t.Errorf("players[%d] has %d fields, want %d", i, len(p), len(wantFields))
+		}
+	}
+}
+
+// The game of endless operation: running and stopped, with the clock of the
+// operation and no phase. elapsedMs is app's value, passed through.
+func TestStateOperation(t *testing.T) {
+	running := endlessSnapshot()
+	running.Elapsed = 3723*time.Second + 500*time.Millisecond
+
+	stopped := endlessSnapshot()
+	stopped.Operation, stopped.CanStart, stopped.StartBlockers = app.OperationStopped, true, []app.StartBlocker{}
+	for i := 0; i < app.PlayerCount; i++ {
+		stopped.Nodes[i].Station = app.StationStopped
+	}
+
+	for _, tc := range []struct {
+		name    string
+		s       app.Snapshot
+		station string
+		want    string
+	}{
+		{"running", running, `"idle"`, `{"mode":"endless","operation":"running","phase":null,"durationSeconds":90,"elapsedMs":3723500,` +
+			`"remainingSeconds":0,"countdownSeconds":0,"canStart":false,"startBlockers":[{"code":"not_stopped"}]}`},
+		{"stopped", stopped, `"stopped"`, `{"mode":"endless","operation":"stopped","phase":null,"durationSeconds":90,"elapsedMs":0,` +
+			`"remainingSeconds":0,"countdownSeconds":0,"canStart":true,"startBlockers":[]}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w, body := getState(t, tc.s)
+			if got := compact(t, string(mustField(t, w, "game"))); got != tc.want {
+				t.Errorf("game\n got %s\nwant %s", got, tc.want)
+			}
+			for i, p := range body.Players {
+				if got := string(p["station"]); got != tc.station {
+					t.Errorf("players[%d].station = %s, want %s", i, got, tc.station)
+				}
+			}
+		})
+	}
+}
+
+// The simultaneous game keeps its phase, and a mode or an operation that web
+// does not know is passed through.
+func TestStateGameMode(t *testing.T) {
+	s := baseSnapshot()
+	s.Phase = app.Finished
+	w, _ := getState(t, s)
+	game := compact(t, string(mustField(t, w, "game")))
+	for _, want := range []string{`"mode":"simultaneous"`, `"operation":"running"`, `"phase":"Finished"`} {
+		if !strings.Contains(game, want) {
+			t.Errorf("game = %s, want %s", game, want)
+		}
+	}
+	s = endlessSnapshot()
+	s.Mode, s.Operation = "future", "paused"
+	w, _ = getState(t, s)
+	game = compact(t, string(mustField(t, w, "game")))
+	for _, want := range []string{`"mode":"future"`, `"operation":"paused"`, `"phase":null`} {
+		if !strings.Contains(game, want) {
+			t.Errorf("game = %s, want %s", game, want)
+		}
+	}
+}
+
+// recentRounds keeps app's order (newest first), names the player, and writes
+// the time in JST to the second (web.md 3.2).
+func TestStateRecentRounds(t *testing.T) {
+	s := endlessSnapshot()
+	for i := 0; i < 10; i++ {
+		s.Records.RecentRounds = append(s.Records.RecentRounds, app.RecentRound{
+			Node: app.NodeID(8 - i%8), Score: 1000 - i, TopPercent: 1 + i*10,
+			// 04:05:12.999 UTC is 13:05:12 JST.
+			FinishedAt: time.Date(2026, 10, 28, 4, 5, 12-i, 999_000_000, time.UTC),
+		})
+	}
+	w, _ := getState(t, s)
+	var records struct {
+		RecentRounds []map[string]any `json:"recentRounds"`
+	}
+	if err := json.Unmarshal(mustField(t, w, "records"), &records); err != nil {
+		t.Fatal(err)
+	}
+	if len(records.RecentRounds) != 10 {
+		t.Fatalf("got %d recent rounds, want 10", len(records.RecentRounds))
+	}
+	first, last := records.RecentRounds[0], records.RecentRounds[9]
+	if first["nodeId"] != "P8" || first["score"] != 1000.0 || first["topPercent"] != 1.0 || first["finishedAt"] != "2026-10-28T13:05:12+09:00" {
+		t.Errorf("recentRounds[0] = %v", first)
+	}
+	if last["nodeId"] != "P7" || last["score"] != 991.0 || last["topPercent"] != 91.0 || last["finishedAt"] != "2026-10-28T13:05:03+09:00" {
+		t.Errorf("recentRounds[9] = %v", last)
+	}
+	if len(first) != 4 {
+		t.Errorf("recentRounds[0] has %d fields, want 4: %v", len(first), first)
+	}
+
+	// A round of a Bot, or of no node, breaks what app promises.
+	for _, node := range []app.NodeID{0, 9} {
+		s := endlessSnapshot()
+		s.Records.RecentRounds = []app.RecentRound{{Node: node, Score: 1, TopPercent: 1}}
+		if w := serve(t, New(&stateApp{snapshot: s}, nil), http.MethodGet, "/api/state"); w.Code != http.StatusInternalServerError {
+			t.Errorf("a round of node %d: status %d, want 500", node, w.Code)
+		}
 	}
 }

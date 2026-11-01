@@ -21,14 +21,19 @@ type stateResponse struct {
 	Records recordsState  `json:"records"`
 }
 
+// gameState is the game of web.md 3.2 and 3.4. Mode and Operation are app's
+// values passed through; Phase, RemainingSeconds and CountdownSeconds are the
+// simultaneous game's, and null or 0 in endless operation.
 type gameState struct {
-	Phase            app.Phase      `json:"phase"`
-	DurationSeconds  int            `json:"durationSeconds"`
-	ElapsedMs        int64          `json:"elapsedMs"`
-	RemainingSeconds int            `json:"remainingSeconds"`
-	CountdownSeconds int            `json:"countdownSeconds"`
-	CanStart         bool           `json:"canStart"`
-	StartBlockers    []startBlocker `json:"startBlockers"`
+	Mode             app.GameMode       `json:"mode"`
+	Operation        app.OperationState `json:"operation"`
+	Phase            *app.Phase         `json:"phase"`
+	DurationSeconds  int                `json:"durationSeconds"`
+	ElapsedMs        int64              `json:"elapsedMs"`
+	RemainingSeconds int                `json:"remainingSeconds"`
+	CountdownSeconds int                `json:"countdownSeconds"`
+	CanStart         bool               `json:"canStart"`
+	StartBlockers    []startBlocker     `json:"startBlockers"`
 }
 
 // startBlocker carries nodeIds only for players_not_ready (web.md 3.3), where
@@ -39,18 +44,28 @@ type startBlocker struct {
 }
 
 type playerState struct {
-	NodeID     string `json:"nodeId"`
-	Mode       string `json:"mode"`
-	Ready      bool   `json:"ready"`
-	FIFOLength int    `json:"fifoLength"`
-	Score      int    `json:"score"`
-	// RankingEligible is null while Preparing.
+	NodeID string `json:"nodeId"`
+	Mode   string `json:"mode"`
+	// Station, Round and the three times are the player's stage, passed
+	// through: the values its MCU receives in phase and status (web.md 3.2).
+	// Round is null outside playing and finished.
+	Station          app.Station    `json:"station"`
+	Round            *app.RoundKind `json:"round"`
+	CountdownSeconds int            `json:"countdownSeconds"`
+	RemainingSeconds int            `json:"remainingSeconds"`
+	WindowSeconds    int            `json:"windowSeconds"`
+	FIFOLength       int            `json:"fifoLength"`
+	Score            int            `json:"score"`
+	// Ready, RankingEligible and Rank are the simultaneous game's. In endless
+	// operation Ready is false and the other two are null.
+	Ready bool `json:"ready"`
+	// RankingEligible is null in endless operation and while Preparing.
 	RankingEligible *bool `json:"rankingEligible"`
 	// Rank is app's final rank, passed through. It is null except for the
-	// ranked players of Finished.
+	// ranked players of a finished simultaneous game.
 	Rank *int `json:"rank"`
 	// TopPercent is app's top percent, passed through. It is null except for
-	// the players of Finished who have one, and includes values above 50.
+	// a player in the finished stage who has one, and includes values above 50.
 	TopPercent *int `json:"topPercent"`
 }
 
@@ -80,13 +95,22 @@ type previewState struct {
 // recordsState is the records of web.md 3.2: app's best scores, passed
 // through, and whether the records file can be used.
 type recordsState struct {
-	GameBest    *bestState        `json:"gameBest"`
-	HourlyBests []hourlyBestState `json:"hourlyBests"`
-	AllTimeBest *bestState        `json:"allTimeBest"`
-	Available   bool              `json:"available"`
+	// RecentRounds is never null: [] when no round has settled.
+	RecentRounds []recentRoundState `json:"recentRounds"`
+	GameBest     *bestState         `json:"gameBest"`
+	HourlyBests  []hourlyBestState  `json:"hourlyBests"`
+	AllTimeBest  *bestState         `json:"allTimeBest"`
+	Available    bool               `json:"available"`
 	// UnavailableReason is null while the records file is available.
 	UnavailableReason *string `json:"unavailableReason"`
 	SaveFailed        bool    `json:"saveFailed"`
+}
+
+type recentRoundState struct {
+	NodeID     string `json:"nodeId"`
+	Score      int    `json:"score"`
+	TopPercent int    `json:"topPercent"`
+	FinishedAt string `json:"finishedAt"`
 }
 
 type bestState struct {
@@ -127,7 +151,8 @@ func (h *handler) handleState(w http.ResponseWriter, r *http.Request) {
 func newStateResponse(s app.Snapshot) (stateResponse, error) {
 	res := stateResponse{
 		Game: gameState{
-			Phase:            s.Phase,
+			Mode:             s.Mode,
+			Operation:        s.Operation,
 			DurationSeconds:  int(app.GameDuration / time.Second),
 			ElapsedMs:        s.Elapsed.Milliseconds(),
 			RemainingSeconds: s.RemainingSeconds,
@@ -138,6 +163,11 @@ func newStateResponse(s app.Snapshot) (stateResponse, error) {
 		Players: make([]playerState, 0, app.PlayerCount),
 		Bots:    make([]botState, 0, app.NodeCount-app.PlayerCount),
 		Devices: make([]deviceState, 0, len(s.Devices)),
+	}
+
+	// Phase is the simultaneous game's; endless operation has none.
+	if s.Phase != "" {
+		res.Game.Phase = &s.Phase
 	}
 
 	for _, b := range s.StartBlockers {
@@ -168,13 +198,21 @@ func newStateResponse(s app.Snapshot) (stateResponse, error) {
 			if n.Enabled {
 				mode = "manual"
 			}
+			// Eligibility belongs to the simultaneous game and is not yet
+			// known while it prepares.
 			var eligible *bool
-			if s.Phase != app.Preparing {
+			if s.Phase != "" && s.Phase != app.Preparing {
 				eligible = &n.RankingEligible
 			}
+			var round *app.RoundKind
+			if n.Round != "" {
+				round = &n.Round
+			}
 			res.Players = append(res.Players, playerState{
-				NodeID: name, Mode: mode, Ready: n.Ready, FIFOLength: n.FIFOUsage, Score: n.Score,
-				RankingEligible: eligible, Rank: n.Rank, TopPercent: n.TopPercent,
+				NodeID: name, Mode: mode, Station: n.Station, Round: round,
+				CountdownSeconds: n.CountdownSeconds, RemainingSeconds: n.RemainingSeconds, WindowSeconds: n.WindowSeconds,
+				FIFOLength: n.FIFOUsage, Score: n.Score,
+				Ready: n.Ready, RankingEligible: eligible, Rank: n.Rank, TopPercent: n.TopPercent,
 			})
 		case "bot":
 			name, err := botName(n.ID)
@@ -217,8 +255,9 @@ func newStateResponse(s app.Snapshot) (stateResponse, error) {
 
 func newRecordsState(r app.RecordsSnapshot) (recordsState, error) {
 	res := recordsState{
-		HourlyBests: make([]hourlyBestState, 0, len(r.HourlyBests)),
-		Available:   r.Available, SaveFailed: r.SaveFailed,
+		RecentRounds: make([]recentRoundState, 0, len(r.RecentRounds)),
+		HourlyBests:  make([]hourlyBestState, 0, len(r.HourlyBests)),
+		Available:    r.Available, SaveFailed: r.SaveFailed,
 	}
 	if !r.Available {
 		reason := r.UnavailableReason
@@ -230,6 +269,15 @@ func newRecordsState(r app.RecordsSnapshot) (recordsState, error) {
 	}
 	if res.AllTimeBest, err = newBestState(r.AllTimeBest); err != nil {
 		return recordsState{}, err
+	}
+	for _, round := range r.RecentRounds {
+		name, err := playerName(round.Node)
+		if err != nil {
+			return recordsState{}, err
+		}
+		res.RecentRounds = append(res.RecentRounds, recentRoundState{
+			NodeID: name, Score: round.Score, TopPercent: round.TopPercent, FinishedAt: jstTime(round.FinishedAt),
+		})
 	}
 	for _, h := range r.HourlyBests {
 		best, err := newBestState(&h.BestScore)

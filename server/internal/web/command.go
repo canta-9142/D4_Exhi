@@ -19,7 +19,9 @@ import (
 const maxCommandBytes = 64 << 10
 
 // noDataOperations are the types whose data must be {}.
-var noDataOperations = map[string]app.Operation{"start": app.Start, "finish": app.Finish, "reset": app.Reset}
+var noDataOperations = map[string]app.Operation{
+	"start": app.Start, "stop": app.Stop, "finish": app.Finish, "reset": app.Reset,
+}
 
 // ledNodes are the LED control nodes of web.md 2: P1, P3, P5, P7 and B1-B3.
 var ledNodes = []app.NodeID{1, 3, 5, 7, 9, 10, 11}
@@ -187,7 +189,7 @@ func decodeCommand(body io.Reader) (app.Command, error) {
 
 func decodeData(typ string, data json.RawMessage) (app.Command, error) {
 	switch typ {
-	case "start", "finish", "reset":
+	case "start", "stop", "finish", "reset":
 		if _, err := decodeObject(data); err != nil {
 			return app.Command{}, err
 		}
@@ -207,6 +209,17 @@ func decodeData(typ string, data json.RawMessage) (app.Command, error) {
 			return app.Command{}, err
 		}
 		return app.Command{Operation: app.SetNodeEnabled, Node: node, Enabled: manual}, nil
+
+	case "return_to_bot":
+		fields, err := decodeObject(data, "nodeId")
+		if err != nil {
+			return app.Command{}, err
+		}
+		node, err := decodeNode(fields["nodeId"], playerName)
+		if err != nil {
+			return app.Command{}, err
+		}
+		return app.Command{Operation: app.ReturnToBot, Node: node}, nil
 
 	case "set_all_node_modes":
 		fields, err := decodeObject(data, "mode")

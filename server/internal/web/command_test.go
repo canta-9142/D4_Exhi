@@ -20,6 +20,7 @@ var validCommands = []struct {
 	want app.Command
 }{
 	{"start", `{"type":"start","data":{}}`, app.Command{Operation: app.Start}},
+	{"stop", `{"type":"stop","data":{}}`, app.Command{Operation: app.Stop}},
 	{"finish", `{"type":"finish","data":{}}`, app.Command{Operation: app.Finish}},
 	{"reset", `{"type":"reset","data":{}}`, app.Command{Operation: app.Reset}},
 	{"whitespace and key order", " \r\n\t{ \"data\" : { } , \"type\" : \"start\" }\n", app.Command{Operation: app.Start}},
@@ -28,6 +29,10 @@ var validCommands = []struct {
 		app.Command{Operation: app.SetNodeEnabled, Node: 1, Enabled: true}},
 	{"auto", `{"type":"set_node_mode","data":{"mode":"auto","nodeId":"P8"}}`,
 		app.Command{Operation: app.SetNodeEnabled, Node: 8}},
+	{"return to bot", `{"type":"return_to_bot","data":{"nodeId":"P3"}}`,
+		app.Command{Operation: app.ReturnToBot, Node: 3}},
+	{"return to bot P8", ` {"data":{"nodeId":"P8"},"type":"return_to_bot"} `,
+		app.Command{Operation: app.ReturnToBot, Node: 8}},
 	{"all manual", `{"type":"set_all_node_modes","data":{"mode":"manual"}}`,
 		app.Command{Operation: app.SetAllNodesEnabled, Enabled: true}},
 	{"all auto", ` {"data":{"mode":"auto"},"type":"set_all_node_modes"} `,
@@ -89,11 +94,15 @@ var invalidCommands = []struct{ name, body string }{
 	{"null type", `{"type":null,"data":{}}`},
 	{"number type", `{"type":1,"data":{}}`},
 	{"empty type", `{"type":"","data":{}}`},
-	{"unknown type", `{"type":"stop","data":{}}`},
+	{"unknown type", `{"type":"halt","data":{}}`},
 	{"capitalized type", `{"type":"Start","data":{}}`},
 
-	// start, finish, reset
+	// start, stop, finish, reset
 	{"start with argument", `{"type":"start","data":{"force":true}}`},
+	{"stop with argument", `{"type":"stop","data":{"force":true}}`},
+	{"stop with null data", `{"type":"stop","data":null}`},
+	{"stop without data", `{"type":"stop"}`},
+	{"capitalized stop", `{"type":"Stop","data":{}}`},
 	{"finish with null data", `{"type":"finish","data":null}`},
 	{"reset with array data", `{"type":"reset","data":[]}`},
 	{"start with string data", `{"type":"start","data":""}`},
@@ -117,6 +126,20 @@ var invalidCommands = []struct{ name, body string }{
 	{"empty mode", `{"type":"set_node_mode","data":{"nodeId":"P1","mode":""}}`},
 	{"null mode", `{"type":"set_node_mode","data":{"nodeId":"P1","mode":null}}`},
 	{"boolean mode", `{"type":"set_node_mode","data":{"nodeId":"P1","mode":true}}`},
+
+	// return_to_bot
+	{"return nodeId missing", `{"type":"return_to_bot","data":{}}`},
+	{"return null data", `{"type":"return_to_bot","data":null}`},
+	{"return for bot", `{"type":"return_to_bot","data":{"nodeId":"B1"}}`},
+	{"return for P0", `{"type":"return_to_bot","data":{"nodeId":"P0"}}`},
+	{"return for P9", `{"type":"return_to_bot","data":{"nodeId":"P9"}}`},
+	{"return lower-case nodeId", `{"type":"return_to_bot","data":{"nodeId":"p3"}}`},
+	{"return empty nodeId", `{"type":"return_to_bot","data":{"nodeId":""}}`},
+	{"return null nodeId", `{"type":"return_to_bot","data":{"nodeId":null}}`},
+	{"return internal nodeId", `{"type":"return_to_bot","data":{"nodeId":3}}`},
+	{"return capitalized key", `{"type":"return_to_bot","data":{"NodeId":"P3"}}`},
+	{"return with unknown field", `{"type":"return_to_bot","data":{"nodeId":"P3","force":true}}`},
+	{"return with mode", `{"type":"return_to_bot","data":{"nodeId":"P3","mode":"auto"}}`},
 
 	// set_all_node_modes
 	{"all modes with empty data", `{"type":"set_all_node_modes","data":{}}`},
@@ -485,6 +508,51 @@ func TestCommandPlayersNotReady(t *testing.T) {
 	}
 }
 
+// With the real app in endless operation, the default, the commands follow
+// the operation state (web.md 4.1, 5): finish and reset are valid requests that
+// app refuses with 409 phase_conflict.
+func TestCommandWithEndlessApp(t *testing.T) {
+	a := app.New(app.Options{Logger: slog.New(slog.DiscardHandler)})
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() { done <- a.Run(ctx) }()
+	h := New(a, nil)
+	post := func(body string) *httptest.ResponseRecorder { return postCommand(t, h, "application/json", body) }
+	const (
+		start = `{"type":"start","data":{}}`
+		stop  = `{"type":"stop","data":{}}`
+		toBot = `{"type":"return_to_bot","data":{"nodeId":"P3"}}`
+	)
+
+	// Stopped: only start is accepted; stop and return_to_bot have nothing to act on.
+	checkError(t, post(stop), http.StatusConflict, codePhaseConflict)
+	checkError(t, post(toBot), http.StatusConflict, codePhaseConflict)
+	checkOK(t, post(start))
+	// Running: start is refused with the one blocker, not_stopped.
+	checkError(t, post(start), http.StatusConflict, codePhaseConflict)
+	// A player that has no round is accepted, and nothing happens to it.
+	checkOK(t, post(toBot))
+	// The modes can change while running.
+	checkSkipped(t, post(`{"type":"set_all_node_modes","data":{"mode":"manual"}}`),
+		`["P1","P2","P3","P4","P5","P6","P7","P8"]`)
+	checkOK(t, post(stop))
+	checkError(t, post(stop), http.StatusConflict, codePhaseConflict)
+
+	// The simultaneous game's commands are not for endless operation, whether
+	// it runs or not.
+	for _, body := range []string{`{"type":"finish","data":{}}`, `{"type":"reset","data":{}}`} {
+		checkError(t, post(body), http.StatusConflict, codePhaseConflict)
+		checkOK(t, post(start))
+		checkError(t, post(body), http.StatusConflict, codePhaseConflict)
+		checkOK(t, post(stop))
+	}
+
+	cancel()
+	if err := <-done; err != nil && !errors.Is(err, context.Canceled) {
+		t.Fatalf("Run: %v", err)
+	}
+}
+
 // With the real app, rejections carry app's English messages, which must not
 // reach the response.
 func TestCommandWithApp(t *testing.T) {
@@ -504,6 +572,10 @@ func TestCommandWithApp(t *testing.T) {
 	checkError(t, postCommand(t, h, "application/json", `{"type":"set_all_node_modes","data":{"mode":"auto"}}`),
 		http.StatusConflict, codePhaseConflict)
 	checkOK(t, postCommand(t, h, "application/json", `{"type":"reset","data":{}}`))
+	// Stop and return_to_bot are endless operation's.
+	checkError(t, postCommand(t, h, "application/json", `{"type":"stop","data":{}}`), http.StatusConflict, codePhaseConflict)
+	checkError(t, postCommand(t, h, "application/json", `{"type":"return_to_bot","data":{"nodeId":"P1"}}`),
+		http.StatusConflict, codePhaseConflict)
 	// Without MCUs no player can become manual: none is rejected, all are skipped.
 	checkSkipped(t, postCommand(t, h, "application/json", `{"type":"set_all_node_modes","data":{"mode":"manual"}}`),
 		`["P1","P2","P3","P4","P5","P6","P7","P8"]`)
