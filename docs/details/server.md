@@ -237,7 +237,7 @@ READY（両端の2秒長押し）は、現在の同期世代のものだけを`g
 READY・CHOOSEはSENDの要求IDを消費しない。不正な`sync`・`round`はセッションを閉じる。
 
 段階が変わると`game`は`change{kind:"station"}`を通知し、`app`は`phase`を送る。練習用キューと実際のFIFOを
-入れ替える段階の変化（練習の入りと出）では、続けて新しい同期世代の`reset`を送る。STATUSと結果のSUMMARYは、
+入れ替える段階の変化（練習の入りと出）と、FIFO通知を止めていた結果から出るときには、続けて新しい同期世代の`reset`を送る。STATUSと結果のSUMMARYは、
 入力イベントの最後の`flushPlayerUpdates`でまとめて送る。`phase`を送ったセッションは`forceStatus`が立つので、
 値が同じでもSTATUSを送る。それ以外では、スコア・残り秒数・カウントダウン・段階の残り時間・コンボ・`bots`の
 いずれかが前回と変わったか、未送信の獲得点があるときだけ送る。遅延Tickの途中経過は蓄積しない。
@@ -245,7 +245,7 @@ READY・CHOOSEはSENDの要求IDを消費しない。不正な`sync`・`round`�
 運転の開始・停止（一斉ゲーム方式のStart・Reset）では`phase` → 空FIFOの`reset` → 初期値の`status`の順になる。
 手動・自動の切替では`config` → 実際のFIFOの`reset` → `phase` → `status`で再設定する。
 自動への切替はラウンド・モード選択・結果を打ち切るが、打ち切り自体は通知せず、この再設定で待機を伝える。
-「ボットに戻す」では`config`を送らず、`phase(Idle)`（練習からなら実際のFIFOの`reset`）→ `status`とする。
+「ボットに戻す」では`config`を送らず、`phase(Idle)`（練習・結果からなら実際のFIFOの`reset`）→ `status`とする。
 確認表示からの復旧では、`config(preview=false)`から現在の`phase`・`status`までを送信する。
 Startや別機器への確認切替は、この復旧通知の登録後に行う。
 
@@ -253,7 +253,8 @@ Startや別機器への確認切替は、この復旧通知の登録後に行う
 `app`は前者で記録の保存・集計・上位%・ベストスコア・CHEERを済ませてから、`phase(Finished)` → `status` → `summary`を送る。
 summaryは`eligible=true`・`rank=null`で、上位%とベストスコアはその1人分である。結果の段階で`reset`を送った
 セッションは`phasePending`が立ち、`reset` → `phase` → `status` → 新しい同期世代の`summary`で結果を再取得させる。
-結果の段階でも筐体のFIFOは自動転送するので、転送で先頭が抜けるたびにこの4通が送られる。
+結果の段階でも筐体のFIFOは自動転送するが、その変化による`push`・`reset`は送らない。ページと演出を保つため、
+結果から出るときに最新のFIFOを`reset`で送り直す。明示的な再同期・再設定では上記の4通で復旧できる。
 一斉ゲーム方式のFinishedでは、対象者だけのスコア比較で順位を確定する。同点は同順位とし、100・100・80なら1・1・3となる。
 最終スコア・資格・順位はモード変更や基板交換でも保持し、対象外にはeligible=false・rank=nullを送る。
 練習していたノードにはSUMMARYを送らない。確認中や未割当にもSUMMARYを送らない。

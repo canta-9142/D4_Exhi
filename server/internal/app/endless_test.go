@@ -325,6 +325,68 @@ func TestNormalRoundCountsOnlyItsGameTimeAndSettlesItsResult(t *testing.T) {
 	}
 }
 
+func TestResultKeepsSynchronizationWhileNetworkRuns(t *testing.T) {
+	for _, exit := range []string{"ready", "timeout", "return_to_bot"} {
+		t.Run(exit, func(t *testing.T) {
+			h := endlessHarness(t, Options{}, 1)
+			h.execute(Command{Operation: Start})
+			h.quiet()
+			h.play("P1", RoundNormal)
+			h.tick(93 * time.Second)
+			sync, summary := h.sync("P1"), h.summary("P1")
+			h.clear()
+			h.do(func() {
+				h.a.game.append(1, testPacket(60000, 1, 2))
+				h.a.game.append(1, testPacket(60001, 1, 2))
+			})
+			h.tick(94 * time.Second)
+			if h.node(1).FIFOUsage != 0 {
+				t.Fatal("the result stopped automatic transfer")
+			}
+			if got := h.typesFor("P1"); !reflect.DeepEqual(got, []string{"status"}) || h.sync("P1") != sync {
+				t.Fatalf("FIFO changes disturbed the result: %v", got)
+			}
+
+			// Explicit recovery still sends the current FIFO and final result.
+			h.clear()
+			h.message("P1", IncomingMessage{Type: "resync"})
+			if got := h.typesFor("P1"); !reflect.DeepEqual(got, []string{"reset", "phase", "status", "summary"}) {
+				t.Fatalf("result resync: %v", got)
+			}
+			summary.Sync = h.sync("P1")
+			if h.sync("P1") == sync || !reflect.DeepEqual(h.summary("P1"), summary) || len(h.reset("P1").Packets) != 0 {
+				t.Fatal("result resync did not restore the current FIFO and result")
+			}
+
+			h.tick(122100 * time.Millisecond)
+			h.do(func() {
+				for pid := uint16(60002); pid < 60005; pid++ {
+					h.a.game.append(1, testPacket(pid, 1, 2))
+				}
+			})
+			h.clear()
+			wantPhase := Idle
+			switch exit {
+			case "ready":
+				h.press("P1")
+				wantPhase = Select
+			case "timeout":
+				h.tick(123 * time.Second)
+			case "return_to_bot":
+				h.execute(Command{Operation: ReturnToBot, Node: 1})
+			}
+			if got := h.typesFor("P1"); !reflect.DeepEqual(got, []string{"phase", "reset", "status"}) || !reflect.DeepEqual(h.phasesFor("P1"), []Phase{wantPhase}) {
+				t.Fatalf("leaving the result: %v", got)
+			}
+			var packets []PacketView
+			h.do(func() { packets = h.a.queue(1) })
+			if len(packets) == 0 || !reflect.DeepEqual(h.reset("P1").Packets, packets) {
+				t.Fatal("leaving the result did not restore the current FIFO")
+			}
+		})
+	}
+}
+
 func TestLongPressDuringTheResultSelectsAgain(t *testing.T) {
 	saver := &gameSaver{}
 	h := endlessHarness(t, Options{SaveGame: saver.save}, 1)
@@ -335,7 +397,7 @@ func TestLongPressDuringTheResultSelectsAgain(t *testing.T) {
 	// The result runs from 93s.
 	h.clear()
 	h.press("P1")
-	if got := h.typesFor("P1"); !reflect.DeepEqual(got, []string{"phase", "status"}) || !reflect.DeepEqual(h.phasesFor("P1"), []Phase{Select}) {
+	if got := h.typesFor("P1"); !reflect.DeepEqual(got, []string{"phase", "reset", "status"}) || !reflect.DeepEqual(h.phasesFor("P1"), []Phase{Select}) {
 		t.Fatalf("READY during the result: %v", got)
 	}
 	if n := h.node(1); n.Station != StationSelect || n.TopPercent != nil || n.Score != 0 || n.WindowSeconds != 20 {

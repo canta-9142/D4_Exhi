@@ -140,8 +140,8 @@ class FakeMCU:
             self.pump(.02)
 
     def wait_types(self, mark, types, what="", phase=None):
-        """mark以降に、typesがこの順で続けて届くまで待ち、その通知を返す。phaseを指定すると、
-        その中のphaseの通知がその値のものだけを数える（結果の段階の自動転送が送るphaseと区別する）。"""
+        """mark以降に、typesがこの順で続けて届くまで待ち、その通知を返す。
+        phaseを指定すると、その中のphaseの通知がその値のものだけを数える。"""
         def match(events, i):
             window = events[i:i + len(types)]
             return [kind for kind, _ in window] == types and (
@@ -174,7 +174,10 @@ def scenario(mcu, commands):
     def enter_select():
         mark = mcu.mark()
         mcu.ready()
-        phase, status = mcu.wait_types(mark, ["phase", "status"], "Select", "Select")
+        if mcu.phase == "Finished":
+            phase, reset, status = mcu.wait_types(mark, ["phase", "reset", "status"], "Select", "Select")
+        else:
+            phase, status = mcu.wait_types(mark, ["phase", "status"], "Select", "Select")
         assert phase == {"phase": "Select"} and status["window"] == 20, (phase, status)
 
     def start_round(kind):
@@ -221,11 +224,16 @@ def scenario(mcu, commands):
     print("PASS: Idle → ready → Select (window 20) → choose normal → countdown 3-2-1-0 → SEND/RESULT/STATUS → "
           "Finished (phase, status, summary with rank null)")
 
-    # 結果の段階でも自動転送のresetが届き、phase・status・新しい世代のsummaryが続く（サーバーと同じ）。
+    # 結果中はFIFOが動いても同期世代と結果を保持する。明示的なresyncでは取り直せる。
     mark = mcu.mark()
+    result_sync = mcu.sync
+    mcu.wait(lambda: mcu.status["window"] <= 27, what="the result without FIFO updates")
+    assert mcu.sync == result_sync and all(k == "status" for k, _ in mcu.since(mark)), mcu.since(mark)
+    mark = mcu.mark()
+    mcu.write("resync")
     reset, phase, status, summary = mcu.wait_types(mark, ["reset", "phase", "status", "summary"], "a result reset", "Finished")
-    assert summary["sync"] == reset["sync"] and phase == {"phase": "Finished"}
-    print("PASS: a FIFO reset during the result is followed by phase, status and a new-generation summary")
+    assert summary["sync"] == reset["sync"] != result_sync and phase == {"phase": "Finished"}
+    print("PASS: result keeps its synchronization during FIFO traffic; explicit resync restores FIFO and summary")
 
     # 結果からの再挑戦（長押し）→練習。
     start_round("tutorial")
@@ -270,7 +278,7 @@ def scenario(mcu, commands):
     mcu.wait(lambda: mcu.phase == "Idle", timeout=30 / SPEED + 3, what="the result timeout")
     events = mcu.since(mark)
     idle = len(events) - 1 - events[::-1].index(("phase", {"phase": "Idle"}))
-    phase, status = mcu.wait_types(mark + idle, ["phase", "status"], "the status after the result", "Idle")
+    phase, reset, status = mcu.wait_types(mark + idle, ["phase", "reset", "status"], "the status after the result", "Idle")
     assert status["round"] is None and status["window"] == 0 and status["score"] == 0, status
     print("PASS: Finished times out after 30 s → Idle")
 

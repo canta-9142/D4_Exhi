@@ -202,9 +202,9 @@ type change struct {
 	node   NodeID
 	packet PacketView
 	to     NodeID
-	// practice is set on a station change that swaps the MCU's queue between
-	// the practice queue and the real FIFO.
-	practice bool
+	// resetQueue refreshes the MCU's queue when entering or leaving practice,
+	// or leaving a result whose real FIFO updates were withheld.
+	resetQueue bool
 }
 
 type game struct {
@@ -422,7 +422,7 @@ func (g *game) finish(reason FinishReason) error {
 		n := &g.nodes[id]
 		practice := n.practicing()
 		n.station, n.practice, n.gains = StationFinished, nil, nil
-		g.notify(change{kind: "station", node: id, practice: practice})
+		g.notify(change{kind: "station", node: id, resetQueue: practice})
 	}
 	g.notify(change{kind: "phase"})
 	return nil
@@ -528,7 +528,8 @@ func (g *game) setManual(id NodeID, manual bool) {
 // and result. Unless quiet, it notifies the station change.
 func (g *game) enter(id NodeID, station Station, notify bool) {
 	n := &g.nodes[id]
-	wasAutomatic, practice := g.automatic(id), n.practicing()
+	wasAutomatic := g.automatic(id)
+	resetQueue := n.practicing() || n.station == StationFinished
 	n.station, n.round = station, ""
 	n.roundStart, n.roundEnd, n.deadline, n.lastPractice = 0, 0, 0, 0
 	n.practice = nil
@@ -538,7 +539,7 @@ func (g *game) enter(id NodeID, station Station, notify bool) {
 	}
 	g.rescheduleIf(id, wasAutomatic)
 	if notify {
-		g.notify(change{kind: "station", node: id, practice: practice})
+		g.notify(change{kind: "station", node: id, resetQueue: resetQueue})
 	}
 }
 
@@ -599,7 +600,7 @@ func (g *game) choose(id NodeID, round RoundKind) {
 		g.refillPractice(id)
 	}
 	g.rescheduleIf(id, wasAutomatic)
-	g.notify(change{kind: "station", node: id, practice: round == RoundTutorial})
+	g.notify(change{kind: "station", node: id, resetQueue: round == RoundTutorial})
 }
 
 // returnToBot cuts the node's round, mode selection or result short and

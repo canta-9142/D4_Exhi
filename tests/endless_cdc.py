@@ -7,8 +7,8 @@
 長押し・選択・送信は実機のボタンで行い、受け取った要求を仕様の受理条件で確かめて応答する。
 
 待機・モード選択・結果・練習中は、サーバーと同じく実際のFIFOを自動転送する（1秒に1件生成し、
-0.5秒ごとに先頭を転送して`reset`を送る。結果の段階ではphase・status・summaryも続ける）。
-練習中は練習用キュー（常に3件）を送り、実際のFIFOは送らない。
+0.5秒ごとに先頭を転送する）。結果・練習中は実際のFIFOの変化を送らず、出るときに`reset`する。
+練習中は練習用キュー（常に3件）を送る。
 得点は受理した`send`ごとに発信者の15点とする（転送先での得点の判定はしない）。
 
 標準入力のコマンド:
@@ -138,7 +138,7 @@ class Station:
             self.next_generation += 1
             p = {"pid": self.allocate_pid(), "dst": self.random.randint(2, 8)}
             self.fifo.append(p)
-            if not self.practicing():
+            if not self.practicing() and self.station != "finished":
                 self.cdc.send("push", **p)
             if self.next_transfer is None and self.automatic():
                 self.next_transfer = self.next_generation - 1 + 0.5
@@ -148,12 +148,11 @@ class Station:
                 break
             self.fifo.pop(0)
             self.next_transfer = self.next_transfer + 0.5 if self.fifo else None
-            if not self.practicing():
+            if not self.practicing() and self.station != "finished":
                 self.fifo_changed()
 
     def fifo_changed(self):
-        """自動転送で先頭が抜けたとき。サーバーと同じく新しい同期世代のresetを送る。
-        結果の段階では、その後にphase(Finished)・status・新しい世代のsummaryを続ける（server.md 5.2）。"""
+        """FIFOの同期が必要なときにresetを送る。結果中の明示的な復旧ではsummaryも続ける。"""
         self.send_reset()
         if self.station == "finished":
             self.cdc.send("phase", phase="Finished")
@@ -167,14 +166,14 @@ class Station:
     def enter(self, station, notify=True):
         """待機かモード選択へ移り、ラウンドと結果を捨てる（打ち切りは記録しない）。"""
         now = self.clock()
-        was_practice = self.practicing()
+        reset_queue = self.practicing() or self.station == "finished"
         self.station, self.round, self.summary = station, None, None
         self.score, self.combo, self.gains, self.practice = 0, 0, [], []
         self.deadline = now + SELECT_SECONDS if station == "select" else 0.0
         self.reschedule(now)
         if notify:
             self.cdc.send("phase", phase=self.phase_name())
-            if was_practice:
+            if reset_queue:
                 self.send_reset()
             self.send_status(force=True)
         self.report(f"station {self.phase_name()}")

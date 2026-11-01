@@ -319,8 +319,10 @@ func (a *App) notify(c change) {
 			}
 			return
 		}
-		// A practicing MCU caches its practice queue, not the real FIFO.
-		if a.game.nodes[c.node].practicing() {
+		// Practice has its own queue. Results must keep their synchronization
+		// generation so that FIFO traffic cannot reset pages and animations.
+		n := &a.game.nodes[c.node]
+		if n.practicing() || n.station == StationFinished {
 			return
 		}
 		if id := a.nodeSession(PlayerDevice, c.node); id != "" {
@@ -341,11 +343,11 @@ func (a *App) notify(c change) {
 }
 
 // notifyStation sends a player's new station: phase, a reset when its MCU
-// switches between the practice queue and the real FIFO, then (with the
-// flush) status and summary (player.md).
+// switches queues or leaves a result, then (with the flush) status and
+// summary (player.md).
 func (a *App) notifyStation(c change) {
 	id := a.nodeSession(PlayerDevice, c.node)
-	if id == "" || !a.phase(id) || !c.practice || a.previewing(id) {
+	if id == "" || !a.phase(id) || !c.resetQueue || a.previewing(id) {
 		return
 	}
 	if a.game.nodes[c.node].station == StationFinished {
