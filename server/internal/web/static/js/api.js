@@ -66,17 +66,20 @@ function isObject(v) {
 }
 
 // isSnapshot checks the types of the fields the page shows (web.md 3.2). It
-// does not check the ranges or the number of nodes, which the page shows as
-// they are.
+// does not check the ranges, the number of nodes or the values of the
+// enumerations, which the page shows as they are.
 function isSnapshot(s) {
   const { game, players, bots, devices, preview, records } = s;
-  return isObject(game) && typeof game.phase === "string" &&
-    Number.isInteger(game.durationSeconds) && Number.isInteger(game.remainingSeconds) &&
-    Number.isInteger(game.countdownSeconds) &&
+  return isObject(game) && isString(game.mode) && isString(game.operation) &&
+    (game.phase === null || isString(game.phase)) &&
+    Number.isInteger(game.durationSeconds) && Number.isInteger(game.elapsedMs) &&
+    Number.isInteger(game.remainingSeconds) && Number.isInteger(game.countdownSeconds) &&
     typeof game.canStart === "boolean" &&
     isListOf(game.startBlockers, (b) => typeof b.code === "string" &&
       (b.nodeIds === undefined || (Array.isArray(b.nodeIds) && b.nodeIds.every(isString)))) &&
     isListOf(players, (p) => isString(p.nodeId) && isString(p.mode) && typeof p.ready === "boolean" &&
+      isString(p.station) && (p.round === null || isString(p.round)) &&
+      Number.isInteger(p.countdownSeconds) && Number.isInteger(p.remainingSeconds) && Number.isInteger(p.windowSeconds) &&
       Number.isInteger(p.fifoLength) && Number.isInteger(p.score) &&
       (p.rankingEligible === null || typeof p.rankingEligible === "boolean") &&
       (p.rank === null || Number.isInteger(p.rank)) &&
@@ -90,6 +93,8 @@ function isSnapshot(s) {
 
 function isRecords(r) {
   return isObject(r) && (r.gameBest === null || isBest(r.gameBest)) &&
+    isListOf(r.recentRounds, (x) => isString(x.nodeId) && Number.isInteger(x.score) &&
+      Number.isInteger(x.topPercent) && isString(x.finishedAt)) &&
     isListOf(r.hourlyBests, (h) => isString(h.hourStart) && isBest(h)) &&
     (r.allTimeBest === null || isBest(r.allTimeBest)) &&
     typeof r.available === "boolean" && (r.unavailableReason === null || isString(r.unavailableReason)) &&

@@ -36,10 +36,10 @@ ui.dialog.addEventListener("close", () => {
   closed.resolve(confirmed);
 });
 
-// confirm opens the dialog of kind ("finish", "reset", "all-auto", "swap" or
-// "replace")
-// and resolves to whether it was confirmed. context holds the Device IDs of
-// swap and replace; opener gets the focus back on a cancel.
+// confirm opens the dialog of kind ("stop", "return-to-bot", "finish", "reset",
+// "all-auto", "swap" or "replace") and resolves to whether it was confirmed.
+// context holds the node of return-to-bot and the Device IDs of swap and
+// replace; opener gets the focus back on a cancel.
 export function confirm(kind, context, snapshot, opener) {
   if (open) {
     return Promise.resolve(false);

@@ -8,8 +8,8 @@
 
 import { chip, element, fieldError, setContent, setOptions, setText } from "./dom.js";
 import {
-  ASSIGNED_HINT, INSPECTOR_EMPTY, TARGETS, UNASSIGNED_HINT, displayName, inspectorPreviewNote, kindLabel,
-  missingSelectionText, nodeLabel, targetLabel,
+  ASSIGNED_HINT, INSPECTOR_EMPTY, RUNNING_ASSIGN_NOTE, TARGETS, UNASSIGNED_HINT, displayName, inspectorPreviewNote,
+  isSimultaneous, kindLabel, missingSelectionText, nodeLabel, targetLabel,
 } from "./labels.js";
 
 const ui = {
@@ -95,6 +95,10 @@ function build(device, assigned) {
     op("replace", "交代する相手", "交代する相手を選ぶ", "交代する…", "replace", "を交代する");
   }
   ops.append(element("p", assigned ? ASSIGNED_HINT : UNASSIGNED_HINT, "op-hint"));
+  // While endless operation runs, app refuses to change the board of a manual
+  // player (admin-ui.md 5.7, 8.3).
+  p.running = element("p", RUNNING_ASSIGN_NOTE, "op-hint");
+  ops.append(p.running);
   p.children = [id, facts, note, ops];
   return p;
 }
@@ -116,6 +120,7 @@ function update(p, device, snapshot) {
   setText(p.preview, previewed ? "確認表示を止める" : "確認表示を始める");
   p.preview.dataset.action = previewed ? "preview-stop" : "preview-start";
   p.preview.setAttribute("aria-label", `${device.deviceId} の${previewed ? "確認表示を止める" : "確認表示を始める"}`);
+  p.running.hidden = isSimultaneous(game) || game.operation !== "running";
   p.preview.disabled = !previewed && game.phase === "Playing";
   for (const control of p.phaseButtons) {
     control.disabled = game.phase === "Playing";

@@ -24,10 +24,23 @@ const displayNames = {
 };
 
 const phaseLabels = { Preparing: "準備中", Playing: "ゲーム中", Finished: "終了" };
+const operationLabels = { stopped: "停止中", running: "運転中" };
 const modeLabels = { manual: "手動", auto: "自動" };
 const kindLabels = { player: "プレイヤー基板", led: "LED制御基板" };
 
 export const PHASES = Object.keys(phaseLabels);
+export const OPERATIONS = Object.keys(operationLabels);
+
+// The stations in which a round, the mode selection or a result can be cut
+// short (admin-ui.md 8.3).
+const ACTIVE_STATIONS = ["select", "playing", "finished"];
+const RESTING_STATIONS = ["stopped", "idle"];
+
+// isSimultaneous tells which screen to show: the simultaneous game's (admin-ui.md
+// 15), or endless operation's for every other mode, including an unknown one.
+export function isSimultaneous(game) {
+  return game.mode === "simultaneous";
+}
 
 export function displayName(nodeId) {
   return displayNames[nodeId] ?? "?";
@@ -47,6 +60,74 @@ export function phaseLabel(phase) {
   return phaseLabels[phase] ?? phase;
 }
 
+export function operationLabel(operation) {
+  return operationLabels[operation] ?? operation;
+}
+
+// canReturnToBot says whether "戻す…" of a player row can be pressed
+// (admin-ui.md 8.3): only a station with something to cut short, while
+// endless operation runs. An operation or a station this page does not know
+// is left to app.
+export function canReturnToBot(operation, station) {
+  if (RESTING_STATIONS.includes(station)) {
+    return false;
+  }
+  return !OPERATIONS.includes(operation) || operation === "running";
+}
+
+// formatElapsed is "1:12:34" (hours, minutes, seconds) for elapsedMs; the
+// milliseconds are dropped, not rounded (admin-ui.md 7.4).
+export function formatElapsed(elapsedMs) {
+  const total = Math.max(Math.floor(elapsedMs / 1000), 0);
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${Math.floor(total / 3600)}:${pad(Math.floor(total / 60) % 60)}:${pad(total % 60)}`;
+}
+
+// roundCounts counts the players in a round by its kind, the countdown
+// before a normal round included (admin-ui.md 5.2).
+export function roundCounts(players) {
+  const playing = players.filter((p) => p.station === "playing");
+  return { normal: playing.filter((p) => p.round === "normal").length, tutorial: playing.filter((p) => p.round === "tutorial").length };
+}
+
+export function roundCountsText({ normal, tutorial }) {
+  return `通常 ${normal} / 練習 ${tutorial}`;
+}
+
+// stationText is the "状態" cell of a player row (admin-ui.md 5.3): its text
+// and whether it is shown in the caution tone. The seconds are the polled
+// values as they are. A value this page does not know is shown as it is.
+export function stationText(player) {
+  const { station, round, countdownSeconds, remainingSeconds, windowSeconds } = player;
+  switch (station) {
+    case "stopped":
+      return { text: "停止中", tone: "muted" };
+    case "idle":
+      return { text: "待機", tone: "" };
+    case "select":
+      return { text: `選択中 残り ${windowSeconds} 秒`, tone: "" };
+    case "finished":
+      return { text: `結果 残り ${windowSeconds} 秒`, tone: "" };
+    case "playing":
+      if (round === "normal") {
+        return countdownSeconds >= 1
+          ? { text: `通常 開始まで ${countdownSeconds} 秒`, tone: "warn" }
+          : { text: `通常 残り ${remainingSeconds} 秒`, tone: "" };
+      }
+      if (round === "tutorial") {
+        if (countdownSeconds >= 1) {
+          return { text: `練習 開始まで ${countdownSeconds} 秒`, tone: "warn" };
+        }
+        return windowSeconds <= 10
+          ? { text: `練習 無操作で待機まで ${windowSeconds} 秒`, tone: "warn" }
+          : { text: "練習", tone: "" };
+      }
+      return { text: round === null ? station : `${station} ${round}`, tone: "" };
+    default:
+      return { text: station, tone: "" };
+  }
+}
+
 export function modeLabel(mode) {
   return modeLabels[mode] ?? mode;
 }
@@ -58,6 +139,7 @@ export function kindLabel(kind) {
 // ---------- 開始できない理由（admin-ui.md 11.2） ----------
 
 const blockerTexts = {
+  not_stopped: "すでに運転中です",
   not_preparing: "準備中のフェーズではありません",
   pid_exhausted: "次のゲームに必要なパケットIDが足りません。サーバーを再起動してください",
   players_not_ready: "準備完了していない手動プレイヤー",
@@ -68,6 +150,9 @@ export function blockerText(code) {
 }
 
 export const NO_MANUAL_HINT = "手動のプレイヤーがいないため、全員自動で始まります";
+// The endless operation's notes under the readiness (admin-ui.md 5.2).
+export const NO_MANUAL_RUNNING_HINT = "手動のプレイヤーがいないため、全員ボットのまま運転します";
+export const RUNNING_HINT = "運転を止めるには、運転停止を押します";
 export const FINISHED_HINT = "次のゲームは、リセットして準備中に戻してから始めます";
 
 // The heading over the seconds of the command bar (admin-ui.md 5.2, 7.4).
@@ -90,14 +175,25 @@ export function fetchedText(connection, fetchedAt) {
 // commandPhrases returns the wording of command for its result: name for
 // pending and unknown results, success, and failure as the start of a
 // rejection. success is a string, or a function of the response body when
-// the wording depends on it. devices is the snapshot the command was made
-// from.
-export function commandPhrases(command, devices = []) {
+// the wording depends on it. snapshot is the one the command was made from;
+// the wording of the screen it was sent from depends on its mode.
+export function commandPhrases(command, snapshot = null) {
   const d = command.data ?? {};
-  const make = (name, success, failure) => ({ name, success, failure });
+  const devices = snapshot?.devices ?? [];
+  const simultaneous = snapshot !== null && isSimultaneous(snapshot.game);
+  const make = (name, success, failure) => ({ name, success, failure, simultaneous });
   switch (command.type) {
     case "start":
+      if (!simultaneous) {
+        return make("運転の開始", "運転を開始しました", "運転を開始できませんでした");
+      }
       return make("ゲームの開始", "ゲームを開始しました", "ゲームを開始できませんでした");
+    case "stop":
+      return make("運転の停止", "運転を停止しました。全員が停止中に戻りました", "運転を停止できませんでした");
+    case "return_to_bot": {
+      const node = nodeLabel(d.nodeId);
+      return make(`${node}のボットへの復帰`, `${node}をボットに戻しました`, `${node}をボットに戻せませんでした`);
+    }
     case "finish":
       return make("ゲームの終了", "ゲームを終了しました", "ゲームを終了できませんでした");
     case "reset":
@@ -171,7 +267,7 @@ export const errorTexts = {
   invalid_request: "要求の形式が正しくありません",
   not_found: "機器が見つかりません。一覧を確かめてください",
   method_not_allowed: "この操作は受け付けられません（画面の不具合の可能性があります）",
-  phase_conflict: "現在のフェーズでは実行できません",
+  phase_conflict: "現在の運転状態では実行できません",
   pid_exhausted: "次のゲームに必要なパケットIDが足りません。サーバーを再起動してください",
   players_not_ready: "準備完了していない手動プレイヤーがいます",
   assignment_conflict: "その割当先はほかの機器が使っています。その機器と入れ替えるか、先にその機器の割当を外してください",
@@ -187,8 +283,9 @@ export const errorTexts = {
 
 const assignmentTypes = ["set_device_assignment", "swap_device_assignments", "replace_device_assignment"];
 
-// Rewordings of a code for some operations (admin-ui.md 11.4).
-function rewording(command, code) {
+// Rewordings of a code for some operations (admin-ui.md 11.4, 15.5).
+// simultaneous is whether the screen of the simultaneous game sent it.
+function rewording(command, code, simultaneous) {
   const type = command.type;
   switch (code) {
     case "invalid_request":
@@ -200,6 +297,18 @@ function rewording(command, code) {
       }
       return undefined;
     case "phase_conflict":
+      if (!simultaneous) {
+        switch (type) {
+          case "start":
+            return "すでに運転中のため開始できません";
+          case "stop":
+            return "停止中のため停止できません";
+          case "return_to_bot":
+            return "停止中のため操作できません";
+          default:
+            return undefined;
+        }
+      }
       if (type === "start") {
         return "準備中ではないため開始できません";
       }
@@ -228,7 +337,7 @@ export function isStringList(v) {
 // "× C（P3）を手動にできませんでした: …（device_disconnected）".
 export function rejectedText(command, phrases, result) {
   const { code, details } = result;
-  let reason = rewording(command, code) ?? (Object.hasOwn(errorTexts, code) ? errorTexts[code] : "拒否されました");
+  let reason = rewording(command, code, phrases.simultaneous === true) ?? (Object.hasOwn(errorTexts, code) ? errorTexts[code] : "拒否されました");
   if (code === "players_not_ready" && isStringList(details.nodeIds)) {
     reason += `: ${details.nodeIds.map(nodeLabel).join("、")}`;
   }
@@ -271,6 +380,13 @@ export function recordsUnavailableText(reason) {
 export const BESTS_THIS_PROCESS = "この起動中のゲームだけで集計";
 export const BESTS_SAVE_FAILED = "直近の結果を保存できませんでした";
 export const BESTS_NOTE = "1時間ごと・通算は最後まで行ったゲームだけ";
+export const ROUNDS_THIS_PROCESS = "この起動中のラウンドだけで集計";
+export const ROUNDS_NOTE = "打ち切ったラウンドと練習は記録しません";
+export const NO_ROUNDS = "ラウンドの記録はまだありません";
+// Appended to the heading of the player table while the records file cannot
+// be used and a result carries a top percent (admin-ui.md 5.3, 15.3).
+export const TOP_THIS_PROCESS_ROUNDS = "上位%はこの起動中のラウンドだけで計算";
+export const TOP_THIS_PROCESS_GAMES = "上位%はこの起動中のゲームだけで計算";
 export const NO_ELIGIBLE = "ランキング対象者なし";
 export const NO_RECORDS = "記録はまだありません";
 
@@ -340,6 +456,7 @@ export function inspectorPreviewNote(device, preview) {
     : `確認表示中: 実機は一時的に ${target} を点滅表示しています。割当ではありません。`;
 }
 
+export const RUNNING_ASSIGN_NOTE = "運転中は、手動のプレイヤーの機器の割当は変えられません";
 export const ASSIGNED_HINT = "入れ替え: 2 台の割当先を取り替える。交代: 割当を相手に渡し、この機器は未割当になる。";
 export const UNASSIGNED_HINT = "交代: 相手の割当をこの機器が引き継ぎ、相手は未割当になる。故障した機器を予備に替えるときに使う。";
 
@@ -358,12 +475,17 @@ function previewEndNote(deviceId) {
 }
 
 const KEPT_BY_RESET = "機器の割当、操作モード、Botの処理速度はそのままです。";
+const KEPT_BY_STOP = "機器の割当、操作モード、Botの処理速度、記録したラウンドはそのままです。";
 
 // dialogText returns {title, paragraphs, confirm, danger} of a confirmation.
 // Its values follow the latest snapshot while the dialog is open.
 export function dialogText(kind, context, snapshot) {
   const preview = snapshot.preview;
   switch (kind) {
+    case "stop":
+      return stopText(snapshot.players, preview);
+    case "return-to-bot":
+      return returnToBotText(context.nodeId, snapshot.players);
     case "finish":
       return {
         title: "ゲームを終了しますか？",
@@ -377,11 +499,11 @@ export function dialogText(kind, context, snapshot) {
     case "reset":
       return { ...resetText(snapshot.game.phase, preview), confirm: "リセットする", danger: true };
     case "all-auto":
-      return allAutoText(snapshot.players);
+      return allAutoText(snapshot.players, isSimultaneous(snapshot.game));
     case "swap":
-      return swapText(context, snapshot.devices, preview);
+      return swapText(context, snapshot);
     case "replace":
-      return replaceText(context, snapshot.devices, preview);
+      return replaceText(context, snapshot);
     default:
       return { title: kind, paragraphs: [], confirm: "実行する", danger: false };
   }
@@ -415,13 +537,50 @@ function resetText(phase, preview) {
   return text;
 }
 
-function allAutoText(players) {
+// stopText is the confirmation of the stop (admin-ui.md 11.6).
+function stopText(players, preview) {
+  const counts = roundCounts(players);
+  const paragraphs = [
+    counts.normal + counts.tutorial > 0
+      ? `進行中のラウンドは打ち切られ、結果は記録されません（通常 ${counts.normal} 人、練習 ${counts.tutorial} 人）。` +
+        "全員が停止中に戻り、パケット・スコアを初期化します。"
+      : "進行中のラウンドはありません。全員が停止中に戻り、パケット・スコアを初期化します。",
+    KEPT_BY_STOP,
+  ];
+  if (preview) {
+    paragraphs.push(previewEndNote(preview.deviceId));
+  }
+  return { title: "運転を停止しますか？", paragraphs, confirm: "運転を停止する", danger: true };
+}
+
+// returnToBotText is the confirmation of "戻す…": what is cut short depends
+// on the station the player is in now (admin-ui.md 11.6).
+function returnToBotText(nodeId, players) {
+  const player = players.find((p) => p.nodeId === nodeId);
+  const kept = "受付（手動）は続けます。";
+  let body;
+  if (player?.station === "select") {
+    body = `モード選択を中止して待機に戻します。${kept}`;
+  } else if (player?.station === "playing" && player.round === "tutorial") {
+    body = `練習を終えて待機に戻します。${kept}`;
+  } else if (player?.station === "playing") {
+    body = `通常ラウンドを打ち切って待機に戻します。この結果は記録されません。${kept}`;
+  } else if (player?.station === "finished") {
+    body = `結果の表示を終えて待機に戻します。この結果は記録済みです。${kept}`;
+  } else {
+    body = `待機に戻します。${kept}`;
+  }
+  return { title: `${nodeLabel(nodeId)}をボットに戻しますか？`, paragraphs: [body], confirm: "ボットに戻す", danger: true };
+}
+
+function allAutoText(players, simultaneous) {
   const manual = players.filter((p) => p.mode === "manual").length;
+  // The ready flags belong to the simultaneous game; endless operation cuts
+  // the rounds short instead.
+  const effect = simultaneous ? "準備完了が解除されます" : "進行中のラウンドは打ち切られます";
   return {
     title: "全員を自動にしますか？",
-    paragraphs: [manual > 0
-      ? `手動の ${manual} 人が自動操作に切り替わり、準備完了が解除されます。`
-      : "すでに全員が自動です。"],
+    paragraphs: [manual > 0 ? `手動の ${manual} 人が自動操作に切り替わり、${effect}。` : "すでに全員が自動です。"],
     confirm: "全員を自動にする",
     danger: false,
   };
@@ -431,12 +590,32 @@ function findDevice(devices, deviceId) {
   return devices.find((device) => device.deviceId === deviceId);
 }
 
-function swapText({ first, second }, devices, preview) {
+// switchNote says which player nodes become automatic when their board
+// changes (admin-ui.md 11.6, 15.6), or "" when none does. In endless
+// operation that happens only to a manual player while it is stopped; while
+// it runs, app refuses to change the board of a manual player instead.
+function switchNote(targets, snapshot, lead) {
+  const labels = targets.filter((t) => t?.kind === "player").map(targetLabel);
+  if (labels.length === 0) {
+    return "";
+  }
+  const who = labels.join(" と ");
+  if (isSimultaneous(snapshot.game)) {
+    return `${lead}${who} は自動操作に切り替わり、準備完了が解除されます。`;
+  }
+  const manual = targets.some((t) => t?.kind === "player" &&
+    snapshot.players.find((p) => p.nodeId === t.nodeId)?.mode === "manual");
+  return snapshot.game.operation === "stopped" && manual ? `${lead}${who} は自動操作に切り替わります。` : "";
+}
+
+function swapText({ first, second }, snapshot) {
+  const { devices, preview } = snapshot;
   const a = findDevice(devices, first);
   const b = findDevice(devices, second);
   const paragraphs = [];
-  if (a?.assignment && b?.assignment && a.kind === "player") {
-    paragraphs.push(`担当が変わる ${targetLabel(a.assignment)} と ${targetLabel(b.assignment)} は自動操作に切り替わり、準備完了が解除されます。`);
+  const note = a?.assignment && b?.assignment && a.kind === "player" ? switchNote([a.assignment, b.assignment], snapshot, "担当が変わる ") : "";
+  if (note) {
+    paragraphs.push(note);
   }
   paragraphs.push("もう一度入れ替えると元の割当に戻ります。");
   if (preview && (preview.deviceId === first || preview.deviceId === second)) {
@@ -455,7 +634,8 @@ function swapText({ first, second }, devices, preview) {
   };
 }
 
-function replaceText({ oldDeviceId, newDeviceId }, devices, preview) {
+function replaceText({ oldDeviceId, newDeviceId }, snapshot) {
+  const { devices, preview } = snapshot;
   const oldDevice = findDevice(devices, oldDeviceId);
   const newDevice = findDevice(devices, newDeviceId);
   const slot = oldDevice?.assignment ?? null;
@@ -465,9 +645,9 @@ function replaceText({ oldDeviceId, newDeviceId }, devices, preview) {
     paragraphs.push(`${newDeviceId} の今の割当 ${targetLabel(lost)} は外れます。`);
   }
   // Every player node whose board changes becomes auto (server.md 4.2.1).
-  const changed = [slot, lost].filter((target) => target?.kind === "player").map(targetLabel);
-  if (changed.length > 0) {
-    paragraphs.push(`${changed.join(" と ")} は自動操作に切り替わり、準備完了が解除されます。`);
+  const note = switchNote([slot, lost], snapshot, "");
+  if (note) {
+    paragraphs.push(note);
   }
   if (preview && (preview.deviceId === oldDeviceId || preview.deviceId === newDeviceId)) {
     paragraphs.push(previewEndNote(preview.deviceId));

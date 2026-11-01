@@ -49,12 +49,21 @@ async function act(control) {
   switch (action) {
     case "start":
       return send({ type: "start", data: {} }, snapshot);
+    case "stop":
     case "finish":
     case "reset":
       if (await confirm(action, {}, snapshot, control)) {
         await send({ type: action, data: {} }, snapshot);
       }
       return;
+    case "return-to-bot": {
+      // What the dialog says follows the polls; what it sends is fixed here.
+      const nodeId = control.dataset.node;
+      if (await confirm("return-to-bot", { nodeId }, snapshot, control)) {
+        await send({ type: "return_to_bot", data: { nodeId } }, snapshot);
+      }
+      return;
+    }
     case "set-mode":
       // The pressed button is the current mode: pressing it sends nothing.
       if (control.getAttribute("aria-pressed") !== "true") {
@@ -62,7 +71,8 @@ async function act(control) {
       }
       return;
     case "set-all-modes": {
-      // Only the switch to auto asks first: it clears the ready flags.
+      // Only the switch to auto asks first: it cuts the rounds short and
+      // clears the ready flags.
       const mode = control.dataset.mode;
       if (mode === "auto" && !await confirm("all-auto", {}, snapshot, control)) {
         return;
@@ -147,7 +157,7 @@ async function deviceAction(action, control, snapshot) {
 // send runs command with the wording made from the snapshot it was made
 // from, which a confirmation may have kept on screen for a while.
 function send(command, snapshot) {
-  return deps.runCommand(command, commandPhrases(command, snapshot.devices));
+  return deps.runCommand(command, commandPhrases(command, snapshot));
 }
 
 function showError(control, text) {

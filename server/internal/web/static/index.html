@@ -26,7 +26,34 @@
      before the first GET, while the state cannot be fetched and while an
      operation is in progress (web.md 6). -->
 <fieldset id="operations" disabled>
-  <section class="panel command" aria-label="ゲーム">
+  <!-- Endless operation (admin-ui.md 5.2), the default screen. -->
+  <section id="command-endless" class="panel command" aria-label="運転">
+    <div>
+      <div id="operation" class="phase">—</div>
+      <ol id="operation-track" class="track">
+        <li data-operation="stopped">停止中</li><li data-operation="running">運転中</li>
+      </ol>
+    </div>
+    <div class="running">
+      <div class="time-label">運転経過</div>
+      <div class="time"><span id="elapsed" class="elapsed">—</span></div>
+      <div id="round-counts" class="counts">—</div>
+    </div>
+    <div class="start">
+      <div class="readiness">
+        <p id="e-readiness" class="readiness-title">—</p>
+        <ul id="e-blockers"></ul>
+        <p id="e-hint" class="hint" hidden></p>
+      </div>
+      <button id="e-start" class="btn btn-primary btn-start" type="button" data-action="start" disabled>運転開始</button>
+    </div>
+    <div class="ends">
+      <button id="e-stop" class="btn btn-danger" type="button" data-action="stop" disabled>運転停止…</button>
+    </div>
+  </section>
+
+  <!-- The simultaneous game (admin-ui.md 15.2), shown when game.mode says so. -->
+  <section id="command-simultaneous" class="panel command" aria-label="ゲーム" hidden>
     <div>
       <div id="phase" class="phase">—</div>
       <ol id="phase-track" class="track">
@@ -68,20 +95,21 @@
             <thead>
               <tr>
                 <th scope="col">ノード</th><th scope="col">機器</th><th scope="col">操作</th>
-                <th scope="col" data-lead="Preparing">準備</th><th scope="col" class="num">FIFO</th>
+                <th scope="col" data-for="endless">状態</th>
+                <th scope="col" data-for="simultaneous" data-lead="Preparing">準備</th><th scope="col" class="num">FIFO</th>
                 <th scope="col" class="num" data-lead="Playing">スコア</th>
-                <th id="rank-head" scope="col" data-lead="Finished">ランキング</th>
+                <th id="rank-head" scope="col" data-for="simultaneous" data-lead="Finished">ランキング</th>
                 <th scope="col" class="num">上位%</th>
               </tr>
             </thead>
             <tbody id="players">
-              <tr><td class="placeholder" colspan="8">未取得</td></tr>
+              <tr><td class="placeholder" colspan="9">未取得</td></tr>
             </tbody>
           </table>
         </div>
       </section>
       <section class="panel section" aria-labelledby="bots-title">
-        <div class="panel-head"><h2 id="bots-title">Bot</h2><span class="meta">処理速度は全フェーズで変更できます</span></div>
+        <div class="panel-head"><h2 id="bots-title">Bot</h2><span class="meta">処理速度はいつでも変更できます</span></div>
         <div class="scroll">
           <table>
             <thead>
@@ -96,15 +124,23 @@
       <section class="panel bests" aria-labelledby="bests-title">
         <div class="panel-head"><h2 id="bests-title">ベストスコア</h2><span id="bests-meta" class="meta"></span></div>
         <div class="bests-body">
-          <div class="bests-fixed">
-            <div class="best">
-              <h3 class="best-head">この回</h3>
-              <div id="best-game" class="best-value"><span class="placeholder">未取得</span></div>
+          <div class="best-recent" data-for="endless">
+            <h3 class="best-head">直近のラウンド</h3>
+            <div class="scroll">
+              <table>
+                <tbody id="best-recent">
+                  <tr><td class="placeholder" colspan="4">未取得</td></tr>
+                </tbody>
+              </table>
             </div>
-            <div class="best">
-              <h3 class="best-head">通算<span id="best-all-time-new" class="new" hidden>NEW</span></h3>
-              <div id="best-all-time" class="best-value"><span class="placeholder">未取得</span></div>
-            </div>
+          </div>
+          <div class="best best-game" data-for="simultaneous">
+            <h3 class="best-head">この回</h3>
+            <div id="best-game" class="best-value"><span class="placeholder">未取得</span></div>
+          </div>
+          <div class="best best-total">
+            <h3 class="best-head">通算<span id="best-all-time-new" class="new" hidden>NEW</span></h3>
+            <div id="best-all-time" class="best-value"><span class="placeholder">未取得</span></div>
           </div>
           <div class="bests-hourly">
             <h3 class="best-head">1時間ごと</h3>

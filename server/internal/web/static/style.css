@@ -88,6 +88,11 @@ button, input, select { font: inherit; color: inherit; }
 
 [hidden] { display: none !important; }
 
+/* Parts that belong to one screen: endless operation is the default, and the
+   simultaneous game's is shown when game.mode says so (admin-ui.md 15). */
+body:not([data-mode="simultaneous"]) [data-for="simultaneous"],
+body[data-mode="simultaneous"] [data-for="endless"] { display: none; }
+
 .sr {
   position: absolute;
   width: 1px;
@@ -186,6 +191,16 @@ body[data-records="unavailable"] { grid-template-rows: auto auto minmax(0, 1fr);
 .track li + li::before { content: "›"; margin-right: 4px; }
 .track li[aria-current="step"] { color: var(--ink); font-weight: 700; }
 
+/* The elapsed time and the players in a round fit the 90px bar only with a
+   little less padding above and below. */
+.command > div.running { padding-block: 4px; }
+.elapsed { font-size: 50px; font-weight: 700; line-height: 1; letter-spacing: -0.02em; }
+/* The clock runs only while endless operation does; otherwise it is faded. */
+body:not([data-operation="running"]) .elapsed { color: var(--ink-3); }
+.counts { margin-top: 1px; font-size: 12px; line-height: 1.2; color: var(--ink-2); }
+body:not([data-operation="running"]) .counts { color: var(--ink-3); }
+.track li[aria-current="step"] { color: var(--ink); font-weight: 700; }
+
 .time-label { font-size: 12px; line-height: 1.2; color: var(--ink-2); }
 .time { display: flex; align-items: baseline; gap: 6px; line-height: 1; margin-top: 2px; }
 .sec { font-size: 50px; font-weight: 700; letter-spacing: -0.02em; min-width: 2.1ch; text-align: right; }
@@ -241,7 +256,7 @@ body[data-countdown="true"] .unit { color: var(--caution); }
 /* ---------- 下段 3 列 ---------- */
 .main {
   display: grid;
-  grid-template-columns: minmax(470px, 1.36fr) minmax(410px, 1.18fr) minmax(330px, 1fr);
+  grid-template-columns: minmax(570px, 1.7fr) minmax(430px, 1.1fr) minmax(310px, 0.9fr);
   gap: 8px;
   min-height: 0;
 }
@@ -264,8 +279,14 @@ body[data-countdown="true"] .unit { color: var(--caution); }
 table { width: 100%; border-collapse: collapse; }
 th, td { height: 30px; padding: 0 8px; border-bottom: 1px solid var(--rule); text-align: left; white-space: nowrap; }
 thead th { position: sticky; top: 0; z-index: 1; height: 22px; background: var(--surface); color: var(--ink-2); font-size: 12px; font-weight: 400; }
-/* The eighth column of the player table would otherwise need a scrollbar at 1366px. */
+/* The columns of the player table would otherwise need a scrollbar at 1366px. */
 table.players th, table.players td { padding: 0 5px; }
+table.players td.opcell { white-space: nowrap; }
+.devices th, .devices td { padding: 0 6px; }
+table.players td.opcell > * { vertical-align: middle; }
+.back { height: 24px; margin-left: 3px; padding: 0 4px; font-size: 12px; }
+table.players .seg button { width: 36px; }
+table.players td[data-for="endless"] { font-size: 13px; }
 thead th.lead { color: var(--ink); font-weight: 700; }
 tbody th { font-weight: 400; }
 .num { text-align: right; }
@@ -328,27 +349,46 @@ td.field { padding-top: 2px; padding-bottom: 2px; }
 .bests { display: flex; flex-direction: column; overflow: auto; }
 .bests-body {
   display: grid;
-  grid-template-columns: 190px minmax(0, 1fr);
   gap: 0 12px;
   flex: 1;
   min-height: 72px;
   padding: 0 12px 6px;
 }
-.bests-fixed { display: flex; flex-direction: column; gap: 2px; min-height: 0; overflow: auto; }
-.bests-hourly { display: flex; flex-direction: column; min-height: 0; padding-left: 12px; border-left: 1px solid var(--rule); }
+/* Endless operation: the recent rounds on the left, the all-time best above
+   the hours on the right. The simultaneous game: this game and the all-time
+   best on the left, the hours on the right. */
+body:not([data-mode="simultaneous"]) .bests-body {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.17fr);
+  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-areas: "recent total" "recent hourly";
+}
+body[data-mode="simultaneous"] .bests-body {
+  grid-template-columns: 190px minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-areas: "game hourly" "total hourly";
+}
+.best-recent { grid-area: recent; display: flex; flex-direction: column; min-height: 0; padding-right: 12px; border-right: 1px solid var(--rule); }
+.best-recent .scroll { flex: 1; }
+.best-game { grid-area: game; }
+.best-total { grid-area: total; min-height: 0; overflow: auto; }
+.bests-hourly { grid-area: hourly; display: flex; flex-direction: column; min-height: 0; }
+body[data-mode="simultaneous"] .bests-hourly { padding-left: 12px; border-left: 1px solid var(--rule); }
+body:not([data-mode="simultaneous"]) .bests-hourly { margin-top: 2px; border-top: 1px solid var(--rule); }
 .bests-hourly .scroll { flex: 1; }
 .best-head { margin: 0; color: var(--ink-2); font-size: 12px; font-weight: 400; line-height: 1.5; }
 .best-value { display: flex; flex-wrap: wrap; align-items: center; gap: 0 6px; min-height: 26px; }
 .best-value .best-score { font-size: 18px; font-weight: 700; }
 span.best-nodes { display: inline-flex; flex-wrap: wrap; gap: 2px 6px; }
 .best-at { color: var(--ink-2); font-size: 12px; }
-.bests-hourly th, .bests-hourly td { height: 26px; padding: 0 6px 0 0; }
-.bests-hourly td:last-child { padding-right: 0; }
+.bests-hourly th, .bests-hourly td, .best-recent th, .best-recent td { height: 26px; padding: 0 6px 0 0; }
+.bests-hourly td:last-child, .best-recent td:last-child { padding-right: 0; }
+.best-recent th { font-weight: 400; }
+.best-recent .best-top { color: var(--ink-2); font-size: 12px; }
 /* Tied nodes wrap between the chips, never inside one. */
 .bests-hourly td.best-nodes { white-space: normal; }
 .bests-hourly td.best-nodes .node { margin-right: 6px; white-space: nowrap; }
-.bests-hourly tr.latest th { padding-left: 6px; box-shadow: inset 3px 0 0 var(--ink); font-weight: 700; }
-.bests-hourly tr.latest .best-score { font-weight: 700; }
+.bests-hourly tr.latest th, .best-recent tr.latest th { padding-left: 6px; box-shadow: inset 3px 0 0 var(--ink); font-weight: 700; }
+.bests-hourly tr.latest .best-score, .best-recent tr.latest .best-score { font-weight: 700; }
 .new {
   margin-left: 4px;
   padding: 0 4px;

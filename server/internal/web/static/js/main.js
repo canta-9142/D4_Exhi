@@ -12,8 +12,8 @@ import { updateDialog } from "./dialogs.js";
 import { setText } from "./dom.js";
 import { renderInspector } from "./inspector.js";
 import {
-  EXCEPTION_REASON, SAVE_FAILED_TEXT, commandPhrases, connectionLabels, fetchedText, isStringList, pendingText,
-  rejectedText, successText, unknownReason, unknownText,
+  EXCEPTION_REASON, SAVE_FAILED_TEXT, commandPhrases, connectionLabels, fetchedText, isSimultaneous, isStringList,
+  pendingText, rejectedText, successText, unknownReason, unknownText,
 } from "./labels.js";
 import { renderMap } from "./map.js";
 import { Poller } from "./poller.js";
@@ -39,10 +39,11 @@ const page = {
   // The Device ID of a selected device that left the list, reported in the
   // panel until another device is selected or it is listed again.
   missing: null,
-  // records.saveFailed and the phase when a failed save was last looked
-  // for, so that each failed save is shown once (noticeSaveFailure).
+  // records.saveFailed and what marked the last save when it was last looked
+  // for, so that each failed save is shown once (noticeSaveFailure): the
+  // phase of the simultaneous game, or the newest recent round.
   saveFailed: false,
-  savePhase: null,
+  saveMark: null,
 };
 
 const poller = new Poller({
@@ -66,7 +67,7 @@ const poller = new Poller({
 // its result is unknown, and the administrator decides from the new state.
 // An exception in the page is rethrown after the same refetch. phrases is
 // the wording of the result (labels.js commandPhrases).
-export async function runCommand(command, phrases = commandPhrases(command)) {
+export async function runCommand(command, phrases = commandPhrases(command, page.snapshot)) {
   if (!canOperate()) {
     return null;
   }
@@ -116,23 +117,36 @@ function showSnapshot() {
   }
 }
 
-// noticeSaveFailure shows a failed save of a game record in the result
-// field like the result of an operation, when saveFailed turns true and when
-// another game finishes while it stays true, since each game is saved once
-// as it finishes (admin-ui.md 5.10). While an operation is in progress it
+// saveMark is what changes when another record is saved: the simultaneous
+// game saves as it finishes, and endless operation as a round settles, which
+// puts a new round at the top of the recent rounds.
+function saveMark({ game, records }) {
+  if (isSimultaneous(game)) {
+    return game.phase === "Finished" ? "finished" : "";
+  }
+  const latest = records.recentRounds[0];
+  return latest ? `${latest.finishedAt}|${latest.nodeId}` : "";
+}
+
+// noticeSaveFailure shows a failed save of a record in the result field like
+// the result of an operation, when saveFailed turns true and when another
+// game finishes or round settles while it stays true, since each is saved
+// once as it ends (admin-ui.md 5.10). While an operation is in progress it
 // waits until the result has been shown, so that the result does not hide
 // the failure.
 function noticeSaveFailure() {
   if (page.snapshot === null) {
     return;
   }
-  const { game, records } = page.snapshot;
-  const finishedNow = game.phase === "Finished" && page.savePhase !== "Finished";
-  if (records.saveFailed && (!page.saveFailed || finishedNow)) {
+  const mark = saveMark(page.snapshot);
+  const { records } = page.snapshot;
+  // A mark going back to empty (the game left Finished) is not a new save.
+  const savedNow = mark !== "" && mark !== page.saveMark;
+  if (records.saveFailed && (!page.saveFailed || savedNow)) {
     showNotice("alert", SAVE_FAILED_TEXT);
   }
   page.saveFailed = records.saveFailed;
-  page.savePhase = game.phase;
+  page.saveMark = mark;
 }
 
 // showSelection draws the parts that depend on the selected device.

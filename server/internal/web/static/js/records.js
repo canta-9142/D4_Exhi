@@ -1,17 +1,19 @@
-// The best scores and the records file (docs/spec/admin-ui.md 5.9, 5.10).
+// The best scores and the records file (docs/spec/admin-ui.md 5.9, 5.10, 15.4).
 // The bests are shown as app counted them (web.md 3.2); the page neither
 // counts nor keeps any of them. The parts are made once and then updated by
 // setText and setContent, so that the polls do not rebuild them.
 
 import { chip, element, placeChildren, setContent, setText } from "./dom.js";
 import {
-  BESTS_NOTE, BESTS_SAVE_FAILED, BESTS_THIS_PROCESS, NO_ELIGIBLE, NO_RECORDS, displayName, finishedLabel, hourLabel,
-  jstDate, nodeLabel, recordsUnavailableText,
+  BESTS_NOTE, BESTS_SAVE_FAILED, BESTS_THIS_PROCESS, NO_ELIGIBLE, NO_RECORDS, NO_ROUNDS, ROUNDS_NOTE,
+  ROUNDS_THIS_PROCESS, displayName, finishedLabel, hourLabel, isSimultaneous, jstDate, nodeLabel,
+  recordsUnavailableText,
 } from "./labels.js";
 
 const ui = {
   alert: document.getElementById("records-alert"),
   meta: document.getElementById("bests-meta"),
+  recent: document.getElementById("best-recent"),
   game: document.getElementById("best-game"),
   allTime: document.getElementById("best-all-time"),
   allTimeNew: document.getElementById("best-all-time-new"),
@@ -20,17 +22,27 @@ const ui = {
 
 export function renderRecords(snapshot) {
   const { game, records } = snapshot;
+  const simultaneous = isSimultaneous(game);
   renderAlert(records);
-  renderMeta(records);
+  renderMeta(records, simultaneous);
 
-  // gameBest is also null in Finished when no player is ranked; only then
-  // does 「この回」 say so (admin-ui.md 5.9).
-  const finished = game.phase === "Finished";
-  const gameBest = finished ? records.gameBest : null;
-  showBest(valueParts(ui.game), gameBest, finished ? NO_ELIGIBLE : "", false);
+  // latest is the result whose NEW mark may be shown: the simultaneous game's
+  // 「この回」, or the newest of the recent rounds in endless operation.
+  let latest;
+  if (simultaneous) {
+    // gameBest is also null in Finished when no player is ranked; only then
+    // does 「この回」 say so (admin-ui.md 15.4).
+    const finished = game.phase === "Finished";
+    latest = finished ? records.gameBest : null;
+    showBest(valueParts(ui.game), latest, finished ? NO_ELIGIBLE : "", false);
+  } else {
+    renderRecent(records.recentRounds);
+    const round = records.recentRounds[0];
+    latest = round ? { score: round.score, nodeIds: [round.nodeId], finishedAt: round.finishedAt } : null;
+  }
   showBest(valueParts(ui.allTime), records.allTimeBest, NO_RECORDS, true);
-  ui.allTimeNew.hidden = !sameGame(records.allTimeBest, gameBest);
-  renderHourly(records.hourlyBests, gameBest);
+  ui.allTimeNew.hidden = !sameGame(records.allTimeBest, latest);
+  renderHourly(records.hourlyBests, latest);
 }
 
 // The alert stays while the records file cannot be used, which lasts until
@@ -42,10 +54,10 @@ function renderAlert(records) {
   setText(ui.alert, unavailable ? recordsUnavailableText(records.unavailableReason) : "");
 }
 
-function renderMeta(records) {
-  let text = BESTS_NOTE, className = "meta";
+function renderMeta(records, simultaneous) {
+  let text = simultaneous ? BESTS_NOTE : ROUNDS_NOTE, className = "meta";
   if (!records.available) {
-    text = BESTS_THIS_PROCESS;
+    text = simultaneous ? BESTS_THIS_PROCESS : ROUNDS_THIS_PROCESS;
     className = "meta warn";
   } else if (records.saveFailed) {
     // The result field loses the failure at the next operation, so the
@@ -59,12 +71,69 @@ function renderMeta(records) {
   }
 }
 
-// sameGame tells whether best is from the game whose best is gameBest.
-// Games finish at least 3 seconds apart, so different games never share
-// finishedAt (admin-ui.md 14).
-function sameGame(best, gameBest) {
-  return best !== null && gameBest !== null && best.score === gameBest.score &&
-    best.finishedAt === gameBest.finishedAt && best.nodeIds.join() === gameBest.nodeIds.join();
+// sameGame tells whether best is from the game or the round whose result is
+// latest. Games finish at least 3 seconds apart, so different games never
+// share finishedAt (admin-ui.md 14). A round that ties an earlier one is not
+// the one counted, so it matches nothing.
+function sameGame(best, latest) {
+  return best !== null && latest !== null && best.score === latest.score &&
+    best.finishedAt === latest.finishedAt && best.nodeIds.join() === latest.nodeIds.join();
+}
+
+// ---------- 直近のラウンド ----------
+
+// The rows are keyed by finishedAt and nodeId: a new round adds a row at the
+// top, the others are updated cell by cell, and a round beyond the newest ten
+// loses its row (admin-ui.md 12).
+const recentRows = new Map();
+let recentEmptyRow = null;
+
+function renderRecent(rounds) {
+  if (rounds.length === 0) {
+    recentEmptyRow ??= placeholderRow(NO_ROUNDS);
+    placeChildren(ui.recent, [recentEmptyRow]);
+    recentRows.clear();
+    return;
+  }
+  const seen = new Map();
+  const live = new Set();
+  placeChildren(ui.recent, rounds.map((round, i) => {
+    // Rounds never share both, but a repeat must not share a row.
+    const base = `${round.finishedAt}|${round.nodeId}`;
+    const repeat = seen.get(base) ?? 0;
+    seen.set(base, repeat + 1);
+    const key = repeat === 0 ? base : `${base}#${repeat}`;
+    live.add(key);
+    let row = recentRows.get(key);
+    if (!row) {
+      row = createRecentRow();
+      recentRows.set(key, row);
+    }
+    updateRecentRow(row, round, i === 0);
+    return row;
+  }));
+  for (const key of recentRows.keys()) {
+    if (!live.has(key)) {
+      recentRows.delete(key);
+    }
+  }
+}
+
+function createRecentRow() {
+  const row = element("tr");
+  const at = element("th", "", "best-at");
+  at.scope = "row";
+  row.append(at, element("td", "", "best-nodes"), element("td", "", "num best-score"), element("td", "", "num best-top"));
+  return row;
+}
+
+function updateRecentRow(row, round, latest) {
+  const [at, node, score, top] = row.cells;
+  setText(at, finishedLabel(round.finishedAt, false));
+  setContent(node, round.nodeId, () => [chip(round.nodeId, displayName(round.nodeId), nodeLabel(round.nodeId))]);
+  setText(score, String(round.score));
+  setText(top, `上位 ${round.topPercent}%`);
+  row.classList.toggle("latest", latest);
 }
 
 // showBest writes a best, or "—" and empty, into parts {score, nodes, at}.
@@ -104,7 +173,7 @@ function valueParts(container) {
 const hourRows = new Map();
 let emptyRow = null;
 
-function renderHourly(hourly, gameBest) {
+function renderHourly(hourly, latest) {
   if (hourly.length === 0) {
     emptyRow ??= placeholderRow(NO_RECORDS);
     placeChildren(ui.hourly, [emptyRow]);
@@ -120,7 +189,7 @@ function renderHourly(hourly, gameBest) {
       row = createHourRow();
       hourRows.set(hour.hourStart, row);
     }
-    updateHourRow(row, hour, i === 0, jstDate(hour.hourStart) !== latestDate, sameGame(hour, gameBest));
+    updateHourRow(row, hour, i === 0, jstDate(hour.hourStart) !== latestDate, sameGame(hour, latest));
     return row;
   }));
   for (const key of hourRows.keys()) {
