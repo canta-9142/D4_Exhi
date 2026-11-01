@@ -1,0 +1,75 @@
+<?xml version='1.0' encoding='utf-8'?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="80 3 200 200" role="img" aria-label="プレイヤーFから見たノードの配置図" width="1440" height="1440" font-family="&quot;BIZ UDPGothic&quot;, &quot;Hiragino Sans&quot;, &quot;Noto Sans JP&quot;, system-ui, sans-serif" style="background:transparent">
+  <title>Fを手前にした配置図</title>
+  <g transform="rotate(-22.502874982 180 103)">
+    <circle class="ring" cx="180" cy="103" r="81" fill="none" stroke="#d5dae0" stroke-width="1" stroke-dasharray="2 5" />
+    <line class="link" x1="149.00" y1="28.17" x2="211.00" y2="28.17" stroke="#b3bac2" stroke-width="1.2" />
+    <line class="link" x1="149.00" y1="28.17" x2="180.00" y2="68.00" stroke="#b3bac2" stroke-width="1.2" />
+    <line class="link" x1="149.00" y1="28.17" x2="149.69" y2="120.50" stroke="#b3bac2" stroke-width="1.2" />
+    <line class="link" x1="211.00" y1="28.17" x2="254.83" y2="72.00" stroke="#b3bac2" stroke-width="1.2" />
+    <line class="link" x1="211.00" y1="28.17" x2="180.00" y2="68.00" stroke="#b3bac2" stroke-width="1.2" />
+    <line class="link" x1="211.00" y1="28.17" x2="210.31" y2="120.50" stroke="#b3bac2" stroke-width="1.2" />
+    <line class="link" x1="254.83" y1="72.00" x2="254.83" y2="134.00" stroke="#b3bac2" stroke-width="1.2" />
+    <line class="link" x1="254.83" y1="72.00" x2="210.31" y2="120.50" stroke="#b3bac2" stroke-width="1.2" />
+    <line class="link" x1="254.83" y1="72.00" x2="149.69" y2="120.50" stroke="#b3bac2" stroke-width="1.2" />
+    <line class="link" x1="254.83" y1="134.00" x2="211.00" y2="177.83" stroke="#b3bac2" stroke-width="1.2" />
+    <line class="link" x1="254.83" y1="134.00" x2="180.00" y2="68.00" stroke="#b3bac2" stroke-width="1.2" />
+    <line class="link" x1="254.83" y1="134.00" x2="210.31" y2="120.50" stroke="#b3bac2" stroke-width="1.2" />
+    <line class="link" x1="211.00" y1="177.83" x2="180.00" y2="68.00" stroke="#b3bac2" stroke-width="1.2" />
+    <line class="link" x1="211.00" y1="177.83" x2="149.69" y2="120.50" stroke="#b3bac2" stroke-width="1.2" />
+    <line class="link" x1="105.17" y1="134.00" x2="105.17" y2="72.00" stroke="#b3bac2" stroke-width="1.2" />
+    <line class="link" x1="105.17" y1="134.00" x2="180.00" y2="68.00" stroke="#b3bac2" stroke-width="1.2" />
+    <line class="link" x1="105.17" y1="134.00" x2="149.69" y2="120.50" stroke="#b3bac2" stroke-width="1.2" />
+    <line class="link" x1="105.17" y1="72.00" x2="149.00" y2="28.17" stroke="#b3bac2" stroke-width="1.2" />
+    <line class="link" x1="105.17" y1="72.00" x2="210.31" y2="120.50" stroke="#b3bac2" stroke-width="1.2" />
+    <line class="link" x1="105.17" y1="72.00" x2="149.69" y2="120.50" stroke="#b3bac2" stroke-width="1.2" />
+    <line class="link" x1="211.00" y1="177.83" x2="149.00" y2="177.83" stroke="#000000" stroke-width="2.8" />
+    <line class="link" x1="149.00" y1="177.83" x2="105.17" y2="134.00" stroke="#000000" stroke-width="2.8" />
+    <line class="link" x1="149.00" y1="177.83" x2="180.00" y2="68.00" stroke="#000000" stroke-width="2.8" />
+    <line class="link" x1="149.00" y1="177.83" x2="210.31" y2="120.50" stroke="#000000" stroke-width="2.8" />
+    <g data-node="P1">
+      <circle class="disc" cx="149.00" cy="28.17" r="15" fill="#e5302a" stroke="#000000" stroke-opacity="0.3" stroke-width="1" />
+      <text class="letter" x="149.00" y="28.17" fill="#ffffff" font-weight="700" font-size="13" text-anchor="middle" dominant-baseline="central" transform="rotate(22.502874982 149.00 28.17)">A</text>
+    </g>
+    <g data-node="P2">
+      <circle class="disc" cx="211.00" cy="28.17" r="15" fill="#ff9a1f" stroke="#000000" stroke-opacity="0.3" stroke-width="1" />
+      <text class="letter" x="211.00" y="28.17" fill="#1c2024" font-weight="700" font-size="13" text-anchor="middle" dominant-baseline="central" transform="rotate(22.502874982 211.00 28.17)">B</text>
+    </g>
+    <g data-node="P3">
+      <circle class="disc" cx="254.83" cy="72.00" r="15" fill="#f6d81a" stroke="#000000" stroke-opacity="0.3" stroke-width="1" />
+      <text class="letter" x="254.83" y="72.00" fill="#1c2024" font-weight="700" font-size="13" text-anchor="middle" dominant-baseline="central" transform="rotate(22.502874982 254.83 72.00)">C</text>
+    </g>
+    <g data-node="P4">
+      <circle class="disc" cx="254.83" cy="134.00" r="15" fill="#2fbf4f" stroke="#000000" stroke-opacity="0.3" stroke-width="1" />
+      <text class="letter" x="254.83" y="134.00" fill="#1c2024" font-weight="700" font-size="13" text-anchor="middle" dominant-baseline="central" transform="rotate(22.502874982 254.83 134.00)">D</text>
+    </g>
+    <g data-node="P5">
+      <circle class="disc" cx="211.00" cy="177.83" r="15" fill="#22c8db" stroke="#000000" stroke-opacity="0.3" stroke-width="1" />
+      <text class="letter" x="211.00" y="177.83" fill="#1c2024" font-weight="700" font-size="13" text-anchor="middle" dominant-baseline="central" transform="rotate(22.502874982 211.00 177.83)">E</text>
+    </g>
+    <g data-node="P6">
+      <circle class="disc" cx="149.00" cy="177.83" r="15" fill="#2c55e6" stroke="#000000" stroke-opacity="0.3" stroke-width="1" />
+      <text class="letter" x="149.00" y="177.83" fill="#ffffff" font-weight="700" font-size="13" text-anchor="middle" dominant-baseline="central" transform="rotate(22.502874982 149.00 177.83)">F</text>
+    </g>
+    <g data-node="P7">
+      <circle class="disc" cx="105.17" cy="134.00" r="15" fill="#8b2db9" stroke="#000000" stroke-opacity="0.3" stroke-width="1" />
+      <text class="letter" x="105.17" y="134.00" fill="#ffffff" font-weight="700" font-size="13" text-anchor="middle" dominant-baseline="central" transform="rotate(22.502874982 105.17 134.00)">G</text>
+    </g>
+    <g data-node="P8">
+      <circle class="disc" cx="105.17" cy="72.00" r="15" fill="#ff8fb3" stroke="#000000" stroke-opacity="0.3" stroke-width="1" />
+      <text class="letter" x="105.17" y="72.00" fill="#1c2024" font-weight="700" font-size="13" text-anchor="middle" dominant-baseline="central" transform="rotate(22.502874982 105.17 72.00)">H</text>
+    </g>
+    <g data-node="B1">
+      <rect class="disc" x="168.00" y="56.00" width="24" height="24" rx="4" fill="#ffffff" stroke="#000000" stroke-opacity="0.3" stroke-width="1" />
+      <text class="letter" x="180.00" y="68.00" fill="#1c2024" font-weight="700" font-size="13" text-anchor="middle" dominant-baseline="central" transform="rotate(22.502874982 180.00 68.00)">I</text>
+    </g>
+    <g data-node="B2">
+      <rect class="disc" x="198.31" y="108.50" width="24" height="24" rx="4" fill="#9aa0a7" stroke="#000000" stroke-opacity="0.3" stroke-width="1" />
+      <text class="letter" x="210.31" y="120.50" fill="#1c2024" font-weight="700" font-size="13" text-anchor="middle" dominant-baseline="central" transform="rotate(22.502874982 210.31 120.50)">J</text>
+    </g>
+    <g data-node="B3">
+      <rect class="disc" x="137.69" y="108.50" width="24" height="24" rx="4" fill="#8a5a2c" stroke="#000000" stroke-opacity="0.3" stroke-width="1" />
+      <text class="letter" x="149.69" y="120.50" fill="#ffffff" font-weight="700" font-size="13" text-anchor="middle" dominant-baseline="central" transform="rotate(22.502874982 149.69 120.50)">K</text>
+    </g>
+  </g>
+</svg>

@@ -1,0 +1,106 @@
+<?xml version='1.0' encoding='utf-8'?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="80 3 200 200" role="img" aria-label="プレイヤーAから見たノードの配置図" width="1440" height="1440" font-family="&quot;BIZ UDPGothic&quot;, &quot;Hiragino Sans&quot;, &quot;Noto Sans JP&quot;, system-ui, sans-serif" style="background:transparent">
+  <title>Aを手前にした配置図</title>
+  <defs>
+    <marker id="traffic-2-arrow" markerUnits="userSpaceOnUse" markerWidth="7" markerHeight="7" refX="7" refY="3.5" viewBox="0 0 7 7" orient="auto">
+      <path d="M 0 0 L 7 3.5 L 0 7 Z" fill="#000000" />
+    </marker>
+  </defs>
+  <g transform="rotate(-157.497125018 180 103)">
+    <circle class="ring" cx="180" cy="103" r="81" fill="none" stroke="#d5dae0" stroke-width="1" stroke-dasharray="2 5" />
+    <line class="link" x1="211.00" y1="28.17" x2="254.83" y2="72.00" stroke="#b3bac2" stroke-width="1.2" />
+    <line class="link" x1="211.00" y1="28.17" x2="180.00" y2="68.00" stroke="#b3bac2" stroke-width="1.2" />
+    <line class="link" x1="211.00" y1="28.17" x2="210.31" y2="120.50" stroke="#b3bac2" stroke-width="1.2" />
+    <line class="link" x1="254.83" y1="72.00" x2="254.83" y2="134.00" stroke="#b3bac2" stroke-width="1.2" />
+    <line class="link" x1="254.83" y1="72.00" x2="210.31" y2="120.50" stroke="#b3bac2" stroke-width="1.2" />
+    <line class="link" x1="254.83" y1="72.00" x2="149.69" y2="120.50" stroke="#b3bac2" stroke-width="1.2" />
+    <line class="link" x1="254.83" y1="134.00" x2="211.00" y2="177.83" stroke="#b3bac2" stroke-width="1.2" />
+    <line class="link" x1="254.83" y1="134.00" x2="180.00" y2="68.00" stroke="#b3bac2" stroke-width="1.2" />
+    <line class="link" x1="254.83" y1="134.00" x2="210.31" y2="120.50" stroke="#b3bac2" stroke-width="1.2" />
+    <line class="link" x1="211.00" y1="177.83" x2="149.00" y2="177.83" stroke="#b3bac2" stroke-width="1.2" />
+    <line class="link" x1="211.00" y1="177.83" x2="180.00" y2="68.00" stroke="#b3bac2" stroke-width="1.2" />
+    <line class="link" x1="211.00" y1="177.83" x2="149.69" y2="120.50" stroke="#b3bac2" stroke-width="1.2" />
+    <line class="link" x1="149.00" y1="177.83" x2="105.17" y2="134.00" stroke="#b3bac2" stroke-width="1.2" />
+    <line class="link" x1="149.00" y1="177.83" x2="180.00" y2="68.00" stroke="#b3bac2" stroke-width="1.2" />
+    <line class="link" x1="149.00" y1="177.83" x2="210.31" y2="120.50" stroke="#b3bac2" stroke-width="1.2" />
+    <line class="link" x1="105.17" y1="134.00" x2="105.17" y2="72.00" stroke="#b3bac2" stroke-width="1.2" />
+    <line class="link" x1="105.17" y1="134.00" x2="180.00" y2="68.00" stroke="#b3bac2" stroke-width="1.2" />
+    <line class="link" x1="105.17" y1="134.00" x2="149.69" y2="120.50" stroke="#b3bac2" stroke-width="1.2" />
+    <line class="link" x1="105.17" y1="72.00" x2="210.31" y2="120.50" stroke="#b3bac2" stroke-width="1.2" />
+    <line class="link" x1="105.17" y1="72.00" x2="149.69" y2="120.50" stroke="#b3bac2" stroke-width="1.2" />
+    <line class="link" x1="149.00" y1="28.17" x2="211.00" y2="28.17" stroke="#b3bac2" stroke-width="1.2" />
+    <line class="link" x1="149.00" y1="28.17" x2="180.00" y2="68.00" stroke="#b3bac2" stroke-width="1.2" />
+    <line class="link" x1="149.00" y1="28.17" x2="149.69" y2="120.50" stroke="#b3bac2" stroke-width="1.2" />
+    <line class="link" x1="105.17" y1="72.00" x2="149.00" y2="28.17" stroke="#b3bac2" stroke-width="1.2" />
+    <g data-node="P1">
+      <circle class="disc" cx="149.00" cy="28.17" r="15" fill="#e5302a" stroke="#000000" stroke-opacity="0.3" stroke-width="1" />
+      <text class="letter" x="149.00" y="28.17" fill="#ffffff" font-weight="700" font-size="13" text-anchor="middle" dominant-baseline="central" transform="rotate(157.497125018 149.00 28.17)">A</text>
+    </g>
+    <g data-node="P2">
+      <circle class="disc" cx="211.00" cy="28.17" r="15" fill="#ff9a1f" stroke="#000000" stroke-opacity="0.3" stroke-width="1" />
+      <text class="letter" x="211.00" y="28.17" fill="#1c2024" font-weight="700" font-size="13" text-anchor="middle" dominant-baseline="central" transform="rotate(157.497125018 211.00 28.17)">B</text>
+    </g>
+    <g data-node="P3">
+      <circle class="disc" cx="254.83" cy="72.00" r="15" fill="#f6d81a" stroke="#000000" stroke-opacity="0.3" stroke-width="1" />
+      <text class="letter" x="254.83" y="72.00" fill="#1c2024" font-weight="700" font-size="13" text-anchor="middle" dominant-baseline="central" transform="rotate(157.497125018 254.83 72.00)">C</text>
+    </g>
+    <g data-node="P4">
+      <circle class="disc" cx="254.83" cy="134.00" r="15" fill="#2fbf4f" stroke="#000000" stroke-opacity="0.3" stroke-width="1" />
+      <text class="letter" x="254.83" y="134.00" fill="#1c2024" font-weight="700" font-size="13" text-anchor="middle" dominant-baseline="central" transform="rotate(157.497125018 254.83 134.00)">D</text>
+    </g>
+    <g data-node="P5">
+      <circle class="disc" cx="211.00" cy="177.83" r="15" fill="#22c8db" stroke="#000000" stroke-opacity="0.3" stroke-width="1" />
+      <text class="letter" x="211.00" y="177.83" fill="#1c2024" font-weight="700" font-size="13" text-anchor="middle" dominant-baseline="central" transform="rotate(157.497125018 211.00 177.83)">E</text>
+    </g>
+    <g data-node="P6">
+      <circle class="disc" cx="149.00" cy="177.83" r="15" fill="#2c55e6" stroke="#000000" stroke-opacity="0.3" stroke-width="1" />
+      <text class="letter" x="149.00" y="177.83" fill="#ffffff" font-weight="700" font-size="13" text-anchor="middle" dominant-baseline="central" transform="rotate(157.497125018 149.00 177.83)">F</text>
+    </g>
+    <g data-node="P7">
+      <circle class="disc" cx="105.17" cy="134.00" r="15" fill="#8b2db9" stroke="#000000" stroke-opacity="0.3" stroke-width="1" />
+      <text class="letter" x="105.17" y="134.00" fill="#ffffff" font-weight="700" font-size="13" text-anchor="middle" dominant-baseline="central" transform="rotate(157.497125018 105.17 134.00)">G</text>
+    </g>
+    <g data-node="P8">
+      <circle class="disc" cx="105.17" cy="72.00" r="15" fill="#ff8fb3" stroke="#000000" stroke-opacity="0.3" stroke-width="1" />
+      <text class="letter" x="105.17" y="72.00" fill="#1c2024" font-weight="700" font-size="13" text-anchor="middle" dominant-baseline="central" transform="rotate(157.497125018 105.17 72.00)">H</text>
+    </g>
+    <path class="slot" d="M 183.40 49.31 A 19 19 0 0 1 198.69 64.60" fill="none" stroke="#b3bac2" stroke-width="3.5" />
+    <path class="slot" d="M 198.69 71.40 A 19 19 0 0 1 183.40 86.69" fill="none" stroke="#b3bac2" stroke-width="3.5" />
+    <path class="slot" d="M 176.60 86.69 A 19 19 0 0 1 161.31 71.40" fill="none" stroke="#b3bac2" stroke-width="3.5" />
+    <path class="slot" d="M 161.31 64.60 A 19 19 0 0 1 176.60 49.31" fill="none" stroke="#b3bac2" stroke-width="3.5" />
+    <g data-node="B1">
+      <rect class="disc" x="168.00" y="56.00" width="24" height="24" rx="4" fill="#ffffff" stroke="#000000" stroke-opacity="0.3" stroke-width="1" />
+      <text class="letter" x="180.00" y="68.00" fill="#1c2024" font-weight="700" font-size="13" text-anchor="middle" dominant-baseline="central" transform="rotate(157.497125018 180.00 68.00)">I</text>
+    </g>
+    <path class="slot" d="M 213.71 101.81 A 19 19 0 0 1 229.00 117.10" fill="none" stroke="#b3bac2" stroke-width="3.5" />
+    <path class="slot" d="M 229.00 123.90 A 19 19 0 0 1 213.71 139.19" fill="none" stroke="#b3bac2" stroke-width="3.5" />
+    <path class="slot" d="M 206.91 139.19 A 19 19 0 0 1 191.62 123.90" fill="none" stroke="#b3bac2" stroke-width="3.5" />
+    <path class="slot" d="M 191.62 117.10 A 19 19 0 0 1 206.91 101.81" fill="none" stroke="#b3bac2" stroke-width="3.5" />
+    <g data-node="B2">
+      <rect class="disc" x="198.31" y="108.50" width="24" height="24" rx="4" fill="#9aa0a7" stroke="#000000" stroke-opacity="0.3" stroke-width="1" />
+      <text class="letter" x="210.31" y="120.50" fill="#1c2024" font-weight="700" font-size="13" text-anchor="middle" dominant-baseline="central" transform="rotate(157.497125018 210.31 120.50)">J</text>
+    </g>
+    <path class="slot" d="M 153.09 101.81 A 19 19 0 0 1 168.38 117.10" fill="none" stroke="#b3bac2" stroke-width="3.5" />
+    <path class="slot" d="M 168.38 123.90 A 19 19 0 0 1 153.09 139.19" fill="none" stroke="#b3bac2" stroke-width="3.5" />
+    <path class="slot" d="M 146.29 139.19 A 19 19 0 0 1 131.00 123.90" fill="none" stroke="#b3bac2" stroke-width="3.5" />
+    <path class="slot" d="M 131.00 117.10 A 19 19 0 0 1 146.29 101.81" fill="none" stroke="#b3bac2" stroke-width="3.5" />
+    <g data-node="B3">
+      <rect class="disc" x="137.69" y="108.50" width="24" height="24" rx="4" fill="#8a5a2c" stroke="#000000" stroke-opacity="0.3" stroke-width="1" />
+      <text class="letter" x="149.69" y="120.50" fill="#ffffff" font-weight="700" font-size="13" text-anchor="middle" dominant-baseline="central" transform="rotate(157.497125018 149.69 120.50)">K</text>
+    </g>
+    <g class="route-arrows" fill="none" stroke="#000000" stroke-width="2.2" stroke-linecap="round">
+      <line data-from="A" data-to="B" x1="166.00000" y1="28.17000" x2="194.00000" y2="28.17000" marker-end="url(#traffic-2-arrow)" />
+      <line data-from="B" data-to="C" x1="223.02082" y1="40.19082" x2="242.80918" y2="59.97918" marker-end="url(#traffic-2-arrow)" />
+      <line data-from="C" data-to="D" x1="254.83000" y1="89.00000" x2="254.83000" y2="117.00000" marker-end="url(#traffic-2-arrow)" />
+      <line data-from="D" data-to="E" x1="242.80918" y1="146.02082" x2="223.02082" y2="165.80918" marker-end="url(#traffic-2-arrow)" />
+      <line data-from="E" data-to="F" x1="194.00000" y1="177.83000" x2="166.00000" y2="177.83000" marker-end="url(#traffic-2-arrow)" />
+      <line data-from="F" data-to="G" x1="136.97918" y1="165.80918" x2="117.19082" y2="146.02082" marker-end="url(#traffic-2-arrow)" />
+      <line data-from="G" data-to="H" x1="105.17000" y1="117.00000" x2="105.17000" y2="89.00000" marker-end="url(#traffic-2-arrow)" />
+      <line data-from="H" data-to="A" x1="117.19082" y1="59.97918" x2="136.97918" y2="40.19082" marker-end="url(#traffic-2-arrow)" />
+    </g>
+  </g>
+  <g class="blocked-cross" stroke="#e5302a" stroke-width="1.8" stroke-linecap="round" fill="none">
+    <line x1="205.43392" y1="168.93822" x2="211.83392" y2="175.33822" />
+    <line x1="205.43392" y1="175.33822" x2="211.83392" y2="168.93822" />
+  </g>
+</svg>
