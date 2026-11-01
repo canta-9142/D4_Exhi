@@ -63,9 +63,9 @@
 | `status.remaining` | 通常ラウンドの残り秒数 | ゲーム中は全員がゲームの残り秒数（練習も同じ）。カウントダウン中は90 |
 | `status.rank` | 常に`null` | ゲーム中は対象者の暫定順位、終了では確定した順位。対象外は`null` |
 | `summary` | ラウンドの結果。`rank`は`null`、`eligible`は`true` | ゲームの結果。`rank`は対象者で1〜8、`eligible`は資格。練習のノードには送らない |
-| 練習の終わり | 長押し、60秒の無操作 | ゲーム時間の90秒の終了、`Finish`、`Reset`。終了では`phase(Finished)`と`status`（`round=tutorial`）、実際のFIFOの`reset`を送る |
+| 練習の終わり | 長押し、30秒の経過 | ゲーム時間の90秒の終了、`Finish`、`Reset`。終了では`phase(Finished)`と`status`（`round=tutorial`）、実際のFIFOの`reset`を送る |
 
-MCUは、`Finished`と練習の`Playing`の長押しを、`status.window`が1以上のときだけ有効にする。`window`が0のとき（一斉ゲーム方式）は、長押しを受け付けず、「もう一度遊ぶ」の案内も出さない。`Idle`で`status.ready`が`true`のときも、長押しを受け付けない。`Select`では、`window`が0なら残り秒数を表示しない。準備完了の`Idle`では、選んだ種別（`NORMAL`・`TUTORIAL`）と`READY`、`Waiting for the administrator to start.`を表示する。練習ラウンドの時間表示は、`remaining`が1以上ならその値、0なら`--`とする。`Finished`で`status.round`が`tutorial`のときは、`summary`が届かないので結果を表示せず、練習の終了を示す待機の画面を出す。
+MCUは、`Finished`と練習の`Playing`の長押しを、`status.window`が1以上のときだけ有効にする。`window`が0のとき（一斉ゲーム方式）は、長押しを受け付けず、「もう一度遊ぶ」の案内も出さない。`Idle`で`status.ready`が`true`のときも、長押しを受け付けない。`Select`では、`window`が0なら残り秒数を表示しない。準備完了の`Idle`では、選んだ種別（`NORMAL`・`TUTORIAL`）と`READY`、`Waiting for the administrator to start.`を表示する。練習ラウンドの時間表示は、連続運転では`window`を30秒から常に表示し、10秒以下は注意色にする。一斉ゲーム方式では`remaining`が1以上ならその値、0なら`--`とする。`Finished`で`status.round`が`tutorial`のときは、`summary`が届かないので結果を表示せず、練習の終了を示す待機の画面を出す。
 
 ## JSON形式
 
@@ -118,7 +118,7 @@ MCUは、`Finished`と練習の`Playing`の長押しを、`status.window`が1以
   - ready: 連続運転では常にfalse（boolean）。一斉ゲーム方式では、モード選択を終えた準備完了のノードでtrue
   - countdown: ラウンドが始まるまでの秒数。0〜3の整数。カウントダウン中は3・2・1、それ以外は0
   - round: 行っているラウンドの種別。`"normal"`・`"tutorial"`・null。通常ラウンドとその結果の段階は`normal`、練習ラウンドは`tutorial`、それ以外はnull
-  - window: その段階が時間切れで待機へ戻るまでの秒数。モード選択は20〜0、結果は30〜0、練習ラウンドは操作がない状態での残り60〜0、それ以外は0。0〜60の整数
+  - window: その段階が時間切れで待機へ戻るまでの秒数。モード選択は20〜0、結果は30〜0、練習ラウンドは開始から30秒の残り30〜0、それ以外は0。0〜60の整数
   - rank: 連続運転では常にnull（ラウンドは1人で行うため順位を付けない）。一斉ゲーム方式では、ランキング対象者の暫定順位または確定した順位（1〜8の整数）、それ以外はnull
   - gains: この筐体へ前回送った`status`より後に入った点を、入った順に並べた配列。0〜16個の1〜15の整数。点が入っていなければ空配列`[]`
   - combo: 送信成功コンボの数。0〜999の整数。得点には影響しない表示専用の値
@@ -160,7 +160,7 @@ MCUは、`Finished`と練習の`Playing`の長押しを、`status.window`が1以
 {"type":"reset","data":{"sync":"00000000000000000000000000000002","packets":[{"pid":10,"dst":3}]}}
 {"type":"phase","data":{"phase":"Playing"}}
 {"type":"status","data":{"score":23,"remaining":87,"ready":false,"countdown":0,"round":"normal","window":0,"rank":null,"gains":[15,8],"combo":4}}
-{"type":"status","data":{"score":0,"remaining":0,"ready":false,"countdown":0,"round":"tutorial","window":48,"rank":null,"gains":[],"combo":0,"bots":[1,4,0]}}
+{"type":"status","data":{"score":0,"remaining":0,"ready":false,"countdown":0,"round":"tutorial","window":28,"rank":null,"gains":[],"combo":0,"bots":[1,4,0]}}
 {"type":"choose","data":{"sync":"00000000000000000000000000000002","round":"normal"}}
 {"type":"send","data":{"sync":"00000000000000000000000000000002","rid":1,"pid":10,"to":2}}
 {"type":"result","data":{"sync":"00000000000000000000000000000002","rid":1,"ok":true}}
@@ -270,7 +270,7 @@ MCUは、設定・FIFO同期済みかつ取得済みフェーズが`Idle`・`Fin
 {"type":"choose","data":{"sync":"00000000000000000000000000000002","round":"tutorial"}}
 ```
 
-サーバーは、`ready`と同じ確認に加えて、段階が`Select`であることを確認してから受理する。受理すると、通常は`phase(Playing)`と`status`（`round=normal`、`countdown=3`）を、練習は`phase(Playing)`、練習用キューの`reset`、`status`（`round=tutorial`、`countdown=3`、`window=60`、`bots`）を送る。受理しなかった場合は現在の`status`だけを返す。MCUは`choose`の送信後、`phase(Playing)`を受け取るまで追加の選択を送らず、3秒以内に受け取れなければ`resync`する。モード選択の20秒の制限は、`status.window`で通知する。時間切れはサーバーが判定し、`phase(Idle)`で通知する。MCUは独自に時間切れの処理を行わない。
+サーバーは、`ready`と同じ確認に加えて、段階が`Select`であることを確認してから受理する。受理すると、通常は`phase(Playing)`と`status`（`round=normal`、`countdown=3`）を、練習は`phase(Playing)`、練習用キューの`reset`、`status`（`round=tutorial`、`countdown=3`、`window=30`、`bots`）を送る。受理しなかった場合は現在の`status`だけを返す。MCUは`choose`の送信後、`phase(Playing)`を受け取るまで追加の選択を送らず、3秒以内に受け取れなければ`resync`する。モード選択の20秒の制限は、`status.window`で通知する。時間切れはサーバーが判定し、`phase(Idle)`で通知する。MCUは独自に時間切れの処理を行わない。
 
 ### フェーズ通知
 
@@ -341,7 +341,7 @@ MCUは受信した`status`の9フィールドの型・範囲をすべて検証�
 
 - 練習用キューは常に3件を保つ。受理した`send`の`result(ok=true)`の後に、補充したパケットを`push`で送る。
 - 練習の`send`は、同期世代・要求ID・フェーズ・操作状態・隣接関係を通常と同じ規則で検証する。TTL・パケットロス・到達の判定はなく、LED・得点・記録には何も起きない。
-- 練習に入るとき（`choose`の受理）と出るとき（長押し、無操作の60秒、打ち切り）に、`reset`でMCUのキューを丸ごと入れ替える。新しい同期世代の`reset`なので、入れ替え前の`send`は同期世代の照合で拒否され、MCUの応答待ちも取り消される。練習用キューのPIDは実際のPIDと別の連番だが、実際のFIFOと練習用キューが同じMCUのキャッシュに同時に載ることはないので、PIDの重複による復旧は起きない。
+- 練習に入るとき（`choose`の受理）と出るとき（長押し、30秒の経過、打ち切り）に、`reset`でMCUのキューを丸ごと入れ替える。新しい同期世代の`reset`なので、入れ替え前の`send`は同期世代の照合で拒否され、MCUの応答待ちも取り消される。練習用キューのPIDは実際のPIDと別の連番だが、実際のFIFOと練習用キューが同じMCUのキャッシュに同時に載ることはないので、PIDの重複による復旧は起きない。
 - 練習の入りでは`phase(Playing)`、練習用キューの`reset`、`status`の順、出では`phase(Select)`または`phase(Idle)`、実際のFIFOの`reset`、`status`の順に送る（[サーバー仕様](./server.md)3.6）。
 - 練習中は、実際のFIFOの変化（生成、自動転送）を`push`・`reset`で送らない。
 

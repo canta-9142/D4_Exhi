@@ -242,7 +242,7 @@ def exercise(cdc, buttons, idle_seconds):
     cdc.status(23, 87, True, rank=8, gains=[15] * 16)
     # 連続運転の値: 通常ラウンド、練習（botsあり、範囲の両端）、モード選択・結果の段階の残り時間。
     cdc.status(23, 87, combo=999, round="normal")
-    cdc.status(round="tutorial", window=60, bots=[0, 4, 2])
+    cdc.status(round="tutorial", window=30, bots=[0, 4, 2])
     cdc.status(round="tutorial", window=0, bots=[4, 4, 4])
     cdc.status(window=20)
     cdc.status(345, 0, round="normal", window=30)

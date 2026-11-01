@@ -62,13 +62,13 @@ enum class LobbyState : uint8_t { Waiting, Auto, Manual, Confirming, Ready };
 inline bool practice_round(const DisplaySnapshot& s) {
   return countdown_enabled(s) && s.status.round == RoundKind::Tutorial;
 }
-// 練習の時間欄。連続運転ではwindow（無操作の残り秒数）が10以下になったときだけ秒数を出し、それ以外は-1（--）。
+// 練習の時間欄。連続運転ではwindow（30秒の練習の残り秒数）を最初から出す。
 // 一斉ゲーム方式ではwindowが0で、ゲームの残り秒数（remaining）が1以上ならその値、0なら-1。
 inline int practice_time(const PlayerStatus& status) {
-  if (status.window >= 1) return status.window <= WINDOW_WARNING_SECONDS ? status.window : -1;
+  if (status.window >= 1) return status.window;
   return status.remaining >= 1 ? status.remaining : -1;
 }
-// 残りの無操作の時間が10秒以下で、待機へ戻る前の注意色にする。
+// 残り時間が10秒以下で、待機へ戻る前の注意色にする。
 inline bool practice_time_warn(const PlayerStatus& status) {
   return status.window >= 1 && status.window <= WINDOW_WARNING_SECONDS;
 }

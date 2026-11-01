@@ -48,8 +48,8 @@ func (g *game) view(id NodeID) nodeView {
 			if n.round == RoundNormal {
 				v.remaining = seconds(n.roundEnd - max(g.elapsed, n.roundStart))
 			} else {
-				// The idle timer starts when the countdown ends.
-				v.window = min(seconds(n.deadline-max(g.elapsed, n.roundStart)), seconds(PracticeIdleDuration))
+				// Practice time starts when the countdown ends; SEND never extends it.
+				v.window = seconds(n.deadline - max(g.elapsed, n.roundStart))
 			}
 		}
 	}

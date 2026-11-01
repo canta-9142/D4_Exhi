@@ -22,7 +22,7 @@ inline void draw_practice_label(FrameBuffer& frame) {
   frame.drawString("PRACTICE", 366, INFO_READY_Y);
 }
 
-// 時間欄。秒数を出さない間は--。無操作で待機へ戻るまでの10秒以下は注意色。
+// 時間欄。練習の残り秒数を常に表示し、待機へ戻るまでの10秒以下は注意色。
 inline void draw_practice_time(FrameBuffer& frame, const DisplaySnapshot& s) {
   char text[12] = "--";
   const int seconds = practice_time(s.status);

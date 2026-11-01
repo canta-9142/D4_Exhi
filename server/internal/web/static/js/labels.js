@@ -118,9 +118,7 @@ export function stationText(player) {
         if (countdownSeconds >= 1) {
           return { text: `練習 開始まで ${countdownSeconds} 秒`, tone: "warn" };
         }
-        return windowSeconds <= 10
-          ? { text: `練習 無操作で待機まで ${windowSeconds} 秒`, tone: "warn" }
-          : { text: "練習", tone: "" };
+        return { text: `練習 残り ${windowSeconds} 秒`, tone: windowSeconds <= 10 ? "warn" : "" };
       }
       return { text: round === null ? station : `${station} ${round}`, tone: "" };
     default:

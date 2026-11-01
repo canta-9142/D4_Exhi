@@ -249,7 +249,7 @@ int main() {
   auto tutorial = normalRound;
   tutorial.status = {0, 0, false, true};
   tutorial.status.round = RoundKind::Tutorial;
-  tutorial.status.window = 60;
+  tutorial.status.window = 30;
   assert(display_screen(tutorial) == DisplayScreen::Practice && !lobby_screen(tutorial) && practice_round(tutorial));
   assert(displayed_cards(tutorial)[0].active && !gains_enabled(tutorial)); // 練習でもパケットは流れるが、獲得点・演出は流さない。
   // 表示値が揃うまでは、練習の画面にしない（接続・同期の表示を優先する）。
@@ -299,12 +299,13 @@ int main() {
   assert(displayed_hint(hintOutside) == TutorialHint{} && displayed_bot_load(hintOutside, 1) == -1);
   assert(display_changes(tutorial, normalRound, false).full); // 練習を出ると通常の画面へ全描画で戻る。
   assert(!display_changes(tutorial, tutorial, false).any());
-  // 時間欄: 連続運転ではwindowが10以下になるまで--。注意色で残り秒数を出す。
-  assert(practice_time(tutorial.status) == -1 && !practice_time_warn(tutorial.status));
+  // 時間欄: 30秒から毎秒表示を更新し、残り10秒以下は注意色にする。
+  assert(practice_time(tutorial.status) == 30 && !practice_time_warn(tutorial.status));
   auto timed = tutorial;
-  for (unsigned window = 60; window > 11; --window) {
+  for (unsigned window = 30; window > 11; --window) {
     timed.status.window = static_cast<uint8_t>(window - 1);
-    assert(!display_changes(tutorial, timed, false).any() && practice_time(timed.status) == -1); // 毎秒の通知でも描き直さない。
+    assert(display_changes(tutorial, timed, false).remaining && practice_time(timed.status) == int(window - 1));
+    assert(!practice_time_warn(timed.status));
     tutorial.status.window = static_cast<uint8_t>(window - 1);
   }
   tutorial.status.window = 11;

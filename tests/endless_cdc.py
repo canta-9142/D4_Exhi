@@ -3,7 +3,7 @@
 ノードA（P1）を受け付け中（manual）で識別し、停止中（Preparing）から始める。
 筐体の段階はサーバー仕様3.1のとおりに進める。待機（Idle）→両端の2秒長押し（ready）→
 モード選択（Select、20秒）→左から3番目で通常ラウンド（Playing、3秒＋90秒）→結果（Finished、30秒）、
-または左から2番目で練習ラウンド（無操作60秒、長押しでモード選択へ）。
+または左から2番目で練習ラウンド（30秒、長押しでモード選択へ）。
 長押し・選択・送信は実機のボタンで行い、受け取った要求を仕様の受理条件で確かめて応答する。
 
 待機・モード選択・結果・練習中は、サーバーと同じく実際のFIFOを自動転送する（1秒に1件生成し、
@@ -37,7 +37,7 @@ from player_cdc import CDC
 
 NODE = 1
 NEIGHBORS = (2, 9, 11, 8)  # ノードAの下部の4ボタン（player.md）。
-SELECT_SECONDS, COUNTDOWN_SECONDS, RESULT_SECONDS, PRACTICE_IDLE_SECONDS = 20, 3, 30, 60
+SELECT_SECONDS, COUNTDOWN_SECONDS, RESULT_SECONDS, PRACTICE_SECONDS = 20, 3, 30, 30
 PRACTICE_LENGTH = 3
 
 
@@ -82,7 +82,7 @@ class Station:
                 v["remaining"] = ceil_seconds(self.round_end - max(now, self.round_start))
                 v["score"], v["combo"] = self.score, self.combo
             else:
-                v["window"] = min(ceil_seconds(self.deadline - max(now, self.round_start)), PRACTICE_IDLE_SECONDS)
+                v["window"] = ceil_seconds(self.deadline - max(now, self.round_start))
                 v["bots"] = list(self.bots)
         elif self.station == "finished":
             v.update(score=self.score, combo=self.combo, round="normal", window=ceil_seconds(self.deadline - now))
@@ -197,7 +197,7 @@ class Station:
         if round_kind == "normal":
             self.round_end = self.deadline = self.round_start + self.round_seconds
         else:
-            self.deadline = self.round_start + PRACTICE_IDLE_SECONDS
+            self.deadline = self.round_start + PRACTICE_SECONDS
             self.practice, self.practice_pid = [], 0
             self.refill_practice()
         self.reschedule(now)
@@ -282,11 +282,10 @@ class Station:
                 self.report("SEND rejected; queue resynchronized")
             elif self.practicing():
                 self.practice.pop(0)
-                self.deadline = now + PRACTICE_IDLE_SECONDS
                 self.cdc.result(data)
                 self.cdc.send("push", **self.refill_practice()[0])
                 self.send_status()
-                self.report("practice SEND/RESULT/PUSH; idle timer restarted")
+                self.report("practice SEND/RESULT/PUSH; deadline unchanged")
             else:
                 self.fifo.pop(0)
                 self.score += 15

@@ -176,7 +176,7 @@ func TestRunEndlessStationOverPTY(t *testing.T) {
 	}
 	mcu.write("choose", map[string]string{"sync": mcu.sync, "round": "tutorial"})
 	s := mcu.phase("Playing")
-	if s.Round == nil || *s.Round != "tutorial" || s.Countdown != 3 || s.Window != 60 || len(s.Bots) != 3 || len(mcu.queue) != 3 {
+	if s.Round == nil || *s.Round != "tutorial" || s.Countdown != 3 || s.Window != 30 || len(s.Bots) != 3 || len(mcu.queue) != 3 {
 		t.Fatalf("practice status %+v, queue %v", s, mcu.queue)
 	}
 	for mcu.status.Countdown != 0 {

@@ -674,10 +674,10 @@ func TestPracticeQueueReplacesTheMCUQueue(t *testing.T) {
 		t.Fatalf("practice reset %v, want %v", got, practice)
 	}
 	status := lastStatus(t, h, "P1")
-	if !reflect.DeepEqual(status, StatusData{Countdown: 3, Round: roundOf(RoundTutorial), Window: 60, Gains: []int{}, Bots: []int{0, 0, 0}}) {
+	if !reflect.DeepEqual(status, StatusData{Countdown: 3, Round: roundOf(RoundTutorial), Window: 30, Gains: []int{}, Bots: []int{0, 0, 0}}) {
 		t.Fatalf("practice status: %+v", status)
 	}
-	if n := h.node(1); n.Station != StationPlaying || n.Round != RoundTutorial || n.WindowSeconds != 60 || n.RemainingSeconds != 0 {
+	if n := h.node(1); n.Station != StationPlaying || n.Round != RoundTutorial || n.WindowSeconds != 30 || n.RemainingSeconds != 0 {
 		t.Fatalf("practice snapshot: %+v", n)
 	}
 
@@ -856,28 +856,47 @@ func TestPracticeStatusShowsTheBotsOnly(t *testing.T) {
 	}
 }
 
-func TestPracticeEndsAfter60SecondsWithoutASend(t *testing.T) {
-	h := endlessHarness(t, Options{}, 1)
-	h.execute(Command{Operation: Start})
-	h.quiet()
-	h.tick(time.Second)
-	h.play("P1", RoundTutorial) // The countdown ends at 4s.
-	h.tick(30 * time.Second)
-	if n := h.node(1); n.WindowSeconds != 34 {
-		t.Fatalf("window at 30s: %+v", n)
-	}
-	h.send("P1", 0, 2)
-	h.tick(89900 * time.Millisecond)
-	if n := h.node(1); n.Station != StationPlaying || n.WindowSeconds != 1 {
-		t.Fatalf("a SEND did not restart the idle timer: %+v", n)
-	}
-	h.clear()
-	h.tick(90 * time.Second)
-	if n := h.node(1); n.Station != StationIdle || !n.Enabled {
-		t.Fatalf("after 60 idle seconds: %+v", n)
-	}
-	if got := h.typesFor("P1"); !reflect.DeepEqual(got, []string{"phase", "reset", "status"}) || !reflect.DeepEqual(h.phasesFor("P1"), []Phase{Idle}) {
-		t.Fatalf("practice timeout: %v", got)
+func TestPracticeEndsAfter30Seconds(t *testing.T) {
+	for _, active := range []bool{false, true} {
+		t.Run(fmt.Sprintf("active=%t", active), func(t *testing.T) {
+			saver := &gameSaver{}
+			h := endlessHarness(t, Options{SaveGame: saver.save}, 1)
+			h.execute(Command{Operation: Start})
+			h.quiet()
+			h.tick(time.Second)
+			h.play("P1", RoundTutorial) // Countdown 1s-4s, practice 4s-34s.
+			if s := lastStatus(t, h, "P1"); s.Countdown != 3 || s.Window != 30 {
+				t.Fatalf("practice countdown: %+v", s)
+			}
+			h.tick(4 * time.Second)
+			if s := lastStatus(t, h, "P1"); s.Countdown != 0 || s.Window != 30 {
+				t.Fatalf("practice start: %+v", s)
+			}
+			for second := 1; second < 30; second++ {
+				h.tick(time.Duration(4+second) * time.Second)
+				if active && !h.send("P1", uint16(second-1), 2).OK {
+					t.Fatal("practice SEND refused")
+				}
+				if s := lastStatus(t, h, "P1"); s.Window != 30-second {
+					t.Fatalf("remaining after %ds: %+v", second, s)
+				}
+			}
+			h.tick(33900 * time.Millisecond)
+			if n := h.node(1); n.Station != StationPlaying || n.WindowSeconds != 1 {
+				t.Fatalf("before the timeout: %+v", n)
+			}
+			h.clear()
+			h.tick(34 * time.Second)
+			if n := h.node(1); n.Station != StationIdle || !n.Enabled {
+				t.Fatalf("after 30 seconds: %+v", n)
+			}
+			if got := h.typesFor("P1"); !reflect.DeepEqual(got, []string{"phase", "reset", "status"}) || !reflect.DeepEqual(h.phasesFor("P1"), []Phase{Idle}) {
+				t.Fatalf("practice timeout: %v", got)
+			}
+			if len(saver.saved()) != 0 {
+				t.Fatal("practice saved a score")
+			}
+		})
 	}
 }
 

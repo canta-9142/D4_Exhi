@@ -189,7 +189,7 @@ def scenario(mcu, commands):
             assert status["countdown"] == 3 and status["round"] == "normal" and status["remaining"] == ROUND_SECONDS
         else:
             phase, reset, status = mcu.wait_types(mark, ["phase", "reset", "status"], "practice round", "Playing")
-            assert len(reset["packets"]) == 3 and status["countdown"] == 3 and status["window"] == 60
+            assert len(reset["packets"]) == 3 and status["countdown"] == 3 and status["window"] == 30
             assert len(status["bots"]) == 3
         assert phase == {"phase": "Playing"}
         mcu.wait(lambda: mcu.status["countdown"] == 0, what="the end of the countdown")
@@ -264,12 +264,12 @@ def scenario(mcu, commands):
     assert windows[0] == 20 and windows[-1] == 1 and windows == sorted(windows, reverse=True), windows
     print("PASS: Select times out after 20 s → Idle")
 
-    # 練習の無操作60秒→待機。
+    # 練習の30秒→待機。
     start_round("tutorial")
     mark = mcu.mark()
     phase, reset, status = mcu.wait_types(mark, ["phase", "reset", "status"], "the practice timeout", "Idle")
     assert phase == {"phase": "Idle"} and status["round"] is None
-    print("PASS: practice without SEND for 60 s → Idle (phase, real FIFO reset, status)")
+    print("PASS: practice after 30 s → Idle (phase, real FIFO reset, status)")
 
     # 結果の30秒の時間切れ→待機。
     start_round("normal")

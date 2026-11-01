@@ -316,8 +316,7 @@ serial接続・受信パーサー・HTTP API・対応表とゲーム記録の保
 | `round` | `normal`・`tutorial`・空 |
 | `roundStart` | カウントダウンの終わり。通常ラウンドのゲーム時間の起点、練習では`send`を受け付け始める時刻 |
 | `roundEnd` | 通常ラウンドのゲーム時間の終わり（`roundStart`＋90秒） |
-| `deadline` | 段階の期限。モード選択の20秒、通常ラウンドの終わり、結果の30秒、練習の無操作の60秒 |
-| `lastPractice` | 最後に受理した練習の`send`の時刻 |
+| `deadline` | 段階の期限。モード選択の20秒、通常ラウンドの終わり、結果の30秒、練習の30秒 |
 | `practice`・`practicePID` | 練習用キューと、次に試す練習用のPID |
 | `score`・`gains`・`combo` | ラウンドの得点、未送信の獲得点（16件まで）、コンボ |
 | `topPercent`・`bests` | 結果で確定した上位%とベストスコア |
@@ -330,15 +329,15 @@ serial接続・受信パーサー・HTTP API・対応表とゲーム記録の保
 |---|---|---|
 | 運転開始・停止 | `start`・`stop` | 全員を待機・停止中へ。`clear`でFIFO・ラウンド・PIDの採番を初期化する（操作モードとBotの生成レートは保つ） |
 | 長押し | `ready` | モード選択 |
-| モード選択 | `choose` | ラウンド。`roundStart`＝現在＋3秒。通常は`deadline`＝`roundEnd`、練習は`deadline`＝`roundStart`＋60秒で、練習用キューを3件にする |
+| モード選択 | `choose` | ラウンド。`roundStart`＝現在＋3秒。通常は`deadline`＝`roundEnd`、練習は`deadline`＝`roundStart`＋30秒で、練習用キューを3件にする |
 | 期限 | `expire` | 通常ラウンドなら結果（`deadline`＝現在＋30秒、未送信の獲得点を捨てる）、それ以外（選択・結果・練習）は待機 |
-| 練習の`send` | `practiceSend` | 練習のまま。`deadline`＝現在＋60秒 |
+| 練習の`send` | `practiceSend` | 練習のまま。期限を変更せず、先頭を補充する |
 | ボットに戻す | `returnToBot` → `abort` | 待機（通知あり） |
 | 自動への切替・切断 | `setManual(false)` → `abort` | 待機（通知なし。自動への切替は`syncDevice`、切断は再接続時の同期で伝える） |
 | FIFOの上限 | `abortOverflowed` → `abort` | 待機（通知あり） |
 
-練習の期限を`roundStart`から数えるので、カウントダウンの3秒は無操作の60秒に含まない。
-`status.window`は練習では`min(ceil(deadline - max(現在, roundStart)), 60)`、モード選択と結果では`ceil(deadline - 現在)`とする。
+練習の期限を`roundStart`から数えるので、カウントダウンの3秒は練習の30秒に含まない。操作しても期限を延長しない。
+`status.window`は練習では`ceil(deadline - max(現在, roundStart))`、モード選択と結果では`ceil(deadline - 現在)`とする。
 
 ### 期限の処理順
 
@@ -513,7 +512,7 @@ nix develop -c go -C server run ./cmd/records restore -from data/records.sqlite3
 
 | 範囲 | 主なテスト |
 |---|---|
-| 連続運転の段階と期限 | `internal/app/endless_test.go`。運転の開始・停止の送信順とLED（`CLEAR`・`BUFFER 0`）、READY・CHOOSEの受理条件、選択20秒・結果30秒・練習の無操作60秒の時間切れ、通常ラウンドのゲーム時間だけの得点と結果、結果からの再挑戦、隣り合う2人のずれたラウンド、同じTickで終わる2つのラウンドの記録順、打ち切り（ボットに戻す・自動・切断・停止）で記録しないこと、FIFOの上限、PIDの周回（65530付近から）、練習用キュー、`bots`、運転中の割当の制限、一括の自動への切替 |
+| 連続運転の段階と期限 | `internal/app/endless_test.go`。運転の開始・停止の送信順とLED（`CLEAR`・`BUFFER 0`）、READY・CHOOSEの受理条件、選択20秒・結果30秒・練習の30秒の時間切れ、通常ラウンドのゲーム時間だけの得点と結果、結果からの再挑戦、隣り合う2人のずれたラウンド、同じTickで終わる2つのラウンドの記録順、打ち切り（ボットに戻す・自動・切断・停止）で記録しないこと、FIFOの上限、PIDの周回（65530付近から）、練習用キュー、`bots`、運転中の割当の制限、一括の自動への切替 |
 | 一斉ゲーム方式 | `internal/app/simultaneous_test.go`、`workflow_test.go`ほか |
 | 記録 | `internal/records/records_test.go`（版1から版2への移行、検証）、`internal/app/endless_test.go`の旧来の8人分の記録とラウンドの記録の同じ母集団 |
 | 保守コマンド | `cmd/records/main_test.go`（16帯の境界とラベル、ラウンドのseed） |

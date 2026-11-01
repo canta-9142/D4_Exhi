@@ -22,13 +22,13 @@ const (
 	// CountdownDuration runs within Playing, from the start of a round (or
 	// of the simultaneous game) until its game time begins.
 	CountdownDuration = 3 * time.Second
-	// SelectDuration, ResultDuration and PracticeIdleDuration are how long a
-	// station stays in the mode selection, the result and an idle practice
+	// SelectDuration, ResultDuration and PracticeDuration are how long a
+	// station stays in the mode selection, the result and practice
 	// before it goes back to idle (rules.md).
-	SelectDuration       = 20 * time.Second
-	ResultDuration       = 30 * time.Second
-	PracticeIdleDuration = 60 * time.Second
-	practiceLength       = 3
+	SelectDuration   = 20 * time.Second
+	ResultDuration   = 30 * time.Second
+	PracticeDuration = 30 * time.Second
+	practiceLength   = 3
 	// endless is the clock limit of endless operation: no limit.
 	endless = time.Duration(math.MaxInt64)
 )
@@ -166,10 +166,8 @@ type node struct {
 	// first practice SEND. roundEnd is when a normal round's game time ends.
 	roundStart, roundEnd time.Duration
 	// deadline is when the station times out: the end of the mode selection,
-	// of a normal round, of the result or of an idle practice.
+	// of a normal round, of the result or of practice.
 	deadline time.Duration
-	// lastPractice is when the latest practice SEND was accepted.
-	lastPractice time.Duration
 	// practice is the practice queue (server.md 3.6), and practicePID the
 	// next PID to try for it.
 	practice    []PacketView
@@ -321,7 +319,7 @@ func (g *game) clear() {
 		n := &g.nodes[id]
 		n.fifo = nil
 		n.nextGeneration, n.nextTransfer = 0, 0
-		n.roundStart, n.roundEnd, n.deadline, n.lastPractice = 0, 0, 0, 0
+		n.roundStart, n.roundEnd, n.deadline = 0, 0, 0
 		n.practice, n.practicePID = nil, 0
 		n.score, n.gains, n.combo, n.topPercent, n.bests = 0, nil, 0, 0, deviceBests{}
 		n.eligible, n.rank = false, 0
@@ -531,7 +529,7 @@ func (g *game) enter(id NodeID, station Station, notify bool) {
 	wasAutomatic := g.automatic(id)
 	resetQueue := n.practicing() || n.station == StationFinished
 	n.station, n.round = station, ""
-	n.roundStart, n.roundEnd, n.deadline, n.lastPractice = 0, 0, 0, 0
+	n.roundStart, n.roundEnd, n.deadline = 0, 0, 0
 	n.practice = nil
 	n.score, n.gains, n.combo, n.topPercent, n.bests = 0, nil, 0, 0, deviceBests{}
 	if station == StationSelect && g.mode == Endless {
@@ -595,7 +593,7 @@ func (g *game) choose(id NodeID, round RoundKind) {
 		n.deadline = n.roundEnd
 	} else {
 		n.roundEnd = 0
-		n.deadline = n.roundStart + PracticeIdleDuration
+		n.deadline = n.roundStart + PracticeDuration
 		n.practicePID = 0
 		g.refillPractice(id)
 	}
@@ -861,10 +859,6 @@ func (g *game) canPractice(from NodeID, pid uint16, to NodeID) bool {
 func (g *game) practiceSend(id NodeID) PacketView {
 	n := &g.nodes[id]
 	n.practice = n.practice[1:]
-	n.lastPractice = g.elapsed
-	if g.mode == Endless {
-		n.deadline = g.elapsed + PracticeIdleDuration
-	}
 	return g.refillPractice(id)[0]
 }
 
