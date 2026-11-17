@@ -5,3 +5,4 @@ result/
 /server/data/
 **/data/devices.json
 **/data/.devices.json-*
+/poster.zip
